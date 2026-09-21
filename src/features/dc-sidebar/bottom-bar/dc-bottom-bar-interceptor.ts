@@ -2,8 +2,10 @@ import type { Component, TUI } from "@earendil-works/pi-tui";
 import * as process from "node:process";
 import { LAYOUT_NODE, LayoutNodeFn } from "../core/dc-sidebar-types.ts";
 import { processBottomBar, renderBottomBar } from "./dc-bottom-bar-layout.ts";
-import { buildLeftBox, buildRightBox, BRAND_TEXT } from "./dc-bottom-bar-boxes.ts";
+import { buildLeftBox, buildCenterBox, buildRightBox, BRAND_TEXT } from "./dc-bottom-bar-boxes.ts";
 import { isRailActive } from "../runtime/dc-sidebar-host.ts";
+import { getProjectInfo } from "../providers/dc-project-provider.ts";
+import { getMcpServersInfo } from "../providers/dc-mcp-provider.ts";
 
 export const FOOTER_ORIG = Symbol.for("dc.sidebar.footer-orig-render");
 export const FOOTER_WRAPPED = Symbol.for("dc.sidebar.footer-wrapped");
@@ -111,11 +113,16 @@ export function wrapFooterBrand(tui: any, getTheme?: () => any): boolean {
       }
 
       // Fallback: construct DC Studio bottom bar directly if gentle-pi was suppressed
-      const home = process.env.HOME ?? "";
-      const displayCwd = home && process.cwd().startsWith(home) ? `~${process.cwd().slice(home.length)}` : process.cwd();
-      const left = buildLeftBox(BRAND_TEXT, displayCwd);
+      const proj = getProjectInfo();
+      const location = proj.branch && proj.branch !== "master" && proj.branch !== "main"
+        ? `${proj.displayCwd} ±${proj.branch}`
+        : (proj.branch ? `${proj.displayCwd} » ${proj.branch}` : proj.displayCwd);
+
+      const mcpInfo = getMcpServersInfo();
+      const mcpText = mcpInfo.totalCount > 0 ? `🔌 ${mcpInfo.enabledCount} MCPs` : "";
+
       const right = buildRightBox(undefined, theme);
-      return [renderBottomBar({ left, center: "", right }, width)];
+      return [renderBottomBar({ brand: BRAND_TEXT, location, session: mcpText, face: right }, width)];
     };
 
     footer[FOOTER_WRAPPED] = true;

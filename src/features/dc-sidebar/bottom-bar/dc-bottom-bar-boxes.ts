@@ -4,18 +4,20 @@ import { agentVisualStateStore, type AgentState } from "../../../core/dc-agent-s
 export const ANSI_RE = /\x1b\[[0-9;]*m/g;
 export const stripAnsi = (s: string): string => s.replace(ANSI_RE, "").trim();
 
-export const BRAND_RE = /[✿❋❀✽✾]\s*gentle-pi/g;
+export const BRAND_RE = /[✿❋❀✽✾]\s*gentle[-\s]*(?:pi|shell)/gi;
 export const BRAND_TEXT = "⛩  Dc Studio";
 export const BAR_SEPARATOR = "\u27E1"; // ⟡
 export const FACE_KEY = Symbol.for("dc.face.mini");
 
 export interface BottomBarBoxes {
-  /** Left box: Brand (⛩  Dc Studio) + Location / Git branch */
-  left: string;
-  /** Center box: MCPs, Session name, or secondary status */
-  center: string;
-  /** Right box: Reactive Kaomoji face indicator */
-  right: string;
+  /** 1. Brand: ⛩  Dc Studio */
+  brand: string;
+  /** 2. Ubicación y rama: ~/dc-lab/lab-cofig-pi master ±3 */
+  location: string;
+  /** 3. Sesión y estado: 🧠 lab-cofig-pi · ✓ saved #696 */
+  session: string;
+  /** 4. Carita: dormido ( -_- ) zZ */
+  face: string;
 }
 
 /**
@@ -129,16 +131,21 @@ export function buildRightBox(faceText?: string, theme?: { fg: (color: string, t
 }
 
 /**
- * Extracts and categorizes segments from a raw gentle-pi bottom bar line into 3 modular boxes.
+ * Extracts and categorizes segments from a raw gentle-pi / gentle-shell bottom bar line
+ * into 4 modular boxes:
+ * 1. brand: ⛩  Dc Studio
+ * 2. location: ~/dc-lab/lab-cofig-pi master ±3
+ * 3. session: 🧠 lab-cofig-pi · ✓ saved #696
+ * 4. face: dormido ( -_- ) zZ
  */
 export function extractBottomBarBoxes(
   rawLine: string,
   theme?: { fg: (color: string, text: string) => string },
 ): BottomBarBoxes {
-  // Rebrand gentle-pi to DC Studio brand
+  // 1. Rebrand gentle shell / gentle-pi a DC Studio brand
   const line = rawLine.replace(BRAND_RE, BRAND_TEXT);
 
-  // Split tokens by separator ⟡ or wide spaces
+  // 2. Separar tokens por ⟡ o espacios anchos
   const rawParts = line.split(BAR_SEPARATOR).map((p) => p.trim()).filter(Boolean);
   const parts: string[] = [];
   for (const rp of rawParts) {
@@ -146,10 +153,10 @@ export function extractBottomBarBoxes(
     parts.push(...sub);
   }
 
-  let brandSegment = BRAND_TEXT;
-  let locationSegment = "";
-  const centerSegments: string[] = [];
-  let faceSegment = "";
+  let brand = BRAND_TEXT;
+  let location = "";
+  const sessionParts: string[] = [];
+  let face = "";
 
   const faceGlobal = (globalThis as any)[FACE_KEY];
 
@@ -158,38 +165,41 @@ export function extractBottomBarBoxes(
     const clean = stripAnsi(p);
     if (!clean) continue;
 
-    // Check if it's the face
+    // Detectar si es la carita (o el texto de estado como "dormido ( -_- ) zZ")
     if ((faceGlobal && clean.includes(stripAnsi(faceGlobal))) || isFaceSegment(clean)) {
-      if (!faceSegment) {
-        faceSegment = p;
+      if (!face) {
+        face = p;
       }
       continue;
     }
 
-    // First item is typically the brand
+    // El primer segmento es la marca
     if (i === 0) {
-      brandSegment = p.includes("Dc Studio") ? p : BRAND_TEXT;
+      brand = p.includes("Dc Studio") ? p : BRAND_TEXT;
       continue;
     }
 
-    // Filter redundant segments
+    // Filtrar segmentos redundantes que ya están en dc-prompt (modelo, ctx gauge, costo)
     if (isRedundantSegment(clean)) {
       continue;
     }
 
-    // Second item is typically project location / git branch
-    if (!locationSegment && (clean.includes("~") || clean.includes("/") || clean.includes("±") || clean.includes("master") || clean.includes("main"))) {
-      locationSegment = p;
+    // Detectar si es la ubicación del proyecto / rama git
+    if (!location && (clean.includes("~") || clean.includes("/") || clean.includes("±") || clean.includes("master") || clean.includes("main"))) {
+      location = p;
       continue;
     }
 
-    // Other non-redundant items go to center box
-    centerSegments.push(p);
+    // Cualquier otro segmento útil (sesión, saved engram, MCPs) va a la caja de sesión/estado
+    sessionParts.push(p);
   }
 
-  const left = buildLeftBox(brandSegment, locationSegment);
-  const center = buildCenterBox(centerSegments);
-  const right = buildRightBox(faceSegment, theme);
+  // Fallbacks si venía vacío
+  if (!face) {
+    face = getCurrentMiniFace(theme);
+  }
 
-  return { left, center, right };
+  const session = sessionParts.join(" \x1b[2m·\x1b[22m ");
+
+  return { brand, location, session, face };
 }

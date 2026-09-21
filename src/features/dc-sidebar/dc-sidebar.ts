@@ -53,6 +53,10 @@ export default function dcSidebarExtension(pi: ExtensionAPI): void {
         }
         writeSidebarPrefs({ minWidth: val });
         dcNotifier.notify(ctx, `Ancho mínimo configurado a ${val} columnas`, "info");
+      } else if (sub === "header on" || sub === "header off") {
+        const enabled = sub === "header on";
+        writeSidebarPrefs({ headerBar: enabled });
+        dcNotifier.notify(ctx, `Barra superior de Gentle Shell: ${enabled ? "visible" : "oculta"}`, "info");
       } else {
         // PRIMERO validar ancho antes de tocar estado
         if (cols > 0 && cols < breakpoint) {

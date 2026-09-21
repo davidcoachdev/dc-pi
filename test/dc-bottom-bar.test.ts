@@ -63,48 +63,54 @@ test("dc-bottom-bar-boxes: buildLeftBox, buildCenterBox, and buildRightBox forma
 
 test("dc-bottom-bar-boxes: extractBottomBarBoxes splits raw gentle-pi line and strips redundancy", () => {
   const raw =
-    "❋ gentle-pi ⟡ ~/dc-projects/dc-pi ±master ⟡ 2 MCPs ⟡ ac05/gemini · medium ⟡ ctx ▰▰▰ 40% ⟡ $1.20 ⟡ (•‿•) idle";
+    "✿ gentle shell ⟡ ~/dc-lab/lab-cofig-pi master ±3 ⟡ 🧠 lab-cofig-pi · ✓ saved #696 ⟡ ac05/gemini · medium ⟡ ctx ▰▰▰ 40% ⟡ $1.20 ⟡ dormido ( -_- ) zZ";
 
   const boxes = extractBottomBarBoxes(raw);
 
-  // Brand and location in Left Box
-  assert.ok(boxes.left.includes(BRAND_TEXT));
-  assert.ok(boxes.left.includes("~/dc-projects/dc-pi ±master"));
+  // 1. Brand rebrand
+  assert.equal(boxes.brand, BRAND_TEXT);
 
-  // MCPs in Center Box
-  assert.ok(boxes.center.includes("2 MCPs"));
+  // 2. Location
+  assert.ok(boxes.location.includes("~/dc-lab/lab-cofig-pi"));
+  assert.ok(boxes.location.includes("master ±3"));
+
+  // 3. Session & Status
+  assert.ok(boxes.session.includes("lab-cofig-pi"));
+  assert.ok(boxes.session.includes("saved #696"));
 
   // Model, Context gauge, and Cost must NOT appear in any box
-  assert.ok(!boxes.left.includes("gemini"));
-  assert.ok(!boxes.center.includes("gemini"));
-  assert.ok(!boxes.center.includes("ctx ▰"));
-  assert.ok(!boxes.center.includes("$1.20"));
+  assert.ok(!boxes.location.includes("gemini"));
+  assert.ok(!boxes.session.includes("gemini"));
+  assert.ok(!boxes.session.includes("ctx ▰"));
+  assert.ok(!boxes.session.includes("$1.20"));
 
-  // Face in Right Box
-  assert.ok(boxes.right.includes("(•‿•)"));
+  // 4. Face
+  assert.ok(boxes.face.includes("( -_- ) zZ"));
 });
 
 test("dc-bottom-bar-layout: renderBottomBar distributes space evenly and scales responsively", () => {
   const boxes = {
-    left: "⛩  Dc Studio · ~/dc-projects/dc-pi",
-    center: "2 MCPs",
-    right: "(•‿•) idle",
+    brand: "⛩  Dc Studio",
+    location: "~/dc-lab/lab-cofig-pi master ±3",
+    session: "🧠 lab-cofig-pi · ✓ saved #696",
+    face: "dormido ( -_- ) zZ",
   };
 
-  // 1. Wide terminal (160 cols) -> All 3 boxes present with ⟡
+  // 1. Wide terminal (160 cols) -> All 4 boxes present with ⟡
   const wide = renderBottomBar(boxes, 160);
   assert.equal(visibleWidth(wide), 160);
   assert.ok(wide.includes("⛩  Dc Studio"));
-  assert.ok(wide.includes("2 MCPs"));
-  assert.ok(wide.includes("(•‿•) idle"));
+  assert.ok(wide.includes("~/dc-lab/lab-cofig-pi"));
+  assert.ok(wide.includes("saved #696"));
+  assert.ok(wide.includes("( -_- ) zZ"));
   assert.ok(wide.includes("⟡"));
 
-  // 2. Medium terminal (52 cols) -> Drops Center Box, preserves Left and Right
-  const medium = renderBottomBar(boxes, 52);
-  assert.equal(visibleWidth(medium), 52);
+  // 2. Medium terminal (70 cols) -> Drops Session Box, preserves Brand, Location, and Face
+  const medium = renderBottomBar(boxes, 70);
+  assert.equal(visibleWidth(medium), 70);
   assert.ok(medium.includes("⛩  Dc Studio"));
-  assert.ok(!medium.includes("2 MCPs")); // Center dropped
-  assert.ok(medium.includes("(•‿•) idle"));
+  assert.ok(medium.includes("~/dc-lab/lab-cofig-pi"));
+  assert.ok(medium.includes("( -_- ) zZ"));
 
   // 3. Narrow terminal (30 cols) -> Truncates cleanly or falls back to Brand without overflow
   const narrow = renderBottomBar(boxes, 30);
@@ -114,12 +120,14 @@ test("dc-bottom-bar-layout: renderBottomBar distributes space evenly and scales 
 
 test("dc-bottom-bar-layout: processBottomBar end-to-end integration", () => {
   const raw =
-    "❋ gentle-pi ⟡ ~/dc-projects/dc-pi ±master ⟡ 2 MCPs ⟡ gemini · high ⟡ ctx ▰ 20% ⟡ $0.50 ⟡ ( ≖.≖ ) thinking";
+    "✿ gentle shell ⟡ ~/dc-lab/lab-cofig-pi master ±3 ⟡ 🧠 lab-cofig-pi · ✓ saved #696 ⟡ gemini · high ⟡ ctx ▰ 20% ⟡ $0.50 ⟡ dormido ( -_- ) zZ";
 
-  const line = processBottomBar(raw, 120);
-  assert.equal(visibleWidth(line), 120);
+  const line = processBottomBar(raw, 160);
+  assert.equal(visibleWidth(line), 160);
   assert.ok(line.includes("⛩  Dc Studio"));
-  assert.ok(line.includes("2 MCPs"));
+  assert.ok(line.includes("~/dc-lab/lab-cofig-pi"));
+  assert.ok(line.includes("saved #696"));
+  assert.ok(line.includes("( -_- ) zZ"));
   assert.ok(!line.includes("gemini"));
   assert.ok(!line.includes("ctx ▰"));
 });

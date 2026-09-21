@@ -58,6 +58,31 @@ export function enforceBar(tui: any): void {
   if (!tui || !tui.terminal) return;
   const state = tui.terminal[G_SIDEBAR_STATE] as SidebarState | undefined;
   if (!state) return;
+
+  // Interceptar parts para suprimir la barra superior "header" de gentle-shell
+  // salvo que el usuario la active explícitamente con prefs.headerBar === true
+  const prefs = readSidebarPrefs();
+  if (state.parts && !(state.parts as any)[Symbol.for("dc.sidebar.parts-patched")]) {
+    const parts = state.parts;
+    (parts as any)[Symbol.for("dc.sidebar.parts-patched")] = true;
+    const origGet = parts.get.bind(parts);
+    const origHas = parts.has.bind(parts);
+
+    parts.get = function (k: string) {
+      if (k === "header" && readSidebarPrefs().headerBar !== true) {
+        return undefined;
+      }
+      return origGet(k);
+    };
+
+    parts.has = function (k: string) {
+      if (k === "header" && readSidebarPrefs().headerBar !== true) {
+        return false;
+      }
+      return origHas(k);
+    };
+  }
+
   const active = isRailActive(tui);
   state.active = active;
   (globalThis as any)[Symbol.for("dc.sidebar.rail-visible")] = active;

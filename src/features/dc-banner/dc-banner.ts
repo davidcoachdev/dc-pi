@@ -18,7 +18,11 @@ export default function dcBannerExtension(pi: ExtensionAPI): void {
     if (dismissed || !activeCtx) return;
     dismissed = true;
     try {
-      activeCtx.ui.setHeader(undefined);
+      // Usar un header vacío en lugar de undefined para no restaurar el builtInHeader nativo de Pi
+      activeCtx.ui.setHeader(() => ({
+        render: () => [],
+        invalidate: () => {},
+      }));
     } catch {
       /* ignore */
     }

@@ -61,7 +61,9 @@ test("dcBannerExtension registers /dc-banner and manages lifecycle", () => {
   handlers.get("session_start")?.({}, mockCtx);
   assert.ok(currentHeader !== undefined);
 
-  // input dismisses header
+  // input dismisses header to empty component
   handlers.get("input")?.();
-  assert.equal(currentHeader, undefined);
+  assert.ok(typeof currentHeader === "function");
+  const emptyComp = currentHeader();
+  assert.deepEqual(emptyComp.render(80), []);
 });
