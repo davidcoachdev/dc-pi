@@ -35,6 +35,10 @@ import {
   listPromptAnimations,
   pacmanAnimation,
 } from "../src/features/dc-prompt/animations/index.ts";
+import {
+  PromptAnimPickerPanel,
+  openPromptAnimPicker,
+} from "../src/features/dc-prompt/views/dc-prompt-anim-picker.ts";
 import { writePromptPrefs } from "../src/features/dc-prompt/core/dc-prompt-prefs.ts";
 import dcPromptExtension, {
   getCurrentEditor,
@@ -500,4 +504,38 @@ test("PacmanAnimation renders valid frames and alternates mouth", () => {
 
   // Reset prefs
   writePromptPrefs({ animation: "kitt" });
+});
+
+test("PromptAnimPickerPanel renders live previews and handles navigation", () => {
+  const theme = {
+    fg: (_role: string, text: string) => text,
+    bold: (text: string) => text,
+  };
+
+  const panel = new PromptAnimPickerPanel(theme, "kitt");
+  assert.equal(panel.selectedIndex, 0); // kitt
+
+  // Test render: must show bullet and live preview box
+  const lines = panel.render(50);
+  assert.ok(lines.some((l) => l.includes("KITT")));
+  assert.ok(lines.some((l) => l.includes("PACMAN")));
+  assert.ok(lines.some((l) => l.includes("│"))); // vertical divider
+
+  // Down arrow moves to pacman
+  panel.handleInput("\x1b[B"); // Down
+  assert.equal(panel.selectedIndex, 1);
+
+  // Up arrow returns to kitt
+  panel.handleInput("\x1b[A"); // Up
+  assert.equal(panel.selectedIndex, 0);
+
+  let picked = "";
+  panel.onPick = (name) => { picked = name; };
+
+  // Select pacman and press Enter
+  panel.handleInput("\x1b[B");
+  panel.handleInput("\r");
+  assert.equal(picked, "pacman");
+
+  panel.stop();
 });

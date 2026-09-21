@@ -21,6 +21,7 @@ import {
 import { DC_PROMPT } from "./dc-prompt-tokens.ts";
 import { readPromptPrefs, writePromptPrefs } from "./core/dc-prompt-prefs.ts";
 import { listPromptAnimations } from "./animations/index.ts";
+import { openPromptAnimPicker } from "./views/dc-prompt-anim-picker.ts";
 
 export const notifiedMessages = new Set<string>();
 
@@ -171,6 +172,11 @@ export default function dcPromptExtension(pi: ExtensionAPI): void {
         ctx.ui.setEditorComponent(undefined);
         ctx.ui.setWorkingVisible(true);
         dcNotifier.notify(ctx, "dc-prompt: editor default restaurado");
+        return;
+      }
+
+      if (a === "pick" || a === "picker" || a === "anim" || a === "anims" || a === "animaciones") {
+        await openPromptAnimPicker(ctx);
         return;
       }
 
