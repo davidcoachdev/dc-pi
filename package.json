@@ -1,0 +1,44 @@
+{
+  "name": "dc-pi",
+  "version": "0.0.0",
+  "private": true,
+  "description": "DC Studio comprehensive TUI enhancement suite for Pi",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "keywords": [
+    "pi",
+    "pi-coding-agent",
+    "tui",
+    "dc-studio",
+    "theme",
+    "modal",
+    "developer-tools"
+  ],
+  "type": "module",
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "pi": {
+    "extensions": [
+      "./src/index.ts"
+    ],
+    "skills": [],
+    "prompts": [],
+    "themes": []
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "build": "tsc",
+    "test": "npm run build && node --test '.test-build/test/**/*.test.js'"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "0.85.1",
+    "@earendil-works/pi-tui": "0.85.1",
+    "@types/node": "22.19.19",
+    "typescript": "5.9.3"
+  }
+}
