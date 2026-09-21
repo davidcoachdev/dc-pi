@@ -1,14 +1,14 @@
 import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
 import type { ProfileId } from "./dc-face-types.ts";
+import { resolveDcConfigPath } from "../../../core/dc-paths.ts";
 
 export interface DcFacePrefs {
   profile: ProfileId;
   hidden: boolean;
 }
 
-export const STATE_FILE = path.join(os.homedir(), ".pi/agent/dc-face.json");
+export const STATE_FILE = resolveDcConfigPath("face");
 const G_PREFS = Symbol.for("dc.face.prefs");
 
 export function readFacePrefs(): DcFacePrefs {

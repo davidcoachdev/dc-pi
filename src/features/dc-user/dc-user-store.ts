@@ -1,8 +1,8 @@
 import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
+import { resolveDcConfigPath } from "../../core/dc-paths.ts";
 
-export const DEFAULT_DC_USER_FILE = path.join(os.homedir(), ".pi/agent/dc-user.json");
+export const DEFAULT_DC_USER_FILE = resolveDcConfigPath("user");
 
 export interface DcUserData {
   name?: string;

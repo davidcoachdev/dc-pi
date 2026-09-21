@@ -1,12 +1,12 @@
 import { VERSION } from "@earendil-works/pi-coding-agent";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
+import { resolveDcConfigPath } from "../../core/dc-paths.ts";
 
 export const LAYOUT_NODE_SYMBOL = Symbol.for("@earendil-works/pi-tui/layout-node");
 export const SIDEBAR_STATE_SYMBOL = Symbol.for("gentle-pi.experimental-sidebar.state");
-export const DEFAULT_DOCTOR_REPORT_FILE = path.join(os.homedir(), ".pi/agent/dc-doctor.json");
+export const DEFAULT_DOCTOR_REPORT_FILE = resolveDcConfigPath("doctor");
 export const DEFAULT_DOCTOR_SUMMARY_FILE = "/tmp/dc-doctor.txt";
 
 export type AnyComp = Record<string, unknown> & { render?: unknown };

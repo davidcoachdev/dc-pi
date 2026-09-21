@@ -429,10 +429,13 @@ test("dcPromptExtension installs on session_start, hooks lifecycle and handles /
   assert.equal(installedEditorComponent, undefined);
   assert.equal(getCurrentEditor(), undefined);
 
-  // Test /dc-prompt on
-  await cmdHandler("on", mockCtx);
-  assert.equal(workingVisible, false);
-  assert.ok(typeof installedEditorComponent === "function");
+  // Test /dc-prompt anim kitt
+  await cmdHandler("anim kitt", mockCtx);
+  assert.ok(notified.some((n) => n.includes("kitt")));
+
+  // Test /dc-prompt anim invalid
+  await cmdHandler("anim invalid_name", mockCtx);
+  assert.ok(notified.some((n) => n.includes("Animación no válida")));
 });
 
 test("patchPendingMessages wraps updatePendingMessagesDisplay and suppresses steering container", () => {

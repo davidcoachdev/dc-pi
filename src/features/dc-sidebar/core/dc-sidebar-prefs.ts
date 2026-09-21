@@ -1,6 +1,6 @@
 import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
+import { resolveDcConfigPath } from "../../../core/dc-paths.ts";
 
 export const DEFAULT_SIDEBAR_BREAKPOINT = 140;
 
@@ -12,7 +12,7 @@ export interface DcSidebarPrefs {
   minWidth?: number;
 }
 
-export const STATE_FILE = path.join(os.homedir(), ".pi/agent/dc-sidebar.json");
+export const STATE_FILE = resolveDcConfigPath("sidebar");
 const G_PREFS = Symbol.for("dc.sidebar.prefs");
 
 export function readSidebarPrefs(): DcSidebarPrefs {

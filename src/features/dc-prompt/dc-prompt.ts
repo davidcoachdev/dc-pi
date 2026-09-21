@@ -19,6 +19,8 @@ import {
   stopPulseTimer,
 } from "./dc-prompt-status.ts";
 import { DC_PROMPT } from "./dc-prompt-tokens.ts";
+import { readPromptPrefs, writePromptPrefs } from "./core/dc-prompt-prefs.ts";
+import { listPromptAnimations } from "./animations/index.ts";
 
 export const notifiedMessages = new Set<string>();
 
@@ -139,6 +141,9 @@ export default function dcPromptExtension(pi: ExtensionAPI): void {
   pi.on("agent_start", () => {
     currentEditor?.setWorking(true);
   });
+  pi.on("turn_start", () => {
+    currentEditor?.setWorking(true);
+  });
   pi.on("agent_settled", () => {
     currentEditor?.setWorking(false);
     currentEditor?.setQueued(false);
@@ -155,10 +160,11 @@ export default function dcPromptExtension(pi: ExtensionAPI): void {
   pi.on("model_select", refresh);
 
   pi.registerCommand("dc-prompt", {
-    description: "Input DC (marco doble). /dc-prompt [on|off]",
+    description: "Input DC (marco doble). /dc-prompt [on|off|anim <nombre>]",
     handler: async (args: string, ctx: ExtensionContext) => {
       const a = args.trim().toLowerCase();
       if (a === "off") {
+        writePromptPrefs({ enabled: false });
         currentEditor?.dispose();
         currentEditor = undefined;
         stopPulseTimer();
@@ -167,6 +173,25 @@ export default function dcPromptExtension(pi: ExtensionAPI): void {
         dcNotifier.notify(ctx, "dc-prompt: editor default restaurado");
         return;
       }
+
+      if (a.startsWith("anim ") || a.startsWith("animation ")) {
+        const animName = a.split(/\s+/)[1]?.trim();
+        const available = listPromptAnimations().map((an) => an.name);
+        if (!animName || !available.includes(animName)) {
+          dcNotifier.notify(
+            ctx,
+            `Animación no válida. Disponibles: ${available.join(", ")}`,
+            "warning",
+          );
+          return;
+        }
+        writePromptPrefs({ animation: animName });
+        currentEditor?.refresh();
+        dcNotifier.notify(ctx, `Animación de prompt cambiada a: ${animName}`, "info");
+        return;
+      }
+
+      writePromptPrefs({ enabled: true });
       install(pi, ctx);
       dcNotifier.notify(ctx, "dc-prompt: input DC activo");
     },
