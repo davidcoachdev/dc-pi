@@ -30,6 +30,12 @@ import {
   DcPromptEditor,
   type DcPromptDeps,
 } from "../src/features/dc-prompt/dc-prompt-editor.ts";
+import {
+  getPromptAnimation,
+  listPromptAnimations,
+  pacmanAnimation,
+} from "../src/features/dc-prompt/animations/index.ts";
+import { writePromptPrefs } from "../src/features/dc-prompt/core/dc-prompt-prefs.ts";
 import dcPromptExtension, {
   getCurrentEditor,
   install,
@@ -474,4 +480,24 @@ test("patchPendingMessages wraps updatePendingMessagesDisplay and suppresses ste
 
   editor.dispose();
   setCurrentEditor(undefined);
+});
+
+test("PacmanAnimation renders valid frames and alternates mouth", () => {
+  const anim = getPromptAnimation("pacman");
+  assert.equal(anim.name, "pacman");
+
+  const tick0 = anim.render(0).replace(/\x1b\[[0-9;]*m/g, "");
+  assert.ok(tick0.includes("C")); // Mouth open
+  assert.ok(tick0.includes("·")); // Pellets
+
+  const tick1 = anim.render(1).replace(/\x1b\[[0-9;]*m/g, "");
+  assert.ok(tick1.includes("O")); // Mouth closed
+
+  // Check that pacman is in listPromptAnimations
+  const list = listPromptAnimations().map((a) => a.name);
+  assert.ok(list.includes("pacman"));
+  assert.ok(list.includes("kitt"));
+
+  // Reset prefs
+  writePromptPrefs({ animation: "kitt" });
 });

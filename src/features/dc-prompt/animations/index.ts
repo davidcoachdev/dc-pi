@@ -1,11 +1,14 @@
 import type { PromptAnimation } from "./types.ts";
 import { kittAnimation } from "./kitt.ts";
+import { pacmanAnimation } from "./pacman.ts";
 
 export * from "./types.ts";
 export * from "./kitt.ts";
+export * from "./pacman.ts";
 
 const ANIMATIONS = new Map<string, PromptAnimation>([
   [kittAnimation.name, kittAnimation],
+  [pacmanAnimation.name, pacmanAnimation],
 ]);
 
 /**
