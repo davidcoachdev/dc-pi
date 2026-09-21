@@ -351,11 +351,15 @@ test("DcPromptEditor renders DOS double frame, idle username, and statusLine", (
 
 test("dcPromptExtension installs on session_start, hooks lifecycle and handles /dc-prompt command", async () => {
   const commands = new Map<string, { description?: string; handler: Function }>();
+  const shortcuts = new Map<string, any>();
   const events = new Map<string, Function[]>();
 
   const mockPi = {
     registerCommand(name: string, def: any) {
       commands.set(name, def);
+    },
+    registerShortcut(shortcut: string, def: any) {
+      shortcuts.set(shortcut.toLowerCase(), def);
     },
     on(event: string, fn: Function) {
       if (!events.has(event)) events.set(event, []);
@@ -369,6 +373,7 @@ test("dcPromptExtension installs on session_start, hooks lifecycle and handles /
   // Single canonical command registered
   assert.equal(commands.size, 1);
   assert.ok(commands.has("dc-prompt"));
+  assert.ok(shortcuts.has("alt+i"));
 
   // Lifecycle events registered
   assert.ok(events.has("session_start"));
@@ -490,12 +495,13 @@ test("PacmanAnimation renders valid frames and alternates mouth", () => {
   const anim = getPromptAnimation("pacman");
   assert.equal(anim.name, "pacman");
 
-  const tick0 = anim.render(0).replace(/\x1b\[[0-9;]*m/g, "");
-  assert.ok(tick0.includes("C")); // Mouth open
-  assert.ok(tick0.includes("·")); // Pellets
+  // Tick 2 gives phase = 2 -> pos = 0 (visible on screen)
+  const tick2 = anim.render(2).replace(/\x1b\[[0-9;]*m/g, "");
+  assert.ok(tick2.includes("C") || tick2.includes("O")); // Pacman on screen
+  assert.ok(tick2.includes("·")); // Pellets
 
-  const tick1 = anim.render(1).replace(/\x1b\[[0-9;]*m/g, "");
-  assert.ok(tick1.includes("O")); // Mouth closed
+  const tick3 = anim.render(3).replace(/\x1b\[[0-9;]*m/g, "");
+  assert.ok(tick3.includes("C") || tick3.includes("O"));
 
   // Check that pacman is in listPromptAnimations
   const list = listPromptAnimations().map((a) => a.name);

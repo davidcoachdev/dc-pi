@@ -160,6 +160,13 @@ export default function dcPromptExtension(pi: ExtensionAPI): void {
   pi.on("thinking_level_select", refresh);
   pi.on("model_select", refresh);
 
+  pi.registerShortcut("alt+i" as never, {
+    description: "Abrir selector de animaciones de prompt (KITT vs Pacman)",
+    handler: async (ctx: ExtensionContext) => {
+      await openPromptAnimPicker(ctx);
+    },
+  });
+
   pi.registerCommand("dc-prompt", {
     description: "Input DC (marco doble). /dc-prompt [on|off|anim <nombre>]",
     handler: async (args: string, ctx: ExtensionContext) => {

@@ -1,28 +1,25 @@
 import type { PromptAnimation } from "./types.ts";
 
 /**
- * Animación Pacman para el prompt de DC Studio:
- * Riel de 8 celdas de ancho.
- * Pacman avanza hacia la derecha comiéndose los pellets (`·`), alternando boca abierta y cerrada.
- * Al llegar al final, se da vuelta y regresa hacia la izquierda comiéndose los pellets que reaparecen.
- *
- * Utiliza paleta retro:
- * - Pacman: Amarillo brillante (\x1b[38;2;255;230;0m).
- * - Pellets / bolitas: Rosado suave (\x1b[38;2;255;160;160m).
+ * Animación Pacman estilo KITT para el prompt de DC Studio:
+ * Riel de 8 celdas con padding a los lados (sale completamente del recuadro a ambos extremos).
+ * - Ida hacia la derecha: Pacman comiendo pellets (glifo C / O).
+ * - Vuelta hacia la izquierda: Pacman regresa usando el icono 'Ͻ' (y O), comiendo en sentido inverso.
  */
 export class PacmanAnimation implements PromptAnimation {
   readonly name = "pacman";
 
   private readonly trackWidth = 8;
+  private readonly pad = 2; // celdas fuera de pantalla a cada lado para salida completa
   private readonly yellow = "\x1b[38;2;255;230;0m";
   private readonly pelletColor = "\x1b[38;2;255;160;160m";
   private readonly reset = "\x1b[39m";
 
   render(tick: number): string {
     const n = this.trackWidth;
-    const steps = n;
-    const pause = 4; // pausa breve en cada extremo masticando
-    const cycle = (steps + pause) * 2;
+    const pad = this.pad;
+    const steps = n + pad * 2; // total de posiciones (desde -pad hasta n + pad - 1)
+    const cycle = steps * 2; // ida y vuelta completa
     const phase = tick % cycle;
 
     let pos = 0;
@@ -30,27 +27,22 @@ export class PacmanAnimation implements PromptAnimation {
     let eating = tick % 2 === 0;
 
     if (phase < steps) {
-      pos = phase;
+      // Ida hacia la derecha (sale completamente por la derecha)
+      pos = -pad + phase;
       rightward = true;
-    } else if (phase < steps + pause) {
-      pos = steps - 1;
-      rightward = false;
-    } else if (phase < steps * 2 + pause) {
-      pos = steps - 1 - (phase - steps - pause);
-      rightward = false;
     } else {
-      pos = 0;
-      rightward = true;
+      // Vuelta hacia la izquierda (sale completamente por la izquierda)
+      const backPhase = phase - steps;
+      pos = n + pad - 1 - backPhase;
+      rightward = false;
     }
 
-    // Boca abierta / cerrada según dirección
-    // Derecha: C (abierta) / O (cerrada)
-    // Izquierda: ᗤ o D (abierta) / O (cerrada)
+    // Glifos: C/O hacia la derecha, Ͻ/O (con el icono solicitado) hacia la izquierda
     let pacmanGlyph: string;
     if (rightward) {
       pacmanGlyph = eating ? "C" : "O";
     } else {
-      pacmanGlyph = eating ? "D" : "O";
+      pacmanGlyph = eating ? "Ͻ" : "O";
     }
 
     let out = "";
@@ -58,8 +50,8 @@ export class PacmanAnimation implements PromptAnimation {
       if (i === pos) {
         out += `${this.yellow}${pacmanGlyph}${this.reset}`;
       } else {
-        // Hacia la derecha: los pellets por comer están adelante (i > pos).
-        // Hacia la izquierda: los pellets por comer están adelante (i < pos).
+        // Al ir a la derecha, los pellets están adelante (i > pos).
+        // Al volver a la izquierda, los pellets están adelante (i < pos).
         const hasPellet = rightward ? i > pos : i < pos;
         if (hasPellet) {
           out += `${this.pelletColor}·${this.reset}`;
