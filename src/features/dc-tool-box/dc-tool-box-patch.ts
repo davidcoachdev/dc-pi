@@ -61,8 +61,7 @@ export function installToolBoxPatch(): boolean {
             ?.map((c) => c.text ?? "")
             .join(" ") || "";
           if (text.includes("Operation aborted") || text.includes("aborted")) {
-            const tool = String(this.toolName || "Tool");
-            dcNotifier.notifyHerdr("Operación abortada", `${tool}: ejecución cancelada`);
+            // No emitir notifyHerdr aquí para evitar saturar el socket
           }
         }
       } catch {

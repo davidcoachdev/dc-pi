@@ -82,9 +82,15 @@ export async function openDcModal<T = void>(
           ? (options.content as DcModalContentFactory<T>)(close, theme, tui)
           : options.content;
 
-      const dynamicHeight = typeof options.maxHeight === "function"
-        ? options.maxHeight
-        : undefined;
+      let dynamicHeight: number | (() => number) | undefined = undefined;
+      if (typeof options.maxHeight === "function") {
+        dynamicHeight = options.maxHeight;
+      } else if (typeof options.maxHeight === "number") {
+        dynamicHeight = options.maxHeight;
+      } else if (typeof options.maxHeight === "string" && options.maxHeight.endsWith("%")) {
+        const pct = parseFloat(options.maxHeight) / 100;
+        dynamicHeight = () => Math.max(8, Math.floor(((tui as any)?.terminal?.rows ?? process.stdout?.rows ?? 40) * pct));
+      }
 
       const resolvedFooter = typeof options.footer === "function"
         ? () => (options.footer as Function)(theme)

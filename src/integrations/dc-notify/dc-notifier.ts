@@ -1,6 +1,17 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { execFileSync, spawn } from "node:child_process";
 import { patchPiLoadedResources } from "./dc-resources-patch.ts";
+import {
+  patchPiUpdateNotices,
+  patchPiStatusNotifications,
+  patchPiExtensionNotify,
+  patchPiReloadCommand,
+  patchPiCacheMissNotices,
+  patchPiCompactionNotices,
+  patchPiRetryStatusIndicator,
+  patchAssistantMessageAbort,
+  recordUserEscape,
+} from "./dc-core-patches.ts";
 
 export type NotificationType = "info" | "warning" | "error";
 
@@ -86,8 +97,76 @@ if (process.env.NODE_ENV === "test" || process.argv.some(a => a.includes("test")
 }
 
 export default function dcNotifyExtension(pi: ExtensionAPI): void {
+  // Capturar Escape real del teclado del usuario
+  pi.on("session_start", (_event, ctx) => {
+    if (!ctx.hasUI) return;
+    try {
+      ctx.ui.onTerminalInput((data: string) => {
+        // \x1b solo es Escape en terminales VT100/ANSI
+        if (data === "\x1b") {
+          recordUserEscape();
+        }
+        return undefined; // no consume la tecla, permite que Pi cancele normalmente
+      });
+    } catch {
+      /* noop */
+    }
+  });
+
   try {
     patchPiLoadedResources();
+  } catch {
+    /* noop */
+  }
+  try {
+    patchPiUpdateNotices();
+  } catch {
+    /* noop */
+  }
+  try {
+    patchPiStatusNotifications();
+  } catch {
+    /* noop */
+  }
+  try {
+    patchPiExtensionNotify();
+  } catch {
+    /* noop */
+  }
+  try {
+    patchPiReloadCommand();
+  } catch {
+    /* noop */
+  }
+  try {
+    patchPiCacheMissNotices();
+  } catch {
+    /* noop */
+  }
+  try {
+    patchPiCompactionNotices();
+  } catch {
+    /* noop */
+  }
+  try {
+    patchPiRetryStatusIndicator();
+  } catch {
+    /* noop */
+  }
+  try {
+    patchAssistantMessageAbort();
+  } catch {
+    /* noop */
+  }
+
+  // Silenciar completamente mensajes de google-account
+  try {
+    pi.registerMessageRenderer("google-account", () => {
+      return {
+        render: () => [],
+        invalidate: () => {},
+      };
+    });
   } catch {
     /* noop */
   }

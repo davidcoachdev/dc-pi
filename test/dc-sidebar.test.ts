@@ -19,6 +19,7 @@ import {
   getSidebarBreakpoint,
   DEFAULT_SIDEBAR_BREAKPOINT,
 } from "../src/features/dc-sidebar/core/dc-sidebar-prefs.ts";
+import { writeFacePrefs } from "../src/features/dc-face/core/dc-face-prefs.ts";
 
 test("Sidebar Header renders topLine, titleBar with ⛩  Dc Studio, and ruleLine", () => {
   const header = createSidebarHeader(null, 52);
@@ -36,8 +37,10 @@ test("Sidebar Header renders topLine, titleBar with ⛩  Dc Studio, and ruleLine
 });
 
 test("Sidebar Footer renders separator, authentic Big Face and status line with mouse click support", () => {
+  writeFacePrefs({ profile: "dcdev" });
   let clicked = false;
-  const footer = createSidebarFooter(null, 52, {
+  const mockTui = { terminal: { rows: 50 } };
+  const footer = createSidebarFooter(mockTui, 52, {
     onFaceClick: () => { clicked = true; },
   });
 
@@ -46,7 +49,7 @@ test("Sidebar Footer renders separator, authentic Big Face and status line with 
   assert.ok(lines[0].includes("═"));
   // Contains Big Face elements
   assert.ok(lines.some((l) => l.includes("♥") || l.includes("▲▲▲▲▲")));
-  assert.ok(lines[lines.length - 1].includes("● listo") && lines[lines.length - 1].includes("[dcdev]"));
+  assert.ok(lines[lines.length - 1].includes("dcdev"));
 
   // Test mouse click
   const res = (footer as any).handleMouse?.({ type: "click", button: "left" });

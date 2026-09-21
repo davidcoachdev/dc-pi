@@ -1,50 +1,26 @@
-import type { Component, TUI } from "@earendil-works/pi-tui";
+import type { Component } from "@earendil-works/pi-tui";
 import { visibleWidth, truncateToWidth } from "@earendil-works/pi-tui";
 import { FRAME, SidebarState } from "../core/dc-sidebar-types.ts";
 import { coloredFrame } from "./dc-sidebar-header.ts";
+import {
+  BIG_FACE_MIN_ROWS,
+  DOT,
+  type FaceMode,
+  getFaceFrameIndex,
+} from "../../dc-face/core/dc-face-types.ts";
+import { readFacePrefs, writeFacePrefs } from "../../dc-face/core/dc-face-prefs.ts";
+import {
+  getFaceProfile,
+  bigFramesFor,
+  bigDefaultFor,
+  getMiniFaceFrame,
+  paintBigLine,
+} from "../../dc-face/art/index.ts";
+import { agentVisualStateStore, type AgentState } from "../../../core/dc-agent-state/index.ts";
+import { ttsBridgeClient } from "../../dc-face/core/dc-face-bridge.ts";
 
-export const BIG_DEFAULT: readonly string[] = [
-  "   ~~~~~~~~~~~~~~~~~~~   ",
-  "  /~~~~~~~~~~~~~~~~~~~\\  ",
-  " |~~        ~        ~~| ",
-  " │~  ▲▲▲▲▲     ▲▲▲▲▲  ~│ ",
-  " │  ╔═════╗   ╔═════╗  │ ",
-  " │══║  ♥  ║═══║  ♥  ║══│ ",
-  " │  ╚═════╝   ╚═════╝  │ ",
-  " │          ╩          │ ",
-  "  \\                   /  ",
-  "   \\    ╘═══════╛    /   ",
-  "    \\     #####     /    ",
-  "     └─────###─────┘     ",
-];
-
-export function paintBigLine(line: string, fg: (role: string, text: string) => string): string {
-  return Array.from(line)
-    .map((ch, idx) => {
-      let role = "accent";
-      const isOuter =
-        ch === "┌" ||
-        ch === "┐" ||
-        ch === "└" ||
-        ch === "┘" ||
-        (ch === "─" && (line.trim().startsWith("┌") || line.trim().startsWith("└"))) ||
-        (ch === "│" && (idx === 0 || idx === line.length - 1));
-      if (isOuter) role = "error";
-      else if ("~".includes(ch)) role = "text";
-      else if ("▲".includes(ch)) role = "error";
-      else if ("╔║╚╞╒╝╗╛╕╜╖".includes(ch)) role = "text";
-      else if ("═".includes(ch) && line.includes("╔")) role = "text";
-      else if ("♥".includes(ch)) role = "error";
-      else if ("■♦≡".includes(ch)) role = "accent";
-      else if ("╩‖".includes(ch)) role = "muted";
-      else if ("╘╬╕╒«»═╝╗╛╜╖".includes(ch)) role = "text";
-      else if ("#".includes(ch)) role = "error";
-      else if ("zZ".includes(ch)) role = "muted";
-      else if ("?!".includes(ch)) role = "warning";
-      return fg(role, ch);
-    })
-    .join("");
-}
+export { paintBigLine };
+export { BIG_DEFAULT } from "../../dc-face/art/dcdev.ts";
 
 export interface SidebarFooterOptions {
   faceText?: string;
@@ -58,11 +34,50 @@ function stateOf(tui: any): SidebarState | undefined {
   return tui?.terminal?.[G_SIDEBAR_STATE];
 }
 
+export function getTerminalRows(tui?: any): number {
+  const term = tui?.terminal as { rows?: number } | undefined;
+  if (typeof term?.rows === "number" && term.rows > 0) {
+    return term.rows;
+  }
+  if (typeof process?.stdout?.rows === "number" && process.stdout.rows > 0) {
+    return process.stdout.rows;
+  }
+  return 0;
+}
+
+export function mapAgentStateToFaceMode(state: AgentState): FaceMode {
+  switch (state) {
+    case "idle":
+      return "feliz";
+    case "thinking":
+      return "pensando";
+    case "writing":
+    case "typing":
+      return "escribiendo";
+    case "working":
+      return "trabajando";
+    case "dormant":
+      return "dormido";
+    case "compacting":
+      return "compactando";
+    case "retying":
+      return "reintentando";
+    case "talking":
+      return "hablando";
+    case "prompting":
+      return "pregunta";
+    default:
+      return "feliz";
+  }
+}
+
 /**
  * Footer del sidebar:
  * - Inamovible abajo.
- * - Con el tamaño del dc-face de lab (12 líneas de Big ASCII Face + status label).
- * - Toma la parte "face" si gentle-pi / dc-face está activo, o usa el Big Face por defecto.
+ * - Responsive al alto: Si rows < BIG_FACE_MIN_ROWS (46), conmuta a la mini-carita de 1 línea.
+ * - Si rows >= 46, renderiza el Big ASCII Face animado del perfil activo (dcdev | cubis).
+ * - Reactivo a agentVisualStateStore (idle, thinking, writing, working, dormant, etc.).
+ * - Clic interactivo en la carita para alternar perfiles o ejecutar callback.
  */
 export function createSidebarFooter(tui: any, totalWidth: number, options: SidebarFooterOptions = {}): Component {
   const innerWidth = Math.max(0, totalWidth - 2);
@@ -107,19 +122,51 @@ export function createSidebarFooter(tui: any, totalWidth: number, options: Sideb
           }
         }
       } catch {
-        /* fallback al Big Face local */
+        /* fallback al componente nativo */
       }
 
-      // 2. Si no hay parte "face", renderizar el Big Face idéntico a lab:
-      const faceLines = BIG_DEFAULT.map((line) => {
+      // 2. Determinar modo del agente y perfil activo
+      const agentState = agentVisualStateStore.getState() ?? "idle";
+      const mode = mapAgentStateToFaceMode(agentState);
+      const prefs = readFacePrefs();
+      const profile = prefs.profile ?? "dcdev";
+      const ttsStatus = ttsBridgeClient.getStatus();
+      const dot = DOT[mode] ?? "●";
+
+      // 3. Evaluar responsividad al alto de la terminal
+      const rows = getTerminalRows(tui);
+      const useBig = rows === 0 || rows >= BIG_FACE_MIN_ROWS;
+      const animFrameIdx = getFaceFrameIndex();
+
+      const labelText =
+        fallbackFg("accent", `${dot} ${mode} ${ttsStatus === "playing" ? "▶ tts" : "○ tts"} `) +
+        fallbackFg("muted", `[${profile}]`);
+      const centeredLabel = center(labelText, w);
+
+      // 4. Si la terminal es baja (<46 filas): Mini-carita de 1 sola línea
+      if (!useBig) {
+        const miniRaw = getMiniFaceFrame(mode, animFrameIdx);
+        const miniPainted = fallbackFg("accent", miniRaw);
+        const centeredMini = center(miniPainted, w);
+        return [
+          sepLine,
+          "",
+          centeredMini,
+          "",
+          centeredLabel,
+        ];
+      }
+
+      // 5. Terminal alta (>=46 filas): Big ASCII Face animado
+      const frames = bigFramesFor(profile, mode);
+      const currentAscii = frames && frames.length > 0
+        ? frames[animFrameIdx % frames.length]!
+        : bigDefaultFor(profile);
+
+      const faceLines = currentAscii.map((line) => {
         const painted = paintBigLine(line, fallbackFg);
         return center(painted, w);
       });
-
-      const labelText =
-        fallbackFg("accent", "● listo ○ tts ") +
-        fallbackFg("muted", "[dcdev]");
-      const centeredLabel = center(labelText, w);
 
       return [
         sepLine,
@@ -140,12 +187,16 @@ export function createSidebarFooter(tui: any, totalWidth: number, options: Sideb
 
     handleMouse(event: any): any {
       if (event?.type === "click" && (event.button ?? "left") === "left") {
-        const fn = (globalThis as any)[Symbol.for("dc.face.demo")];
-        if (typeof fn === "function") {
-          fn();
+        if (options.onFaceClick) {
+          options.onFaceClick();
           return { handled: true };
         }
-        options.onFaceClick?.();
+
+        // Si no hay callback específico, alternar perfil (dcdev <-> cubis)
+        const current = readFacePrefs();
+        const nextProfile = current.profile === "cubis" ? "dcdev" : "cubis";
+        writeFacePrefs({ profile: nextProfile });
+        tui?.requestRender?.();
         return { handled: true };
       }
       return undefined;

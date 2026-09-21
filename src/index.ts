@@ -24,7 +24,7 @@ export { getGitChanges, parseGitStatus } from "./integrations/dc-git/dc-git.ts";
 // Feature Extensions
 import dcNotifyExtension from "./integrations/dc-notify/dc-notifier.ts";
 import caritasExtension from "./features/dc-caritas/dc-caritas.ts";
-import profileDuelExtension from "./features/dc-faces/dc-faces.ts";
+import dcFaceExtension from "./features/dc-face/dc-face.ts";
 import dcKeysExtension from "./features/dc-keys/dc-keys.ts";
 import dcChangesExtension from "./features/dc-changes/dc-changes.ts";
 import dcModelsExtension from "./features/dc-models/dc-models.ts";
@@ -36,7 +36,6 @@ import dcTitleExtension from "./features/dc-title/dc-title.ts";
 import dcExitExtension from "./features/dc-exit/dc-exit.ts";
 import dcPreviewExtension from "./features/dc-preview/dc-preview.ts";
 import dcDoctorExtension from "./features/dc-doctor/dc-doctor.ts";
-import dcFaceAnimExtension from "./features/dc-face-anim/dc-face-anim.ts";
 import dcReloadExtension from "./features/dc-reload/dc-reload.ts";
 import dcToolBoxExtension from "./features/dc-tool-box/dc-tool-box.ts";
 import dcUserBoxExtension from "./features/dc-user-box/dc-user-box.ts";
@@ -45,12 +44,15 @@ import dcSidebarExtension from "./features/dc-sidebar/dc-sidebar.ts";
 import dcPromptExtension from "./features/dc-prompt/dc-prompt.ts";
 import dcDialogsExtension from "./experimental/dc-dialogs-overlay/dc-dialogs.ts";
 
+export const profileDuelExtension = dcFaceExtension;
+export const dcFacesExtension = dcFaceExtension;
+export const dcFaceAnimExtension = dcFaceExtension;
+
 export {
   dcNotifyExtension,
   caritasExtension,
   caritasExtension as dcCaritasExtension,
-  profileDuelExtension,
-  profileDuelExtension as dcFacesExtension,
+  dcFaceExtension,
   dcKeysExtension,
   dcChangesExtension,
   dcModelsExtension,
@@ -62,7 +64,6 @@ export {
   dcExitExtension,
   dcPreviewExtension,
   dcDoctorExtension,
-  dcFaceAnimExtension,
   dcReloadExtension,
   dcToolBoxExtension,
   dcUserBoxExtension,
@@ -79,7 +80,7 @@ export {
 export function dcStudioExtension(pi: ExtensionAPI, ctx?: ExtensionContext): void {
   dcNotifyExtension(pi);
   caritasExtension(pi);
-  profileDuelExtension(pi);
+  dcFaceExtension(pi);
   dcKeysExtension(pi);
   dcChangesExtension(pi);
   dcModelsExtension(pi);
@@ -91,7 +92,6 @@ export function dcStudioExtension(pi: ExtensionAPI, ctx?: ExtensionContext): voi
   dcExitExtension(pi);
   dcPreviewExtension(pi);
   dcDoctorExtension(pi);
-  dcFaceAnimExtension(pi);
   dcReloadExtension(pi);
   dcToolBoxExtension(pi);
   dcUserBoxExtension(pi);

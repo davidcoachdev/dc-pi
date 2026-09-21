@@ -68,6 +68,7 @@ test("dcNotifyExtension registers /dc-notify-test", () => {
   let commandHandler: Function | undefined;
 
   const mockPi = {
+    on(_event: string, _fn: any) {},
     registerCommand(name: string, def: { handler: Function }) {
       registeredCommand = name;
       commandHandler = def.handler;
