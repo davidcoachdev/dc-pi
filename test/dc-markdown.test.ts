@@ -7,13 +7,16 @@ import {
   getHeadingPrefix,
   getLangIcon,
   prettifyErrorContent,
-} from "../src/features/dc-markdown/dc-markdown-tokens.ts";
-import {
   installMarkdownPatch,
   isCodeBoxEnabled,
   setCodeBoxEnabled,
-} from "../src/features/dc-markdown/dc-markdown-patch.ts";
-import dcMarkdownExtension from "../src/features/dc-markdown/dc-markdown.ts";
+  renderCodeBlockBox,
+  storeCodeBlock,
+  getStoredCodeBlock,
+  createAgentResultRenderer,
+  installErrorBoxPatch,
+  dcMarkdownExtension,
+} from "../src/features/dc-markdown/index.ts";
 
 test("getHeadingPrefix and getLangIcon return appropriate symbols", () => {
   assert.equal(getHeadingPrefix(1), "");
@@ -47,6 +50,32 @@ test("prettifyErrorContent formats embedded JSON cleanly", () => {
   assert.ok(pretty.includes("  \"code\": 503"));
 });
 
+test("renderCodeBlockBox produces card with title, copy button and APC markers", () => {
+  const lines = renderCodeBlockBox({
+    text: "const a = 123;",
+    lang: "ts",
+    width: 60,
+    indent: "  ",
+  });
+
+  assert.ok(lines.length >= 3);
+  // Header with rounded corner ╭─, icon and arrow
+  assert.ok(lines[0]!.includes("╭─") && lines[0]!.includes("ts") && lines[0]!.includes("▲"));
+  // Top APC marker
+  assert.ok(lines[0]!.includes("\x1b_dc:code:"));
+  // Bottom border with copy button and bot APC marker
+  assert.ok(lines[lines.length - 1]!.includes("╰") && lines[lines.length - 1]!.includes("📋"));
+  assert.ok(lines[lines.length - 1]!.includes(":bot\x1b\\"));
+});
+
+test("storeCodeBlock stores and retrieves clean code by id", () => {
+  const id = storeCodeBlock("console.log('test');", "js");
+  const stored = getStoredCodeBlock(id);
+  assert.ok(stored);
+  assert.equal(stored!.code, "console.log('test');");
+  assert.equal(stored!.lang, "js");
+});
+
 test("installMarkdownPatch formats code blocks into rounded boxes", () => {
   installMarkdownPatch();
 
@@ -73,10 +102,33 @@ test("installMarkdownPatch formats code blocks into rounded boxes", () => {
   assert.ok(lines.length >= 3);
   // Header with rounded corner ╭─ and icon
   assert.ok(lines.some((l: string) => l.includes("╭─") && l.includes("ts")));
-  // Footer with rounded corner ╰─
-  assert.ok(lines.some((l: string) => l.includes("╰")));
+  // Footer with rounded corner ╰─ and copy button
+  assert.ok(lines.some((l: string) => l.includes("╰") && l.includes("📋")));
   // Content with indent
   assert.ok(lines.some((l: string) => l.includes("const x = 1;")));
+});
+
+test("createAgentResultRenderer formats agent messages with header and copy button", () => {
+  const renderer = createAgentResultRenderer(false);
+  const comp = renderer(
+    {
+      details: { gentleAgents: { agent: "gentle-ai-worker", status: "completed", taskId: "t1" } },
+      content: "Task completed successfully",
+    },
+    { expanded: false },
+    {},
+  );
+
+  const lines = comp.render(60);
+  assert.ok(lines.length >= 3);
+  assert.ok(lines.some((l: string) => l.includes("gentle-ai-worker")));
+  assert.ok(lines.some((l: string) => l.includes("Task completed successfully")));
+  assert.ok(lines.some((l: string) => l.includes("📋")));
+});
+
+test("installErrorBoxPatch executes defensively without throwing", () => {
+  const ok = installErrorBoxPatch();
+  assert.equal(ok, true);
 });
 
 test("dcMarkdownExtension registers only single command /dc-markdown", async () => {
@@ -86,6 +138,7 @@ test("dcMarkdownExtension registers only single command /dc-markdown", async () 
     registerCommand(name: string, def: any) {
       commands.set(name, def);
     },
+    registerMessageRenderer() {},
     on() {},
   } as unknown as ExtensionAPI;
 
@@ -109,10 +162,10 @@ test("dcMarkdownExtension registers only single command /dc-markdown", async () 
   // 1. Off
   await handler("off", mockCtx);
   assert.equal(isCodeBoxEnabled(), false);
-  assert.ok(notifiedMsg.includes("disabled"));
+  assert.ok(notifiedMsg.includes("desactivadas"));
 
   // 2. On
   await handler("on", mockCtx);
   assert.equal(isCodeBoxEnabled(), true);
-  assert.ok(notifiedMsg.includes("enabled"));
+  assert.ok(notifiedMsg.includes("activadas"));
 });

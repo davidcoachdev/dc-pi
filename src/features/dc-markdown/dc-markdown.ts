@@ -1,54 +1,54 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { dcNotifier } from "../../integrations/dc-notify/dc-notifier.ts";
-import {
-  installAssistantCopyPatch,
-  installMarkdownPatch,
-  isCodeBoxEnabled,
-  setActiveUiTheme,
-  setCodeBoxEnabled,
-} from "./dc-markdown-patch.ts";
+import { isCodeBoxEnabled, setCodeBoxEnabled } from "./core/dc-markdown-config.ts";
+import { installMarkdownPatch, installAssistantCopyPatch, setActiveUiTheme } from "./patches/dc-markdown-patch.ts";
+import { installErrorBoxPatch } from "./renderers/dc-error-box.ts";
+import { installAgentResultRenderers } from "./renderers/dc-agent-result-box.ts";
 
-/**
- * Extensión de Markdown estilizado para DC Studio en Pi.
- * - Formatea bloques de código en cajas redondeadas con icono Nerd Font y fondo sutil.
- * - Formatea encabezados H3+ con glifos limpios ("◆ ", "▸ ", "▪ ").
- * - Permite copiar mensajes del asistente.
- *
- * Comando único en inglés:
- *   /dc-markdown [on|off]
- */
 export default function dcMarkdownExtension(pi: ExtensionAPI): void {
-  // Instalar interceptores sobre Markdown y AssistantMessageComponent
   installMarkdownPatch();
+  installErrorBoxPatch();
   installAssistantCopyPatch();
+  installAgentResultRenderers(pi);
 
   pi.on("session_start", (_event, ctx) => {
-    if (ctx.hasUI && (ctx.ui as any).theme) {
-      setActiveUiTheme((ctx.ui as any).theme);
-    }
+    if (ctx?.ui?.theme) setActiveUiTheme(ctx.ui.theme);
+    installMarkdownPatch();
+    installErrorBoxPatch();
+    installAssistantCopyPatch();
+    installAgentResultRenderers(pi, () => ctx?.ui?.theme);
+  });
+
+  pi.on("turn_start", (_event, ctx) => {
+    if (ctx?.ui?.theme) setActiveUiTheme(ctx.ui.theme);
   });
 
   pi.registerCommand("dc-markdown", {
-    description: "Toggle styled rounded code boxes in Markdown: /dc-markdown [on|off]",
+    description: "Alternar cajas de código estilizadas de DC Studio (/dc-markdown [on|off])",
     handler: async (args: string | undefined, ctx: ExtensionContext) => {
-      const sub = (args ?? "").trim().toLowerCase();
-
-      if (sub === "on" || sub === "enable") {
-        setCodeBoxEnabled(true);
-        if (ctx.hasUI) dcNotifier.notify(ctx, "DC Markdown: code boxes enabled.", "info");
+      const trimmed = (args ?? "").trim().toLowerCase();
+      if (!trimmed) {
+        dcNotifier.notify(
+          ctx,
+          "DC Markdown",
+          `Cajas de código: ${isCodeBoxEnabled() ? "activadas" : "desactivadas"}`,
+          "info",
+        );
         return;
       }
-
-      if (sub === "off" || sub === "disable") {
+      if (trimmed === "off" || trimmed === "0") {
         setCodeBoxEnabled(false);
-        if (ctx.hasUI) dcNotifier.notify(ctx, "DC Markdown: code boxes disabled.", "info");
+        (ctx.ui as any).requestRender?.();
+        dcNotifier.notify(ctx, "DC Markdown", "Cajas de código desactivadas", "info");
         return;
       }
-
-      const status = isCodeBoxEnabled() ? "enabled" : "disabled";
-      if (ctx.hasUI) {
-        dcNotifier.notify(ctx, `DC Markdown: code boxes ${status}.`, "info");
+      if (trimmed === "on" || trimmed === "1") {
+        setCodeBoxEnabled(true);
+        (ctx.ui as any).requestRender?.();
+        dcNotifier.notify(ctx, "DC Markdown", "Cajas de código activadas", "info");
+        return;
       }
+      dcNotifier.notify(ctx, "DC Markdown", "Uso: /dc-markdown [on | off]", "warning");
     },
   });
 }

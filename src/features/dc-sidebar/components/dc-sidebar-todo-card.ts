@@ -1,4 +1,5 @@
 import type { Component } from "@earendil-works/pi-tui";
+import { executeSlashCommand } from "../../../core/dc-command-executor.ts";
 import { DcSidebarCard } from "../../../ui/dc-sidebar-card.ts";
 import { DcVStack } from "../../../ui/dc-vstack.ts";
 import { DcJustifiedRow } from "../views/dc-sidebar-body.ts";
@@ -104,12 +105,24 @@ export function createTodoCard(tui?: any, onRequestRender?: () => void): Compone
     }
   }
 
+  rows.push(new DcVStack(rows.splice(0, 0)));
+
   const content = new DcVStack(rows);
 
   return new DcSidebarCard({
     glyph: "🧰",
     title: "Todo",
-    titleRight: `${doneCount}/${totalCount}`,
+    titleRight: `${doneCount}/${totalCount} [modal ↗]`,
+    onRightClick: () => {
+      try {
+        const extCtx = (tui as any)?._dcContext;
+        if (extCtx) {
+          executeSlashCommand(extCtx, "/plan", "Planes ODD");
+        }
+      } catch {
+        /* best-effort */
+      }
+    },
     content,
     paddingX: 1,
   });

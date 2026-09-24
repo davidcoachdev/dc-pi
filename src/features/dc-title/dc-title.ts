@@ -6,10 +6,10 @@ export default function dcTitleExtension(
   pi: ExtensionAPI,
   options?: RenameTabOptions,
 ): void {
-  // Renombrar automáticamente en session_start
+  // Renombrar automáticamente en session_start a "⛩  Dc Studio"
   pi.on("session_start", async (_event, _ctx) => {
     try {
-      renameTab("Pi", options);
+      renameTab("⛩  Dc Studio", options);
     } catch {
       /* noop */
     }

@@ -11,7 +11,7 @@ exec env -u PI_PACKAGE_DIR -u PI_TUI_WRITE_LOG \
   PI_CODING_AGENT_DIR="$smoke_root/agent" \
   PI_CODING_AGENT_SESSION_DIR="$smoke_root/sessions" \
   PI_OFFLINE=1 PI_TELEMETRY=0 \
-  node /home/linuxbrew/.linuxbrew/Cellar/pi-coding-agent/0.85.1/libexec/lib/node_modules/@earendil-works/pi-coding-agent/dist/bundle/cli.js \
+  node /home/linuxbrew/.linuxbrew/opt/pi-coding-agent/libexec/lib/node_modules/@earendil-works/pi-coding-agent/dist/bundle/cli.js \
   --no-session --session-dir "$smoke_root/sessions" \
   --no-approve --no-extensions --no-skills --no-prompt-templates \
   --no-themes --no-context-files --no-tools \

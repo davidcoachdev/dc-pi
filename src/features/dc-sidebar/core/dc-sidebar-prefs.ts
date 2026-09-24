@@ -23,12 +23,12 @@ export function readSidebarPrefs(): DcSidebarPrefs {
     return {
       hidden: j.hidden === true,
       frame: j.frame !== false,
-      bodyFrame: j.bodyFrame !== false,
+      bodyFrame: j.bodyFrame === true,
       headerBar: j.headerBar === true,
       minWidth,
     };
   } catch {
-    return { hidden: false, frame: true, bodyFrame: true, headerBar: false, minWidth: DEFAULT_SIDEBAR_BREAKPOINT };
+    return { hidden: false, frame: true, bodyFrame: false, headerBar: false, minWidth: DEFAULT_SIDEBAR_BREAKPOINT };
   }
 }
 

@@ -1,4 +1,6 @@
 import type { Component } from "@earendil-works/pi-tui";
+import * as os from "node:os";
+import * as path from "node:path";
 import { DcSidebarCard } from "../../../ui/dc-sidebar-card.ts";
 import { DcVStack } from "../../../ui/dc-vstack.ts";
 import { DcText } from "../../../ui/dc-text.ts";
@@ -6,12 +8,14 @@ import { DcCollapsible } from "../../../ui/dc-collapsible.ts";
 import { renderProgressBar } from "../../../ui/dc-progress-bar.ts";
 import { DcJustifiedRow } from "../views/dc-sidebar-body.ts";
 import { getProjectInfo } from "../providers/dc-project-provider.ts";
+import { getProjectObservations, isProjectEnrolled } from "../../dc-engram/dc-engram-db.ts";
 import { getCachedAccountQuotas } from "../providers/dc-quota-provider.ts";
 import { readProfilesInfo, switchActiveProfile } from "../providers/dc-profile-provider.ts";
 import { getMcpServersInfo } from "../providers/dc-mcp-provider.ts";
 import { executeSlashCommand } from "../../../core/dc-command-executor.ts";
 import { openChangesViewer } from "../../dc-changes/dc-changes.ts";
 import { openQuotaViewer } from "../../dc-quota/dc-quota.ts";
+import { openEngramExplorer, openEngramEnrollModal, openProjectDashboard } from "../../dc-engram/dc-engram.ts";
 import { dcNotifier } from "../../../integrations/dc-notify/dc-notifier.ts";
 import { getSidebarContext } from "../dc-sidebar.ts";
 
@@ -45,11 +49,84 @@ export function createStatusCard(reqRender: () => void): Component {
     )
   ];
 
-  // --- Bloque 2: Sesión y LSP ---
-  const sessionRows = [
-    new DcJustifiedRow(` 🧠 ${bloodWhite("lab-00")}`, `${dim("· ready")} `),
-    new DcJustifiedRow(` 📚 ${bloodBright(bold("LSP:"))} ${bloodSoft("inactivo")}`, `${dim("[off]")} `)
+  // --- Bloque 2: Engram (Desplegable interactivo con Local y Cloud) ---
+  const currentCwd = proj.displayCwd.startsWith("~")
+    ? path.join(os.homedir(), proj.displayCwd.slice(1))
+    : proj.displayCwd;
+  const projectName = path.basename(currentCwd) || "lab-cofig-pi";
+  const engramObs = getProjectObservations(5, projectName);
+  const latestId = engramObs[0]?.id ? `#${engramObs[0].id}` : "#0";
+  const isEnrolled = isProjectEnrolled(projectName);
+
+  // 2.1 Sub-desplegable Local
+  const localObsRows: DcJustifiedRow[] = [
+    new DcJustifiedRow(`     ${bloodSoft("Health:")} ${bloodBright("ok")}`, `${dim("daemon activo")} `),
+    new DcJustifiedRow(`     ${bloodSoft("Memoria:")}`, `${bloodWhite(`${engramObs.length} obs`)} ${dim("·")} ${bloodSoft(`${latestId} última`)} `),
   ];
+  for (const obs of engramObs.slice(0, 2)) {
+    const tShort = obs.title.length > 18 ? obs.title.slice(0, 17) + "…" : obs.title;
+    localObsRows.push(
+      new DcJustifiedRow(`     ${dim("•")} ${bloodWhite(tShort)}`, `${dim(`[${obs.type}]`)} `)
+    );
+  }
+
+  const localCollapsible = new DcCollapsible({
+    title: `   🖧  ${bloodWhite(bold("Local"))}`,
+    collapsedInfo: dim("(127.0.0.1:7437)"),
+    titleRight: bloodSoft(engramObs.length ? `${engramObs.length} obs` : "0 obs"),
+    expanded: true,
+    children: localObsRows,
+    requestRender: reqRender,
+  });
+
+  // 2.2 Sub-desplegable Cloud
+  const cloudHost = process.env.ENGRAM_CLOUD_SERVER ? "engram.davidcoach.dev" : "sin config";
+  const autoSync = process.env.ENGRAM_CLOUD_AUTOSYNC === "1" ? bloodBright("Activo (1)") : dim("off");
+
+  const cloudCollapsible = new DcCollapsible({
+    title: `   ☁  ${bloodWhite(bold("Cloud"))}`,
+    collapsedInfo: dim(`(${cloudHost})`),
+    titleRight: isEnrolled ? bloodSoft("on") : bloodBright("off"),
+    expanded: false,
+    children: [
+      new DcJustifiedRow(`     ${bloodSoft("Autosync:")}`, `${autoSync} `),
+      new DcJustifiedRow(
+        `     ${bloodSoft("Enroll:")}`,
+        isEnrolled ? `${bloodBright("on")} ` : `${bloodBright(bold("[⚡ Enrolar]"))} ${bloodBright("off")} `,
+        () => {
+          const ctx = getSidebarContext();
+          if (ctx) void openEngramEnrollModal(ctx, projectName);
+        }
+      ),
+      new DcJustifiedRow(
+        `     ${bloodSoft("Target:")}`,
+        `${bloodBright("[↗ sync]")} `,
+        () => {
+          const ctx = getSidebarContext();
+          if (ctx) void openEngramEnrollModal(ctx, projectName);
+        }
+      ),
+    ],
+    requestRender: reqRender,
+  });
+
+  // Cabecera Principal de Engram
+  const engramRightBadge = isEnrolled ? bloodSoft("🌐 ok") : dim("🌐 off");
+  const engramCollapsible = new DcCollapsible({
+    title: `🧠 ${bloodBright(bold("Engram:"))}`,
+    collapsedInfo: `${bloodWhite(bold(projectName))} ${bloodBright(`✓ ${latestId}`)}`,
+    titleRight: (expanded) => (expanded ? dim("[↗]") : `${engramRightBadge} ${dim("[↗]")}`),
+    onTitleRightClick: () => {
+      const ctx = getSidebarContext();
+      if (ctx) void openEngramExplorer(ctx, projectName);
+    },
+    expanded: true,
+    children: [
+      localCollapsible,
+      cloudCollapsible,
+    ],
+    requestRender: reqRender,
+  });
 
   // --- Bloque 3: Quota (Conectado al bridge :8325) ---
   const quotaAccounts = getCachedAccountQuotas(reqRender);
@@ -194,7 +271,7 @@ export function createStatusCard(reqRender: () => void): Component {
   const statusContent = new DcVStack([
     ...projectRows,
     new DcText("─"),
-    ...sessionRows,
+    engramCollapsible,
     new DcText("─"),
     quotaCollapsible,
     new DcText("─"),

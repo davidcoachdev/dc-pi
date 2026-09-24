@@ -1,3 +1,5 @@
+import type { Component } from "@earendil-works/pi-tui";
+
 /**
  * Renderiza una barra de progreso pura en modo texto con caracteres configurables
  * y soporte opcional de color ANSI.
@@ -39,4 +41,117 @@ export function renderProgressBar(
   }
 
   return `${filledStr}${emptyStr}`;
+}
+
+export interface ProgressStatusOptions {
+  pct: number;
+  label?: string;
+  spinnerIdx?: number;
+  barWidth?: number;
+  charFilled?: string;
+  charEmpty?: string;
+  colorAnsi?: string;
+  showPercentage?: boolean;
+}
+
+/**
+ * Formatea una línea completa de progreso con spinner opcional, etiqueta, barra y porcentaje.
+ */
+export function renderProgressStatus(options: ProgressStatusOptions): string {
+  const spinners = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+  const spin = options.spinnerIdx !== undefined
+    ? spinners[options.spinnerIdx % spinners.length] + " "
+    : "";
+  const label = options.label ? `\x1b[1m${options.label}\x1b[22m ` : "";
+  const bar = renderProgressBar(
+    options.pct,
+    options.barWidth ?? 16,
+    options.charFilled ?? "█",
+    options.charEmpty ?? "░",
+    options.colorAnsi ?? "\x1b[38;2;255;77;77m",
+  );
+  const pctStr = options.showPercentage !== false ? ` ${Math.min(100, Math.round(options.pct))}%` : "";
+  return `${spin}${label}[${bar}]${pctStr}`;
+}
+
+export interface DcProgressBarOptions {
+  pct: number;
+  label?: string;
+  barWidth?: number;
+  colorAnsi?: string;
+  animated?: boolean;
+  requestRender?: () => void;
+}
+
+/**
+ * Componente reutilizable de barra de progreso interactiva para modales y vistas.
+ */
+export class DcProgressBar implements Component {
+  private pct: number;
+  private label?: string;
+  private barWidth: number;
+  private colorAnsi: string;
+  private spinnerIdx = 0;
+  private animTimer?: NodeJS.Timeout;
+
+  constructor(options: DcProgressBarOptions) {
+    this.pct = options.pct;
+    this.label = options.label;
+    this.barWidth = options.barWidth ?? 16;
+    this.colorAnsi = options.colorAnsi ?? "\x1b[38;2;255;77;77m";
+    if (options.animated && options.requestRender) {
+      this.startAnim(options.requestRender);
+    }
+  }
+
+  public setProgress(pct: number): void {
+    this.pct = Math.max(0, Math.min(100, pct));
+  }
+
+  public getProgress(): number {
+    return this.pct;
+  }
+
+  public setLabel(label: string): void {
+    this.label = label;
+  }
+
+  public startAnim(requestRender: () => void): void {
+    if (this.animTimer) clearInterval(this.animTimer);
+    this.animTimer = setInterval(() => {
+      this.spinnerIdx++;
+      requestRender();
+    }, 90);
+    this.animTimer.unref?.();
+  }
+
+  public destroy(): void {
+    if (this.animTimer) {
+      clearInterval(this.animTimer);
+      this.animTimer = undefined;
+    }
+  }
+
+  public invalidate(): void {}
+
+  public format(label?: string, spinnerIdx?: number): string {
+    return renderProgressStatus({
+      pct: this.pct,
+      label: label ?? this.label,
+      spinnerIdx: spinnerIdx ?? this.spinnerIdx,
+      barWidth: this.barWidth,
+      colorAnsi: this.colorAnsi,
+    });
+  }
+
+  public render(width: number): string[] {
+    const barW = Math.min(this.barWidth, Math.max(6, width - 20));
+    return [renderProgressStatus({
+      pct: this.pct,
+      label: this.label,
+      spinnerIdx: this.spinnerIdx,
+      barWidth: barW,
+      colorAnsi: this.colorAnsi,
+    })];
+  }
 }

@@ -7,8 +7,11 @@ export interface DcCollapsibleOptions {
   title: string;
   /** Información compacta que SOLO se muestra cuando está CONTRAÍDO (ej. "ac2-20%-80%") */
   collapsedInfo?: string;
-  /** Acción o texto adicional a la derecha antes de la flecha (ej. "[↗]") */
-  titleRight?: string;
+  /** Acción o texto adicional a la derecha antes de la flecha (ej. "[↗]"), o función según estado de expansión */
+  titleRight?: string | ((expanded: boolean) => string);
+  /** Texto adicional a la derecha que SOLO se muestra cuando está CONTRAÍDO */
+  collapsedTitleRight?: string;
+  onTitleRightClick?: () => void;
   expanded?: boolean;
   onToggle?: (expanded: boolean) => void;
   children?: Component[];
@@ -41,8 +44,17 @@ export class DcCollapsible implements Component {
       left = `${left} ${this.options.collapsedInfo}`;
     }
 
-    const rightText = this.options.titleRight 
-      ? `\x1b[2m${this.options.titleRight}\x1b[22m \x1b[38;2;255;51;51m${arrow}\x1b[0m` 
+    let rightInfo = "";
+    if (typeof this.options.titleRight === "function") {
+      rightInfo = this.options.titleRight(this.expanded);
+    } else if (!this.expanded && this.options.collapsedTitleRight) {
+      rightInfo = this.options.collapsedTitleRight;
+    } else if (this.options.titleRight) {
+      rightInfo = this.options.titleRight;
+    }
+
+    const rightText = rightInfo 
+      ? `\x1b[2m${rightInfo}\x1b[22m \x1b[38;2;255;51;51m${arrow}\x1b[0m` 
       : `\x1b[38;2;255;51;51m${arrow}\x1b[0m`;
 
     const header = justifyRow(" " + left, rightText + " ", width);
@@ -61,6 +73,10 @@ export class DcCollapsible implements Component {
     if (event.type !== "click") return undefined;
     
     if (event.y === 0) {
+      if (this.options.onTitleRightClick && event.x !== undefined && event.x >= 32 && event.x <= 45) {
+        this.options.onTitleRightClick();
+        return { handled: true };
+      }
       this.expanded = !this.expanded;
       if (this.options.onToggle) this.options.onToggle(this.expanded);
       if (this.options.requestRender) this.options.requestRender();

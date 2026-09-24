@@ -1,14 +1,12 @@
-import { visibleWidth } from "@earendil-works/pi-tui";
-
-export const CARD_OPACITY = 0.5;
+export const CARD_OPACITY = 0.50;
 
 export const DC_PANEL_R = 13;
 export const DC_PANEL_G = 13;
 export const DC_PANEL_B = 13;
 
-export const DEFAULT_BG = "\x1b[48;2;31;13;13m"; // #1f0d0d (toolSuccessBg)
-export const DEFAULT_BORDER = "\x1b[38;2;255;77;77m"; // #ff4d4d (bloodMid)
-export const DEFAULT_TAG = "\x1b[38;2;255;51;51m"; // #ff3333 (bloodBright)
+export const DEFAULT_BG = "\x1b[48;2;31;13;13m";
+export const DEFAULT_BORDER = "\x1b[38;2;255;77;77m";
+export const DEFAULT_TAG = "\x1b[38;2;255;51;51m";
 
 export const LANG_ICONS: Record<string, string> = {
   go: "",
@@ -39,13 +37,18 @@ export const LANG_ICONS: Record<string, string> = {
   diff: "±",
 };
 
-/**
- * Mezcla un color de fondo ANSI RGB de 24 bits con el fondo oscuro (#0d0d0d) de DC Studio.
- */
+export function strWidth(s: string): number {
+  return (s || "").replace(/\x1b\[[0-9;]*[a-zA-Z]/g, "").replace(/\x1b_[^\x1b]*\x1b\\/g, "").length;
+}
+
+export function getLangIcon(rawLang: string): string {
+  const lang = (rawLang || "").trim().toLowerCase();
+  return LANG_ICONS[lang] || "";
+}
+
 export function blendWithBackground(colorAnsi: string, opacity: number = CARD_OPACITY): string {
   const match = colorAnsi.match(/48;2;(\d+);(\d+);(\d+)m/);
   if (!match) return colorAnsi;
-
   const r = parseInt(match[1]!, 10);
   const g = parseInt(match[2]!, 10);
   const b = parseInt(match[3]!, 10);
@@ -61,9 +64,49 @@ export function blendWithBackground(colorAnsi: string, opacity: number = CARD_OP
   return `\x1b[48;2;${blendedR};${blendedG};${blendedB}m`;
 }
 
-/**
- * Retorna el glifo limpio correspondiente al nivel de encabezado Markdown (H3: ◆, H4: ▸, H5+: ▪).
- */
+export function resolveColors(isErrorBox: boolean, activeUiTheme?: any) {
+  if (isErrorBox) {
+    return {
+      bgAnsi: blendWithBackground("\x1b[48;2;51;0;0m", 0.75),
+      borderAnsi: "\x1b[38;2;255;0;0m",
+      tagAnsi: "\x1b[38;2;255;51;51m",
+    };
+  }
+
+  let bgAnsi = DEFAULT_BG;
+  let borderAnsi = DEFAULT_BORDER;
+  let tagAnsi = DEFAULT_TAG;
+
+  if (activeUiTheme) {
+    try {
+      bgAnsi = activeUiTheme.getBgAnsi?.("toolSuccessBg") ?? DEFAULT_BG;
+    } catch {
+      bgAnsi = DEFAULT_BG;
+    }
+
+    try {
+      borderAnsi =
+        activeUiTheme.getFgAnsi?.("mdCodeBlockBorder") ||
+        activeUiTheme.getFgAnsi?.("borderAccent") ||
+        DEFAULT_BORDER;
+    } catch {
+      borderAnsi = DEFAULT_BORDER;
+    }
+
+    try {
+      tagAnsi =
+        activeUiTheme.getFgAnsi?.("accent") ||
+        activeUiTheme.getFgAnsi?.("mdHeading") ||
+        DEFAULT_TAG;
+    } catch {
+      tagAnsi = DEFAULT_TAG;
+    }
+  }
+
+  bgAnsi = blendWithBackground(bgAnsi, CARD_OPACITY);
+  return { bgAnsi, borderAnsi, tagAnsi };
+}
+
 export function getHeadingPrefix(level: number): string {
   if (level === 3) return "◆ ";
   if (level === 4) return "▸ ";
@@ -71,24 +114,10 @@ export function getHeadingPrefix(level: number): string {
   return "";
 }
 
-/**
- * Obtiene el icono asociado al lenguaje de programación para bloques de código.
- */
-export function getLangIcon(lang?: string): string {
-  if (!lang) return "";
-  const clean = lang.trim().toLowerCase();
-  return LANG_ICONS[clean] ?? "";
-}
-
-/**
- * Parsea un mensaje de error para detectar JSONs incrustados (ej. respuestas de API 503/429)
- * y formatearlos con sangría limpia y espaciado de bloque.
- */
 export function prettifyErrorContent(raw: string): string {
   const trimmed = raw.trim();
   const firstBrace = trimmed.indexOf("{");
   const lastBrace = trimmed.lastIndexOf("}");
-
   if (firstBrace !== -1 && lastBrace > firstBrace) {
     const prefix = trimmed.slice(0, firstBrace).trim();
     const jsonStr = trimmed.slice(firstBrace, lastBrace + 1);
@@ -105,9 +134,8 @@ export function prettifyErrorContent(raw: string): string {
       if (suffix) parts.push(suffix);
       return parts.join("\n\n");
     } catch {
-      /* fallback a texto original */
+      /* noop */
     }
   }
-
   return raw;
 }

@@ -43,6 +43,12 @@ import dcMarkdownExtension from "./features/dc-markdown/dc-markdown.ts";
 import dcSidebarExtension from "./features/dc-sidebar/dc-sidebar.ts";
 import dcPromptExtension from "./features/dc-prompt/dc-prompt.ts";
 import dcDialogsExtension from "./experimental/dc-dialogs-overlay/dc-dialogs.ts";
+import dcHerdrAgentStateExtension from "./integrations/dc-herdr-agent-state/dc-herdr-agent-state.ts";
+import dcNoTelemetryExtension from "./integrations/dc-no-telemetry/dc-no-telemetry.ts";
+import dcEngramExtension from "./features/dc-engram/dc-engram.ts";
+import { dcBodyExtension } from "./features/dc-body/dc-body.ts";
+import { dcPlanExtension } from "./features/dc-plan/dc-plan.ts";
+import dcAgentsExtension from "./features/dc-agents/dc-agents.ts";
 
 export const profileDuelExtension = dcFaceExtension;
 export const dcFacesExtension = dcFaceExtension;
@@ -71,13 +77,25 @@ export {
   dcSidebarExtension,
   dcPromptExtension,
   dcDialogsExtension,
+  dcHerdrAgentStateExtension,
+  dcNoTelemetryExtension,
+  dcEngramExtension,
+  dcBodyExtension,
+  dcPlanExtension,
+  dcAgentsExtension,
 };
+
+export * from "./features/dc-engram/index.ts";
+export * from "./features/dc-body/index.ts";
+export * from "./features/dc-plan/index.ts";
+export * from "./features/dc-agents/index.ts";
 
 /**
  * Unified DC Studio Extension.
  * Registers the entire DC Studio ecosystem by executing all feature extensions.
  */
 export function dcStudioExtension(pi: ExtensionAPI, ctx?: ExtensionContext): void {
+  dcNoTelemetryExtension(pi);
   dcNotifyExtension(pi);
   caritasExtension(pi);
   dcFaceExtension(pi);
@@ -98,6 +116,11 @@ export function dcStudioExtension(pi: ExtensionAPI, ctx?: ExtensionContext): voi
   dcMarkdownExtension(pi);
   dcSidebarExtension(pi);
   dcPromptExtension(pi);
+  dcBodyExtension(pi);
+  dcPlanExtension(pi);
+  dcAgentsExtension(pi);
+  dcHerdrAgentStateExtension(pi);
+  dcEngramExtension(pi);
   dcDialogsExtension(pi, ctx);
 }
 

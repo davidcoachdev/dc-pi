@@ -22,9 +22,15 @@
     "extensions": [
       "./src/index.ts"
     ],
-    "skills": [],
+    "skills": [
+      "./skills"
+    ],
     "prompts": [],
-    "themes": []
+    "themes": [
+      "./themes/dc-sangre.json",
+      "./themes/dc-robo.json",
+      "./themes/dc-studio.json"
+    ]
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
