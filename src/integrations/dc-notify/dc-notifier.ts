@@ -1,6 +1,7 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { execFileSync, spawn } from "node:child_process";
 import { patchPiLoadedResources } from "./dc-resources-patch.ts";
+import { patchTextNotificationFilter, patchPiClearCommand } from "./dc-text-patch.ts";
 import {
   patchPiUpdateNotices,
   patchPiStatusNotifications,
@@ -155,6 +156,16 @@ export default function dcNotifyExtension(pi: ExtensionAPI): void {
   }
   try {
     patchAssistantMessageAbort();
+  } catch {
+    /* noop */
+  }
+  try {
+    patchPiClearCommand();
+  } catch {
+    /* noop */
+  }
+  try {
+    patchTextNotificationFilter();
   } catch {
     /* noop */
   }

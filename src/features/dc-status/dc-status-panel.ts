@@ -3,7 +3,6 @@ import {
   Key,
   matchesKey,
   truncateToWidth,
-  visibleWidth,
   wrapTextWithAnsi,
   type Component,
   type TuiMouseEvent,
@@ -17,6 +16,7 @@ export interface DcStatusPanelOptions {
   status: EnvStatus;
   onCopyAlerts?: () => void;
   requestRender: () => void;
+  ctx?: any;
 }
 
 export type StatusTab = "info" | "alerts";
@@ -29,14 +29,17 @@ export class DcStatusPanel implements Component {
   private onCopyAlerts?: () => void;
   private requestRender: () => void;
   private tabsComponent: DcTabs;
+  private readonly ctx?: any;
 
   constructor(options: DcStatusPanelOptions) {
     this.theme = options.theme;
     this.status = options.status;
     this.onCopyAlerts = options.onCopyAlerts;
     this.requestRender = options.requestRender;
+    this.ctx = options.ctx;
 
     const alertCount = this.status.alerts.length;
+
     this.tabsComponent = new DcTabs({
       theme: this.theme,
       activeId: this.currentTab,
@@ -125,7 +128,6 @@ export class DcStatusPanel implements Component {
       addRow("Skills / Agentes:", t.fg("text", `${this.status.skillsCount} skills · ${this.status.sddPhasesCount} fases SDD`));
       addRow("Versión de Pi:", t.fg("accent", `v${this.status.version}`));
 
-      // Línea final y aire inferior antes del footer
       lines.push("");
       lines.push(t.fg("border", "─".repeat(safeW)));
       lines.push("");
@@ -138,14 +140,12 @@ export class DcStatusPanel implements Component {
         const currentIdx = Math.max(0, Math.min(this.currentAlertIndex, totalAlerts - 1));
         const activeAlert = this.status.alerts[currentIdx] || "";
 
-        // Indicador de slide: [ ◀ 1 / 2 ▶ ]
         const navControls = totalAlerts > 1
           ? `  ${t.fg("dim", "Alerta")} ${t.bold(t.fg("accent", `${currentIdx + 1}`))}${t.fg("dim", `/${totalAlerts}`)}  ${t.bold(t.fg("accent", "[ ▲ Anterior (↑) "))} ${t.fg("dim", "│")} ${t.bold(t.fg("accent", " Siguiente (↓) ▼ ]"))}`
           : `  ${t.fg("dim", "Alerta 1/1")}`;
 
         lines.push(navControls);
         lines.push(t.fg("border", "┄".repeat(safeW)));
-        // Renderizado estilizado y visualmente rico del contenido de la alerta
         const wrapW = Math.max(20, safeW - 8);
         const subLines = activeAlert.split("\n");
 
@@ -157,13 +157,11 @@ export class DcStatusPanel implements Component {
             continue;
           }
 
-          // 1. Títulos de sección diagnóstica: [Extensions], [Extension issues], etc.
           if (trimmed.startsWith("[") && trimmed.includes("]")) {
             lines.push(`  ${t.bold(t.fg("accent", "◆"))} ${t.bold(t.fg("accent", trimmed))}`);
             continue;
           }
 
-          // 2. Líneas que son rutas de archivos o documentación (ej: /home/.../providers.md)
           if (trimmed.startsWith("/") || trimmed.startsWith("./") || trimmed.startsWith("~/") || trimmed.includes("/docs/")) {
             const shortPath = trimmed.replace(/.*(\/node_modules\/@earendil-works\/pi-coding-agent\/docs\/.*)/, "...$1");
             const parts = wrapTextWithAnsi(`${t.fg("dim", "📄")} ${t.fg("text", shortPath)}`, Math.max(15, safeW - 10));
@@ -172,9 +170,7 @@ export class DcStatusPanel implements Component {
             continue;
           }
 
-          // 3. Subdetalles indentados o listas de items (ej: dc-window-demo.ts, ...)
           if (rawLine.startsWith("  ") || rawLine.startsWith("\t") || trimmed.includes(",")) {
-            // Si es una lista separada por comas, mostrarla en formato lista vertical limpia (uno debajo de otro)
             if (trimmed.includes(",") && !trimmed.startsWith("http")) {
               const items = trimmed.split(",").map((s) => s.trim()).filter(Boolean);
               for (const item of items) {
@@ -184,12 +180,13 @@ export class DcStatusPanel implements Component {
               }
             } else {
               const parts = wrapTextWithAnsi(t.fg("dim", trimmed), Math.max(15, safeW - 8));
-              for (const p of parts) lines.push(`      ${p}`);
+              for (const p of parts) {
+                lines.push(`      ${p}`);
+              }
             }
             continue;
           }
 
-          // 4. Advertencias de texto (ej: No models available. Use /login...)
           if (trimmed.toLowerCase().startsWith("warning:") || trimmed.toLowerCase().startsWith("no models available")) {
             const cleanWarning = trimmed.replace(/^warning:\s*/i, "");
             lines.push(`  ${t.bold(t.fg("accent", "◆"))} ${t.bold(t.fg("warning", "[Advertencia]"))}`);
@@ -200,7 +197,6 @@ export class DcStatusPanel implements Component {
             continue;
           }
 
-          // 5. Mensaje de error o alerta genérica
           lines.push(`  ${t.bold(t.fg("accent", "◆"))} ${t.bold(t.fg("warning", "[Alerta]"))}`);
           const parts = wrapTextWithAnsi(t.fg("text", trimmed), wrapW);
           for (const p of parts) {
@@ -208,84 +204,60 @@ export class DcStatusPanel implements Component {
           }
         }
 
-        // Línea final y aire inferior antes del footer
         lines.push("");
         lines.push(t.fg("border", "─".repeat(safeW)));
-        lines.push("");
+        lines.push(`  ${t.fg("accent", "c")} ${t.fg("dim", "Copiar alerta actual al editor y portapapeles")}`);
       }
     }
 
-    return lines.map((l) => truncateToWidth(l, safeW, ""));
+    return lines;
   }
 
-  handleInput(data: string): boolean {
-    if (data === "1") {
+  handleInput(keyData: string): boolean {
+    if (keyData === "1") {
       this.setTab("info");
       return true;
     }
-    if (data === "2") {
+    if (keyData === "2") {
       this.setTab("alerts");
       return true;
     }
-    if (matchesKey(data, Key.tab)) {
+
+    if (matchesKey(keyData, Key.left) || keyData === Key.left || matchesKey(keyData, Key.right) || keyData === Key.right) {
       this.setTab(this.currentTab === "info" ? "alerts" : "info");
       return true;
     }
 
-    // Flechas izquierda y derecha: SIEMPRE cambian de pestaña (Entorno <-> Alertas)
-    if (matchesKey(data, Key.left) || data === "left") {
-      this.setTab("info");
-      return true;
-    }
-    if (matchesKey(data, Key.right) || data === "right") {
-      this.setTab("alerts");
-      return true;
-    }
-
-    // Flechas arriba y abajo: navegan diapositiva de alertas cuando estamos en 'alerts'
     if (this.currentTab === "alerts") {
-      if (matchesKey(data, Key.up) || data === "up") {
+      if (matchesKey(keyData, Key.up) || keyData === "k" || keyData === Key.up) {
         this.prevAlert();
         return true;
       }
-      if (matchesKey(data, Key.down) || data === "down") {
+      if (matchesKey(keyData, Key.down) || keyData === "j" || keyData === Key.down) {
         this.nextAlert();
+        return true;
+      }
+      if (keyData === "c" || keyData === "C") {
+        this.onCopyAlerts?.();
         return true;
       }
     }
 
-    if (data === "c" || data === "C") {
-      this.onCopyAlerts?.();
-      return true;
-    }
     return false;
   }
 
   handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
-    if (event.type === "click" && event.button === "left") {
-      // Delegar clic en la fila 1 de pestañas a DcTabs
-      if (event.y === 1) {
-        const res = this.tabsComponent.handleMouse({ ...event, y: 0 });
-        if (res?.handled) return res;
-      }
-      // Click on slide controls in row 4
-      if (this.currentTab === "alerts" && event.y === 4 && this.status.alerts.length > 1) {
-        if (event.x < 30) {
-          this.prevAlert();
-        } else {
-          this.nextAlert();
-        }
-        return { handled: true, render: true };
-      }
+    const adjustedEvent = event.y !== undefined ? { ...event, y: event.y - 1 } : event;
+    const tabsResult = this.tabsComponent.handleMouse(adjustedEvent);
+    if (tabsResult?.handled) {
+      return tabsResult;
     }
 
-    if (event.type === "wheel" && this.currentTab === "alerts" && this.status.alerts.length > 1) {
-      if (event.wheelDelta && event.wheelDelta > 0) {
-        this.prevAlert();
-      } else {
-        this.nextAlert();
-      }
-      return { handled: true, render: true };
+    if (this.currentTab === "alerts" && event.type === "wheel") {
+      const delta = event.wheelDelta ?? ((event as any).button === 4 ? -1 : 1);
+      if (delta > 0) this.nextAlert();
+      else this.prevAlert();
+      return { handled: true };
     }
 
     return undefined;

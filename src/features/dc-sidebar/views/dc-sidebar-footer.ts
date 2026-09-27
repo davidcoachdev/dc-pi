@@ -186,15 +186,21 @@ export function createSidebarFooter(tui: any, totalWidth: number, options: Sideb
     },
 
     handleMouse(event: any): any {
-      if (event?.type === "click" && (event.button ?? "left") === "left") {
+      if ((event.button ?? "left") !== "left") return undefined;
+
+      if (event.type === "press") {
+        return { handled: true };
+      }
+
+      if (event.type === "click") {
         if (options.onFaceClick) {
           options.onFaceClick();
           return { handled: true };
         }
 
-        // Si no hay callback específico, alternar perfil (dcdev <-> cubis)
+        // Si no hay callback específico, ciclar perfil (dcdev -> cubis -> neko)
         const current = readFacePrefs();
-        const nextProfile = current.profile === "cubis" ? "dcdev" : "cubis";
+        const nextProfile = current.profile === "dcdev" ? "cubis" : current.profile === "cubis" ? "neko" : "dcdev";
         writeFacePrefs({ profile: nextProfile });
         tui?.requestRender?.();
         return { handled: true };

@@ -1,0 +1,186 @@
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import {
+  getTranscript,
+  getVideoDetails,
+  searchChannels,
+  searchYoutube,
+} from "../core/dc-youtube-client.ts";
+
+export function registerDcYoutubeTools(pi: ExtensionAPI): void {
+  // 1. Search videos tool
+  pi.registerTool({
+    name: "dc_youtube_search",
+    label: "DC YouTube Search",
+    description: "Busca videos, conferencias técnicas o tutoriales en YouTube usando yt-dlp con metadatos de duración, canal y fecha.",
+    parameters: {
+      type: "object",
+      properties: {
+        query: { type: "string", description: "Término de búsqueda (ej: 'React 19 server actions tutorial')" },
+        limit: { type: "number", description: "Cantidad máxima de resultados (1-20, default: 5)" },
+      },
+      required: ["query"],
+    } as any,
+    async execute(_id, params: any): Promise<any> {
+      try {
+        const results = await searchYoutube({
+          query: params.query,
+          limit: params.limit,
+        });
+
+        if (results.length === 0) {
+          return {
+            content: [{ type: "text", text: `No se encontraron videos en YouTube para: "${params.query}"` }],
+            details: { count: 0, results: [] },
+          };
+        }
+
+        const formatted = results.map((r, i) =>
+          `### [${i + 1}] ${r.title}\n- URL: ${r.url}\n- Canal: ${r.channelTitle ?? "Desconocido"}${r.durationFormatted ? ` | Duración: ${r.durationFormatted}` : ""}${r.viewCount ? ` | Vistas: ${r.viewCount.toLocaleString("es-ES")}` : ""}\n${r.descriptionSnippet ? `- Resumen: ${r.descriptionSnippet}\n` : ""}`
+        ).join("\n");
+
+        return {
+          content: [{
+            type: "text",
+            text: `Videos encontrados en YouTube para "${params.query}":\n\n${formatted}\n\n*Usa dc_youtube_transcript_get con la URL para extraer la transcripción de texto.*`,
+          }],
+          details: { count: results.length, results },
+        };
+      } catch (err: any) {
+        return {
+          content: [{ type: "text", text: `Error en dc_youtube_search: ${err.message}` }],
+          details: { error: err.message },
+          isError: true,
+        };
+      }
+    },
+  });
+
+  // 2. Video details & chapters tool
+  pi.registerTool({
+    name: "dc_youtube_video_get",
+    label: "DC YouTube Video Details",
+    description: "Obtiene información detallada de un video de YouTube: capítulos, etiquetas, subtítulos disponibles y descripción completa.",
+    parameters: {
+      type: "object",
+      properties: {
+        url: { type: "string", description: "URL o ID del video de YouTube" },
+      },
+      required: ["url"],
+    } as any,
+    async execute(_id, params: any): Promise<any> {
+      try {
+        const v = await getVideoDetails(params.url);
+
+        let chaptersText = "";
+        if (v.chapters && v.chapters.length > 0) {
+          chaptersText = `\n\n#### Capítulos:\n` + v.chapters.map((c) => `- [${Math.floor(c.startTime / 60)}:${String(Math.floor(c.startTime % 60)).padStart(2, "0")}] ${c.title}`).join("\n");
+        }
+
+        const subs = [
+          v.availableSubtitles?.length ? `Manuales: ${v.availableSubtitles.join(", ")}` : "",
+          v.availableAutoSubtitles?.length ? `Automáticos: ${v.availableAutoSubtitles.slice(0, 8).join(", ")}...` : "",
+        ].filter(Boolean).join(" | ");
+
+        return {
+          content: [{
+            type: "text",
+            text: `### ${v.title}\n- Canal: ${v.channelTitle} (${v.url})\n- Duración: ${v.durationFormatted ?? "—"} | Vistas: ${v.viewCount ? v.viewCount.toLocaleString("es-ES") : "—"}\n- Subtítulos: ${subs || "Ninguno disponible"}${chaptersText}\n\n#### Descripción:\n${v.description.slice(0, 600)}...`,
+          }],
+          details: v,
+        };
+      } catch (err: any) {
+        return {
+          content: [{ type: "text", text: `Error en dc_youtube_video_get: ${err.message}` }],
+          details: { error: err.message },
+          isError: true,
+        };
+      }
+    },
+  });
+
+  // 3. Transcript get tool
+  pi.registerTool({
+    name: "dc_youtube_transcript_get",
+    label: "DC YouTube Transcript Get",
+    description: "Extrae la transcripción completa de texto de un video de YouTube (subtítulos manuales o automáticos) formateada en texto continuo y limpio sin timestamps molestos.",
+    parameters: {
+      type: "object",
+      properties: {
+        url: { type: "string", description: "URL o ID del video de YouTube" },
+        language: { type: "string", description: "Idioma preferido de subtítulos (ej: 'es', 'en', 'es,en'). Default: 'es,en'" },
+        clean: { type: "boolean", description: "Limpiar timestamps y etiquetas WEBVTT para lectura fluida (default: true)" },
+      },
+      required: ["url"],
+    } as any,
+    async execute(_id, params: any): Promise<any> {
+      try {
+        const res = await getTranscript({
+          urlOrId: params.url,
+          language: params.language,
+          clean: params.clean,
+        });
+
+        const isAutoNotice = res.isAutoGenerated ? " (Generada automáticamente por YouTube)" : " (Subtítulo oficial)";
+
+        return {
+          content: [{
+            type: "text",
+            text: `### Transcripción de YouTube [${res.language.toUpperCase()}]${isAutoNotice} (${res.byteSize} bytes):\n\n${res.transcriptText}`,
+          }],
+          details: res,
+        };
+      } catch (err: any) {
+        return {
+          content: [{ type: "text", text: `Error al extraer transcripción: ${err.message}` }],
+          details: { error: err.message },
+          isError: true,
+        };
+      }
+    },
+  });
+
+  // 4. Channel search tool
+  pi.registerTool({
+    name: "dc_youtube_channel_search",
+    label: "DC YouTube Channel Search",
+    description: "Busca canales oficiales de YouTube sobre tecnología, librerías o creadores de contenido.",
+    parameters: {
+      type: "object",
+      properties: {
+        query: { type: "string", description: "Nombre del canal o tema (ej: 'Gentleman Programming', 'Vercel')" },
+        limit: { type: "number", description: "Máximo de canales a listar (default: 5)" },
+      },
+      required: ["query"],
+    } as any,
+    async execute(_id, params: any): Promise<any> {
+      try {
+        const channels = await searchChannels(params.query, params.limit ?? 5);
+
+        if (channels.length === 0) {
+          return {
+            content: [{ type: "text", text: `No se encontraron canales para: "${params.query}"` }],
+            details: { count: 0, channels: [] },
+          };
+        }
+
+        const formatted = channels.map((c, i) =>
+          `### [${i + 1}] ${c.title}\n- URL: ${c.url}\n${c.description ? `- Descripción: ${c.description}\n` : ""}`
+        ).join("\n");
+
+        return {
+          content: [{
+            type: "text",
+            text: `Canales de YouTube encontrados para "${params.query}":\n\n${formatted}`,
+          }],
+          details: { count: channels.length, channels },
+        };
+      } catch (err: any) {
+        return {
+          content: [{ type: "text", text: `Error en dc_youtube_channel_search: ${err.message}` }],
+          details: { error: err.message },
+          isError: true,
+        };
+      }
+    },
+  });
+}

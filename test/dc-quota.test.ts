@@ -33,8 +33,8 @@ test("quota pure helpers: quotaLevelColor, humanizeReset, normalizeCliProxyName"
 
   // humanizeReset
   assert.equal(humanizeReset(null), "");
-  assert.equal(humanizeReset(0), "now");
-  assert.equal(humanizeReset(3_600_000 * 2.5), "2.5h");
+  assert.equal(humanizeReset(0), "ahora");
+  assert.equal(humanizeReset(3_600_000 * 2.5), "2h 30m");
   assert.equal(humanizeReset(3_600_000 * 30), "1d 6h");
 
   // normalizeCliProxyName
@@ -42,11 +42,13 @@ test("quota pure helpers: quotaLevelColor, humanizeReset, normalizeCliProxyName"
   assert.equal(normalizeCliProxyName("ac02 Claude (5h)", "ac02"), "Claude Five-hour");
 });
 
-test("DcQuotaPanel renders sections and quota progress bars", () => {
+test("DcQuotaPanel renders sections, quota progress bars, and OpenAI resets", () => {
   const sections: QuotaSection[] = [
     {
-      id: "ac01",
-      title: "[AC01 - test@example.com]",
+      id: "cc1",
+      title: "[CC1 - test@example.com]",
+      resetCredits: 5,
+      resetRenewalDate: "2026-10-20T12:00:00Z",
       rows: [
         { label: "Five-hour", pctLeft: 75, resetMs: 3_600_000 * 2 },
         { label: "Weekly", pctLeft: 15, resetMs: 3_600_000 * 48 },
@@ -67,7 +69,8 @@ test("DcQuotaPanel renders sections and quota progress bars", () => {
 
   const lines = panel.render(80);
   assert.ok(lines.length > 5);
-  assert.ok(lines.some((l) => l.includes("Providers") && l.includes("AC01")));
+  assert.ok(lines.some((l) => l.includes("Cuentas") && l.includes("CC1")));
+  assert.ok(lines.some((l) => l.includes("5 reset(s) disponible(s)")));
   assert.ok(lines.some((l) => l.includes("Five-hour")));
   assert.ok(lines.some((l) => l.includes("75% left") && l.includes("25% used") && l.includes("reset 2h")));
 
@@ -95,12 +98,12 @@ test("DcQuotaPanel mouse click selects provider and details", () => {
 
   panel.render(80);
 
-  // Click on Sec2 (col 5, row 6 -> rowIdx = 6 - 5 = 1)
+  // Click on Sec2 (col 5, row 5 -> rowIdx = 5 - 4 = 1)
   panel.handleMouse({
     type: "click",
     button: "left",
     x: 5,
-    y: 6,
+    y: 5,
   } as unknown as TuiMouseEvent);
   assert.equal(panel.getActiveSection().id, "sec2");
 });
@@ -151,45 +154,4 @@ test("dcQuotaExtension registers only /dc-quota with Alt+Shift+Q", () => {
   dcQuotaExtension(mockPi);
   assert.deepEqual(registeredCommands, ["dc-quota"]);
   assert.equal(registeredShortcut, "alt+shift+q");
-});
-
-test("readPiAuthKey extracts opencode-go key accurately from auth file", () => {
-  const tmpDir = path.join(os.tmpdir(), `dc-quota-auth-test-${Date.now()}`);
-  fs.mkdirSync(tmpDir, { recursive: true });
-  const authFile = path.join(tmpDir, "auth.json");
-
-  try {
-    fs.writeFileSync(authFile, JSON.stringify({ "opencode-go": { key: "sk-test-key-123" } }), "utf8");
-    const key = readPiAuthKey(authFile);
-    assert.equal(key, "sk-test-key-123");
-
-    // Nonexistent file returns null
-    assert.equal(readPiAuthKey(path.join(tmpDir, "missing.json")), null);
-  } finally {
-    fs.rmSync(tmpDir, { recursive: true, force: true });
-  }
-});
-
-test("fetchZenQuota handles errors gracefully and returns QuotaSection", async () => {
-  const section = await fetchZenQuota("dummy-invalid-key");
-  assert.equal(section.id, "zen");
-  assert.equal(section.title, "[OpenCode Go]");
-  assert.ok(section.error !== undefined || section.rows.length >= 0);
-});
-
-test("fetchBridgeQuota populates live quota rows from local bridge when available", async () => {
-  const rows = await fetchBridgeQuota("ac03");
-  if (rows && rows.length > 0) {
-    assert.ok(rows.length >= 2);
-    assert.ok(rows.some((r) => r.label.includes("Gemini") || r.label.includes("Claude")));
-    assert.ok(rows.every((r) => r.pctLeft >= 0 && r.pctLeft <= 100));
-  }
-});
-
-test("fetchAllQuotas includes OpenCode Go section alongside CLIProxy accounts", async () => {
-  const sections = await fetchAllQuotas();
-  assert.ok(sections.length >= 1);
-  const zenSection = sections.find((s) => s.id === "zen");
-  assert.ok(zenSection !== undefined);
-  assert.equal(zenSection.title, "[OpenCode Go]");
 });

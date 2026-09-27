@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import type { ExtensionAPI, Theme } from "@earendil-works/pi-coding-agent";
 import type { TuiMouseEvent } from "@earendil-works/pi-tui";
-import { parseGitStatus } from "../src/integrations/dc-git/dc-git.ts";
+import { parseGitStatus, type GitWorktreeItem } from "../src/integrations/dc-git/dc-git.ts";
 import { DcChangesPanel } from "../src/features/dc-changes/dc-changes-panel.ts";
 import dcChangesExtension from "../src/features/dc-changes/dc-changes.ts";
 
@@ -47,9 +47,9 @@ test("DcChangesPanel renders two panels and handles navigation", () => {
 
   const lines = panel.render(80);
   assert.ok(lines.length > 5);
-  assert.ok(lines[0].includes("src/file1.ts"));
-  assert.ok(lines[0].includes("│")); // divider
-  assert.ok(lines[0].includes("diff for src/file1.ts"));
+  assert.ok(lines.some((l) => l.includes("src/file1.ts")));
+  assert.ok(lines.some((l) => l.includes("│"))); // divider
+  assert.ok(lines.some((l) => l.includes("diff for src/file1.ts")));
 
   // Down to file 2
   assert.equal(panel.handleInput("\x1b[B"), true);
@@ -68,6 +68,40 @@ test("DcChangesPanel renders two panels and handles navigation", () => {
     y: 0,
   } as unknown as TuiMouseEvent);
   assert.equal(panel.getSelectedIndex(), 0);
+});
+
+test("DcChangesPanel multi-worktree navigation with w/W keys", () => {
+  const mockWorktrees: GitWorktreeItem[] = [
+    { path: "/repo/main", branch: "main", head: "1234567", isCurrent: true },
+    { path: "/repo/feature", branch: "feat-x", head: "7654321", isCurrent: false },
+  ];
+
+  const panel = new DcChangesPanel({
+    cwd: "/repo/main",
+    theme: dummyTheme,
+    listWorktreesFn: () => mockWorktrees,
+    getChanges: (wt) => wt.includes("feature")
+      ? [{ status: "M", file: "feature-file.ts" }]
+      : [{ status: "M", file: "main-file.ts" }],
+    getDiff: (_cwd, file) => [`diff for ${file}`],
+    requestRender: () => {},
+  });
+
+  assert.equal(panel.getActiveWorktree().branch, "main");
+  assert.equal(panel.getFiles()[0]!.file, "main-file.ts");
+
+  // Presionar 'w' para pasar al siguiente worktree (feat-x)
+  panel.handleInput("w");
+  assert.equal(panel.getActiveWorktree().branch, "feat-x");
+  assert.equal(panel.getFiles()[0]!.file, "feature-file.ts");
+
+  // Presionar 'W' para volver a main
+  panel.handleInput("W");
+  assert.equal(panel.getActiveWorktree().branch, "main");
+  assert.equal(panel.getFiles()[0]!.file, "main-file.ts");
+
+  const lines = panel.render(80);
+  assert.ok(lines.some((l) => l.includes("Worktrees:") && l.includes("feat-x")));
 });
 
 test("dcChangesExtension registers only /dc-changes with Alt+F", () => {

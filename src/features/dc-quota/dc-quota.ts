@@ -176,11 +176,11 @@ async function fetchAntigravityRows(
   throw new Error("antigravity sin respuesta");
 }
 
-/** Consulta cuotas de OpenAI Codex / ChatGPT a través de CLIProxy management API. */
-async function fetchCodexRows(
+/** Consulta cuotas y resets de OpenAI Codex / ChatGPT a través de CLIProxy management API. */
+async function fetchCodexData(
   authIndex: string,
   chatgptAccountId?: string,
-): Promise<QuotaRow[]> {
+): Promise<{ rows: QuotaRow[]; resetCredits: number | null; limitReached: boolean }> {
   const headers: Record<string, string> = {
     Authorization: "Bearer $TOKEN$",
     "Content-Type": "application/json",
@@ -201,6 +201,10 @@ async function fetchCodexRows(
     rate_limit?: {
       primary_window?: { used_percent?: number; reset_at?: number };
       secondary_window?: { used_percent?: number; reset_at?: number };
+      limit_reached?: boolean;
+    };
+    rate_limit_reset_credits?: {
+      available_count?: number;
     };
   }>(r?.body);
 
@@ -221,15 +225,21 @@ async function fetchCodexRows(
       resetMs: sw.reset_at ? sw.reset_at * 1000 - Date.now() : null,
     });
   }
+
+  const resetCredits = typeof body?.rate_limit_reset_credits?.available_count === "number"
+    ? body.rate_limit_reset_credits.available_count
+    : null;
+  const limitReached = Boolean(body?.rate_limit?.limit_reached);
+
   if (!rows.length) throw new Error("wham sin ventanas");
-  return rows;
+  return { rows, resetCredits, limitReached };
 }
 
 /** Consulta opcional al bridge local de cuotas :8325 */
 export async function fetchBridgeQuota(prefix: string): Promise<QuotaRow[] | null> {
   try {
     const res = await fetchJson(`http://127.0.0.1:8325/quota/${encodeURIComponent(prefix)}`, {
-      timeoutMs: 4000,
+      timeoutMs: 400,
     });
     const d = res as {
       entries?: Array<{
@@ -283,8 +293,11 @@ export async function fetchCliProxySections(): Promise<QuotaSection[]> {
     ];
   }
 
+  // Filtrar cuentas desactivadas (disabled o status === 'disabled')
+  const activeFiles = files.filter((f: any) => !f.disabled && f.status !== "disabled");
+
   const discovered = await Promise.all(
-    files.map(async (f) => {
+    activeFiles.map(async (f: any) => {
       let prefix = "";
       let provider = (f.provider ?? "").toLowerCase();
       let chatgptAccountId: string | undefined;
@@ -294,8 +307,10 @@ export async function fetchCliProxySections(): Promise<QuotaSection[]> {
           prefix?: string;
           type?: string;
           provider?: string;
+          disabled?: boolean;
+          status?: string;
           email?: string;
-          id_token?: { chatgpt_account_id?: string; email?: string };
+          id_token?: { chatgpt_account_id?: string; email?: string; chatgpt_subscription_active_until?: string };
         }>(f.name ?? "");
 
         if (!d.prefix) {
@@ -305,6 +320,11 @@ export async function fetchCliProxySections(): Promise<QuotaSection[]> {
             rows: [],
             error: `sin prefix: ${f.name ?? "?"}`,
           };
+        }
+
+        // Si el archivo auth interno marca disabled, se ignora
+        if (d.disabled || d.status === "disabled") {
+          return null;
         }
 
         prefix = d.prefix.toLowerCase();
@@ -327,7 +347,13 @@ export async function fetchCliProxySections(): Promise<QuotaSection[]> {
             if (provider === "antigravity") {
               section.rows = await fetchAntigravityRows(authIndex, prefix);
             } else if (provider === "codex") {
-              section.rows = await fetchCodexRows(authIndex, chatgptAccountId);
+              const codexRes = await fetchCodexData(authIndex, chatgptAccountId);
+              section.rows = codexRes.rows;
+              section.resetCredits = codexRes.resetCredits;
+              section.limitReached = codexRes.limitReached;
+              if (d.id_token?.chatgpt_subscription_active_until) {
+                section.resetRenewalDate = d.id_token.chatgpt_subscription_active_until;
+              }
             } else {
               section.error = `provider '${provider || "?"}' sin lector`;
             }
@@ -348,7 +374,7 @@ export async function fetchCliProxySections(): Promise<QuotaSection[]> {
     }),
   );
 
-  return discovered
+  return (discovered.filter(Boolean) as QuotaSection[])
     .filter((x) => x.rows.length || x.error)
     .sort((a, b) => a.id.localeCompare(b.id, undefined, { numeric: true }));
 }
@@ -408,39 +434,67 @@ export async function fetchAllQuotas(): Promise<QuotaSection[]> {
 
 /**
  * Open the DC Studio Token Quota monitor in a 2-panel modal.
+ * Opens instantly without blocking on network requests, rendering
+ * a responsive skeleton while fetchAllQuotas resolves in the background.
  */
 export async function openQuotaViewer(ctx: ExtensionContext): Promise<void> {
   let panelRef: DcQuotaPanel | undefined;
 
-  const sections = await fetchAllQuotas();
+  const loadQuotas = async (panel?: DcQuotaPanel) => {
+    try {
+      const data = await fetchAllQuotas();
+      panel?.setSections(data);
+    } catch (err: any) {
+      panel?.setSections([
+        {
+          id: "error",
+          title: "Error al consultar cuotas",
+          rows: [],
+          error: String(err?.message ?? err),
+        },
+      ]);
+    }
+  };
 
   await openDcModal<void>(ctx, {
     title: "Dc Studio - Cuotas",
     glyph: "⛩ ",
     frame: "double",
+    paddingX: 0,
     width: "55%",
     maxHeight: "82%",
-    footer: (theme) => ({
-      left: `  ${theme.fg("accent", "Tab/←→")} panel   ${theme.fg("accent", "↑↓/Clic")} elegir   ${theme.fg("accent", "r")} refrescar   ${theme.fg("accent", "esc")} cerrar`,
-      right: `${theme.fg("accent", "[ r Refrescar ]")}  `,
-    }),
+    footer: () => panelRef?.getFooterInfo() ?? {
+      left: "  Cargando cuotas...",
+      right: "[ Refrescando... ]  ",
+    },
     onFooterRightClick: async () => {
-      const refreshed = await fetchAllQuotas();
-      panelRef?.setSections(refreshed);
-      dcNotifier.notify(ctx, "Cuotas", "Cuotas actualizadas en vivo", "info");
+      if (panelRef) {
+        panelRef.setLoading(true);
+        await loadQuotas(panelRef);
+        dcNotifier.notify(ctx, "Cuotas", "Cuotas actualizadas en vivo", "info");
+      }
+    },
+    onClose: () => {
+      panelRef?.destroy();
     },
     content: (done, theme, tui) => {
       const panel = new DcQuotaPanel({
         theme,
-        sections,
+        loading: true,
+        currentModelId: ctx.model?.id,
         onRefresh: async () => {
-          const refreshed = await fetchAllQuotas();
-          panel.setSections(refreshed);
+          await loadQuotas(panel);
           tui.requestRender();
         },
         requestRender: () => tui.requestRender(),
       });
       panelRef = panel;
+
+      // Iniciar carga en segundo plano
+      void loadQuotas(panel).then(() => {
+        tui.requestRender();
+      });
+
       return panel;
     },
   });

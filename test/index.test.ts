@@ -98,6 +98,9 @@ test("dcStudioExtension registers all canonical commands and keybindings", () =>
     registerShortcut(shortcut: string, def: any) {
       shortcuts.set(shortcut.toLowerCase(), def);
     },
+    registerTool(_tool: any) {
+      // Mock tool registration
+    },
     on(event: string, fn: Function) {
       if (!events.has(event)) events.set(event, []);
       events.get(event)!.push(fn);

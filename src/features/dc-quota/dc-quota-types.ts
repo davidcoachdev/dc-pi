@@ -9,6 +9,9 @@ export interface QuotaSection {
   title: string;
   rows: QuotaRow[];
   error?: string;
+  resetCredits?: number | null;
+  resetRenewalDate?: string | null;
+  limitReached?: boolean;
 }
 
 export function quotaLevelColor(pctLeft: number): "success" | "warning" | "error" {
@@ -19,7 +22,7 @@ export function quotaLevelColor(pctLeft: number): "success" | "warning" | "error
 
 export function humanizeReset(ms: number | null): string {
   if (ms === null || !Number.isFinite(ms)) return "";
-  if (ms <= 0) return "now";
+  if (ms <= 0) return "ahora";
   const hours = ms / 3_600_000;
   if (hours >= 24) {
     const days = Math.floor(hours / 24);
@@ -27,8 +30,9 @@ export function humanizeReset(ms: number | null): string {
     return remHours > 0 ? `${days}d ${remHours}h` : `${days}d`;
   }
   if (hours >= 1) {
-    const h = Math.round(hours * 2) / 2;
-    return `${Number.isInteger(h) ? h : h.toFixed(1)}h`;
+    const h = Math.floor(hours);
+    const mins = Math.round((ms % 3_600_000) / 60_000);
+    return mins > 0 ? `${h}h ${mins}m` : `${h}h`;
   }
   const mins = Math.max(1, Math.round(ms / 60_000));
   return `${mins}m`;

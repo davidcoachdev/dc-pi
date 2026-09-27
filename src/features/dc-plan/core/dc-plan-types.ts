@@ -126,27 +126,63 @@ export function loadOddPlans(dirPath?: string): OddPlan[] {
   return plans.sort((a, b) => b.mtime - a.mtime);
 }
 
+/** Extrae tareas vivas del branch de mensajes de AgentSession */
+export function extractSessionTasksFromBranch(branch: readonly unknown[]): SessionTask[] {
+  let tasks: SessionTask[] = [];
+  if (!Array.isArray(branch)) return tasks;
+
+  for (const entry of branch) {
+    const msg = (entry as any)?.message;
+    if ((entry as any)?.type === "message" && msg?.role === "toolResult" && msg?.toolName === "todo" && !msg?.isError) {
+      const details = msg.details;
+      const todoState = details?.gentleTodo ?? details;
+      if (todoState?.tasks && Array.isArray(todoState.tasks)) {
+        tasks = todoState.tasks.map((t: any, idx: number) => ({
+          id: typeof t.id === "number" ? t.id : idx + 1,
+          title: String(t.title || ""),
+          status: t.status === "done" || t.status === "in_progress" ? t.status : "pending",
+          note: t.note ? String(t.note) : undefined,
+        }));
+      }
+    }
+  }
+  return tasks;
+}
+
 /** Obtiene las tareas vivas de la sesión actual */
-export function getSessionTodoData(): SessionTodoData {
+export function getSessionTodoData(ctx?: any): SessionTodoData {
   try {
-    const raw = (globalThis as unknown as Record<string, unknown>).__gentleEffectiveTodoTasks as
+    // 1. Mock de test o override manual explícito
+    const mock = (globalThis as unknown as Record<string, unknown>).__gentleEffectiveTodoTasks as
       | SessionTask[]
       | undefined;
-    const tasks = Array.isArray(raw) ? raw : [];
-    const doneCount = tasks.filter((t) => t.status === "done").length;
-    const inProgressCount = tasks.filter((t) => t.status === "in_progress").length;
-    const pendingCount = tasks.filter((t) => t.status === "pending").length;
-    const totalCount = tasks.length;
-    const percent = totalCount > 0 ? Math.round((doneCount / totalCount) * 100) : 0;
+    if (Array.isArray(mock) && mock.length > 0) {
+      return buildSessionTodoData(mock);
+    }
 
-    return {
-      tasks,
-      doneCount,
-      inProgressCount,
-      pendingCount,
-      totalCount,
-      percent,
-    };
+    // 2. Extraer de la sesión activa de Pi (branch en memoria)
+    const activeCtx = ctx || (globalThis as any)[Symbol.for("dc.sidebar.ctx")];
+    const branch = activeCtx?.sessionManager?.getBranch?.();
+    if (branch && Array.isArray(branch)) {
+      const fromBranch = extractSessionTasksFromBranch(branch);
+      if (fromBranch.length > 0) {
+        return buildSessionTodoData(fromBranch);
+      }
+    }
+
+    // 3. Si no hay tareas en branch, verificar si hay un plan ODD activo con tareas
+    const oddPlans = loadOddPlans();
+    if (oddPlans.length > 0 && oddPlans[0]?.tasks && oddPlans[0].tasks.length > 0) {
+      const latestPlan = oddPlans[0];
+      const fromOdd: SessionTask[] = latestPlan.tasks.map((t, idx) => ({
+        id: t.id ?? (idx + 1),
+        title: t.text,
+        status: t.status === "done" ? "done" : "pending",
+      }));
+      return buildSessionTodoData(fromOdd);
+    }
+
+    return buildSessionTodoData(Array.isArray(mock) ? mock : []);
   } catch {
     return {
       tasks: [],
@@ -157,4 +193,21 @@ export function getSessionTodoData(): SessionTodoData {
       percent: 0,
     };
   }
+}
+
+function buildSessionTodoData(tasks: SessionTask[]): SessionTodoData {
+  const doneCount = tasks.filter((t) => t.status === "done").length;
+  const inProgressCount = tasks.filter((t) => t.status === "in_progress").length;
+  const pendingCount = tasks.filter((t) => t.status === "pending").length;
+  const totalCount = tasks.length;
+  const percent = totalCount > 0 ? Math.round((doneCount / totalCount) * 100) : 0;
+
+  return {
+    tasks,
+    doneCount,
+    inProgressCount,
+    pendingCount,
+    totalCount,
+    percent,
+  };
 }

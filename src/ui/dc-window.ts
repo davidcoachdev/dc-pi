@@ -270,18 +270,24 @@ export class DcWindow implements Component {
 
   handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
     const { x, y, type, button } = event;
-    if (type === "click" && button === "left" && y === 1 &&
-        this.closeStart >= 0 && x >= this.closeStart && x < this.closeEnd) {
-      this.options.onClose();
-      return { handled: true };
+    // Close button: capture on press, trigger on click
+    if (button === "left" && y === 1 && this.closeStart >= 0 && x >= this.closeStart && x < this.closeEnd) {
+      if (type === "press") return { handled: true };
+      if (type === "click") {
+        this.options.onClose();
+        return { handled: true };
+      }
     }
 
     // Footer right button click
     if (this.options.onFooterRightClick && y === this.footerY &&
         this.footerRightStart >= 0 && x >= this.footerRightStart && x < this.footerRightEnd) {
-      if (type === "click" && button === "left") {
-        this.options.onFooterRightClick();
-        return { handled: true };
+      if (button === "left") {
+        if (type === "press") return { handled: true };
+        if (type === "click") {
+          this.options.onFooterRightClick();
+          return { handled: true };
+        }
       }
     }
 
@@ -319,21 +325,24 @@ export class DcWindow implements Component {
         this.maxScroll > 0 && this.bodyHeight >= 2 &&
         (x === this.lastWidth - 2 || x === this.lastWidth - 1) &&
         y >= this.bodyY && y < this.bodyY + this.bodyHeight) {
-      if (type === "click" && button === "left") {
-        const bodyRow = y - this.bodyY;
-        if (bodyRow === 0) {
-          if (this.scrollBy(-1)) return { handled: true, render: true };
-          return { handled: true };
-        } else if (bodyRow === this.bodyHeight - 1) {
-          if (this.scrollBy(1)) return { handled: true, render: true };
-          return { handled: true };
-        } else {
-          const trackHeight = this.bodyHeight - 2;
-          const thumbRow = 1 + Math.min(trackHeight - 1, Math.round((this.scrollY / this.maxScroll) * (trackHeight - 1)));
-          const dir = bodyRow < thumbRow ? -1 : 1;
-          const pageSize = Math.max(1, this.bodyBudget - 1);
-          if (this.scrollBy(dir * pageSize)) return { handled: true, render: true };
-          return { handled: true };
+      if (button === "left") {
+        if (type === "press") return { handled: true };
+        if (type === "click") {
+          const bodyRow = y - this.bodyY;
+          if (bodyRow === 0) {
+            if (this.scrollBy(-1)) return { handled: true, render: true };
+            return { handled: true };
+          } else if (bodyRow === this.bodyHeight - 1) {
+            if (this.scrollBy(1)) return { handled: true, render: true };
+            return { handled: true };
+          } else {
+            const trackHeight = this.bodyHeight - 2;
+            const thumbRow = 1 + Math.min(trackHeight - 1, Math.round((this.scrollY / this.maxScroll) * (trackHeight - 1)));
+            const dir = bodyRow < thumbRow ? -1 : 1;
+            const pageSize = Math.max(1, this.bodyBudget - 1);
+            if (this.scrollBy(dir * pageSize)) return { handled: true, render: true };
+            return { handled: true };
+          }
         }
       }
     }

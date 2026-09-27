@@ -49,7 +49,12 @@ export class DcJustifiedRow implements Component {
   }
   invalidate() {}
   handleMouse(event: any) {
-    if (event.type === "click" && this.onClick) {
+    if (!this.onClick) return undefined;
+    if (event.button !== undefined && event.button !== "left") return undefined;
+    if (event.type === "press") {
+      return { handled: true };
+    }
+    if (event.type === "click") {
       this.onClick();
       return { handled: true };
     }
@@ -67,10 +72,12 @@ export function createSidebarBody(tui: any): Component {
     } catch {}
   };
 
-  // Ensamblado modular y desacoplado de las 4 tarjetas del Sidebar
+  // Ensamblado modular y reactivo: las tarjetas de Todo y Agentes
+  // siguen la regla "no se ven solo cuando se utilizan" (hideWhenEmpty: true).
+  // Si no tienen tareas vivas o subagentes en ejecución, no ocupan espacio en el rail.
   const statusCard = createStatusCard(reqRender);
-  const todoCard = createTodoCard(tui, reqRender);
-  const agentsCard = createAgentsCard(tui, reqRender);
+  const todoCard = createTodoCard(tui, reqRender, { hideWhenEmpty: true });
+  const agentsCard = createAgentsCard(tui, reqRender, { hideWhenEmpty: true });
   const contextCard = createContextCard();
 
   const bodyStack = new DcVStack([

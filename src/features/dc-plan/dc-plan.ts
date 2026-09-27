@@ -17,7 +17,7 @@ export function openPlanViewer(ctx: ExtensionContext): void {
       right: " [Esc/q] Salir ",
     },
     frame: "double",
-    content: (done, theme) => new DcPlanPanel(theme, () => done(undefined)),
+    content: (done, theme) => new DcPlanPanel(theme, () => done(undefined), ctx),
   });
 }
 

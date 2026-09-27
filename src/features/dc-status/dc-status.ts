@@ -49,6 +49,7 @@ export async function openStatusViewer(ctx: ExtensionContext, pi: ExtensionAPI):
           done();
         },
         requestRender: () => tui.requestRender(),
+        ctx,
       });
       panelRef = panel;
       return panel;

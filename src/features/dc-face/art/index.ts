@@ -1,15 +1,18 @@
 import type { FaceMode, FaceProfile } from "../core/dc-face-types.ts";
 import { DCDEV_PROFILE } from "./dcdev.ts";
 import { CUBIS_PROFILE } from "./cubis.ts";
+import { NEKO_PROFILE } from "./neko.ts";
 
 export * from "./dcdev.ts";
 export * from "./cubis.ts";
+export * from "./neko.ts";
 export * from "./mini.ts";
 export * from "./painter.ts";
 
 const PROFILES = new Map<string, FaceProfile>([
   [DCDEV_PROFILE.id, DCDEV_PROFILE as unknown as FaceProfile],
   [CUBIS_PROFILE.id, CUBIS_PROFILE as unknown as FaceProfile],
+  [NEKO_PROFILE.id, NEKO_PROFILE as unknown as FaceProfile],
 ]);
 
 /**

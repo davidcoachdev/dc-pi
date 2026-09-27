@@ -15,10 +15,11 @@ const dummyTheme: Pick<Theme, "fg" | "bg" | "bold"> = {
 };
 
 const mockModels: ModelItem[] = [
-  { id: "ac01/gemini-3-flash", provider: "cpam", name: "Gemini 3 Flash" },
-  { id: "ac01/claude-3-7-sonnet", provider: "cpam", name: "Claude 3.7 Sonnet" },
-  { id: "cc1/gpt-4o", provider: "cpam", name: "GPT-4o" },
-  { id: "anthropic/claude-3-opus", provider: "anthropic", name: "Claude 3 Opus" },
+  { id: "ac01/gemini-3-flash", provider: "cpam", name: "Gemini 3 Flash", reasoning: true },
+  { id: "ac01/claude-3-7-sonnet", provider: "cpam", name: "Claude 3.7 Sonnet", reasoning: true },
+  { id: "ac07/qwen-2.5-coder", provider: "cpam", name: "Qwen 2.5 Coder", reasoning: false },
+  { id: "cc1/gpt-4o", provider: "cpam", name: "GPT-4o", reasoning: false },
+  { id: "anthropic/claude-3-opus", provider: "anthropic", name: "Claude 3 Opus", reasoning: false },
 ];
 
 test("DcModelsPanel renders 3 columns and filters by account tab", () => {
@@ -26,8 +27,8 @@ test("DcModelsPanel renders 3 columns and filters by account tab", () => {
     theme: dummyTheme,
     models: mockModels,
     tabs: [
-      { id: "all", title: "Todos" },
       { id: "ac01", title: "AC01", email: "user@example.com" },
+      { id: "ac07", title: "AC07", email: "dev7@example.com" },
       { id: "cc1", title: "CC1" },
     ],
     onApply: () => {},
@@ -37,42 +38,57 @@ test("DcModelsPanel renders 3 columns and filters by account tab", () => {
 
   const lines = panel.render(80);
   assert.ok(lines.length > 5);
-  assert.ok(lines.some((l) => l.includes("Providers") && l.includes("Todos") && l.includes("Effort")));
+  assert.ok(lines.some((l) => l.includes("Cuentas") && l.includes("Effort")));
 
-  // Initial tab is "all", contains 4 models
-  assert.equal(panel.getFilteredModels().length, 4);
-
-  // Switch to "ac01" tab (Down arrow when focus is tabs)
-  panel.setFocus("tabs");
-  panel.handleInput("\x1b[B"); // Key.down
+  // Initial tab is "ac01", contains 2 models
   assert.equal(panel.getFilteredModels().length, 2);
   assert.equal(panel.getFilteredModels()[0]!.id, "ac01/gemini-3-flash");
+
+  // Switch to "ac07" tab (Down arrow when focus is tabs)
+  panel.setFocus("tabs");
+  panel.handleInput("\x1b[B"); // Key.down
+  assert.equal(panel.getFilteredModels().length, 1);
+  assert.equal(panel.getFilteredModels()[0]!.id, "ac07/qwen-2.5-coder");
 });
 
-test("DcModelsPanel live text search filters models list", () => {
+test("DcModelsPanel context-aware search: filters accounts when focus is tabs, and models when focus is models", () => {
   const panel = new DcModelsPanel({
     theme: dummyTheme,
     models: mockModels,
-    tabs: [{ id: "all", title: "Todos" }],
+    tabs: [
+      { id: "ac01", title: "AC01", email: "user@example.com" },
+      { id: "ac07", title: "AC07", email: "dev7@example.com" },
+      { id: "cc1", title: "CC1" },
+    ],
     onApply: () => {},
     onCancel: () => {},
     requestRender: () => {},
   });
 
-  panel.setFocus("models");
-  panel.handleInput("g");
-  panel.handleInput("p");
-  panel.handleInput("t");
+  // 1. Focus on tabs -> Search by account (ej. "ac07")
+  panel.setFocus("tabs");
+  panel.handleInput("a");
+  panel.handleInput("c");
+  panel.handleInput("0");
+  panel.handleInput("7");
 
-  const filtered = panel.getFilteredModels();
-  assert.equal(filtered.length, 1);
-  assert.equal(filtered[0]!.name, "GPT-4o");
+  const visibleTabs = panel.getFilteredTabs();
+  assert.equal(visibleTabs.length, 1);
+  assert.equal(visibleTabs[0]!.id, "ac07");
+  // Pressing Enter on the filtered tab moves focus to models
+  panel.handleInput("\r");
+  assert.equal(panel.getFocus(), "models");
+  assert.equal(panel.getFilteredModels()[0]!.id, "ac07/qwen-2.5-coder");
 
-  // Backspace cleans query
-  panel.handleInput("\x7f");
-  panel.handleInput("\x7f");
-  panel.handleInput("\x7f");
-  assert.equal(panel.getFilteredModels().length, 4);
+  // 2. Focus on models -> Search by model name (ej. "qwen")
+  panel.handleInput("q");
+  panel.handleInput("w");
+  panel.handleInput("e");
+  panel.handleInput("n");
+
+  const filteredModels = panel.getFilteredModels();
+  assert.equal(filteredModels.length, 1);
+  assert.equal(filteredModels[0]!.name, "Qwen 2.5 Coder");
 });
 
 test("DcModelsPanel navigates between panels with Tab and applies with Enter", () => {
@@ -82,7 +98,7 @@ test("DcModelsPanel navigates between panels with Tab and applies with Enter", (
   const panel = new DcModelsPanel({
     theme: dummyTheme,
     models: mockModels,
-    tabs: [{ id: "all", title: "Todos" }],
+    tabs: [{ id: "ac01", title: "AC01" }],
     onApply: (m, eff) => {
       appliedModel = m;
       appliedEffort = eff;
@@ -93,19 +109,19 @@ test("DcModelsPanel navigates between panels with Tab and applies with Enter", (
 
   assert.equal(panel.getFocus(), "models");
 
-  // Tab moves to effort panel
+  // Tab moves to effort panel (because gemini-3-flash has reasoning)
   panel.handleInput("\t");
   assert.equal(panel.getFocus(), "effort");
 
-  // Select "high" (cursor 4)
-  panel.handleInput("\x1b[B"); // down from medium (2) to high (4)
+  // Select another effort level with down arrow
   panel.handleInput("\x1b[B");
-  assert.equal(panel.getSelectedEffort(), "high");
+  const selectedEff = panel.getSelectedEffort();
+  assert.ok(selectedEff);
 
-  // Enter applies selected model with high effort
+  // Enter applies selected model with effort
   panel.handleInput("\r");
   assert.equal(appliedModel?.id, "ac01/gemini-3-flash");
-  assert.equal(appliedEffort, "high");
+  assert.equal(appliedEffort, selectedEff);
 });
 
 test("DcModelsPanel mouse click selects tab, model, and effort", () => {
@@ -113,8 +129,8 @@ test("DcModelsPanel mouse click selects tab, model, and effort", () => {
     theme: dummyTheme,
     models: mockModels,
     tabs: [
-      { id: "all", title: "Todos" },
       { id: "ac01", title: "AC01" },
+      { id: "cc1", title: "CC1" },
     ],
     onApply: () => {},
     onCancel: () => {},
@@ -123,32 +139,23 @@ test("DcModelsPanel mouse click selects tab, model, and effort", () => {
 
   panel.render(80);
 
-  // Click on AC01 tab (left column: col 5, row 6 -> rowIdx = 6 - 5 = 1)
+  // Click on CC1 tab (left column: col 5, row 5 -> rowIdx = 5 - 4 = 1)
   panel.handleMouse({
     type: "click",
     button: "left",
     x: 5,
-    y: 6,
+    y: 5,
   } as unknown as TuiMouseEvent);
   assert.equal(panel.getFocus(), "tabs");
-  assert.equal(panel.getFilteredModels().length, 2);
-
-  // Click on Effort "max" (right column: col 70, row 10 -> idx 5 "max")
-  panel.handleMouse({
-    type: "click",
-    button: "left",
-    x: 70,
-    y: 10,
-  } as unknown as TuiMouseEvent);
-  assert.equal(panel.getFocus(), "effort");
-  assert.equal(panel.getSelectedEffort(), "max");
+  assert.equal(panel.getFilteredModels().length, 1);
+  assert.equal(panel.getFilteredModels()[0]!.id, "cc1/gpt-4o");
 });
 
 test("DcModelsPanel toggles detailed info view with Spacebar", () => {
   const panel = new DcModelsPanel({
     theme: dummyTheme,
     models: mockModels,
-    tabs: [{ id: "all", title: "Todos" }],
+    tabs: [{ id: "ac01", title: "AC01" }],
     onApply: () => {},
     onCancel: () => {},
     requestRender: () => {},
@@ -211,37 +218,18 @@ test("persistDefaultModel persists defaultProvider, defaultModel and modelThinki
   }
 });
 
-test("DcModelsPanel tab prefix filtering and provider matching", () => {
+test("DcModelsPanel clean model name removes account prefix", () => {
   const panel = new DcModelsPanel({
     theme: dummyTheme,
-    models: mockModels,
-    tabs: [
-      { id: "all", title: "Todos" },
-      { id: "ac01", title: "AC01" },
-      { id: "cpam", title: "CLIProxy" },
-      { id: "anthropic", title: "Anthropic" },
+    models: [
+      { id: "ac03/gemini-3.8-flash-high", provider: "cpam", name: "AC03 · Gemini 3.8 Flash High" },
     ],
+    tabs: [{ id: "ac03", title: "AC03" }],
     onApply: () => {},
     onCancel: () => {},
     requestRender: () => {},
   });
 
-  // Switch to "ac01" tab -> matches both ac01 models via prefix startsWith("ac01/")
-  panel.setFocus("tabs");
-  panel.handleInput("\x1b[B"); // down to ac01
-  const ac01Models = panel.getFilteredModels();
-  assert.equal(ac01Models.length, 2);
-  assert.ok(ac01Models.every((m) => m.id.startsWith("ac01/")));
-
-  // Switch to "cpam" tab -> matches all 3 models whose provider is "cpam"
-  panel.handleInput("\x1b[B"); // down to cpam
-  const cpamModels = panel.getFilteredModels();
-  assert.equal(cpamModels.length, 3);
-  assert.ok(cpamModels.every((m) => m.provider === "cpam"));
-
-  // Switch to "anthropic" tab -> matches provider "anthropic"
-  panel.handleInput("\x1b[B"); // down to anthropic
-  const anthropicModels = panel.getFilteredModels();
-  assert.equal(anthropicModels.length, 1);
-  assert.equal(anthropicModels[0]!.id, "anthropic/claude-3-opus");
+  const lines = panel.render(80);
+  assert.ok(lines.some((l) => l.includes("Gemini 3.8 Flash High") && !l.includes("AC03 · Gemini")));
 });

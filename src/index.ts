@@ -5,6 +5,7 @@ export { DcWindow, type DcWindowOptions } from "./ui/dc-window.ts";
 export { DcTabs, type DcTabsOptions, type DcTabItem } from "./ui/dc-tabs.ts";
 export { DcSidebarCard, type DcSidebarCardOptions } from "./ui/dc-sidebar-card.ts";
 export { openDcModal, type DcModalOptions } from "./ui/dc-modal.ts";
+export { DcSearchInput, type DcSearchInputOptions } from "./ui/dc-search-input.ts";
 
 // Bottom Bar Components & Helpers
 export * from "./features/dc-sidebar/bottom-bar/index.ts";
@@ -49,6 +50,20 @@ import dcEngramExtension from "./features/dc-engram/dc-engram.ts";
 import { dcBodyExtension } from "./features/dc-body/dc-body.ts";
 import { dcPlanExtension } from "./features/dc-plan/dc-plan.ts";
 import dcAgentsExtension from "./features/dc-agents/dc-agents.ts";
+import dcWebsearchExtension from "./features/dc-websearch/dc-websearch.ts";
+import dcGitSyncExtension from "./features/dc-git-sync/dc-git-sync.ts";
+import dcContext7Extension from "./features/dc-context7/dc-context7.ts";
+import dcPdfExtension from "./features/dc-pdf/dc-pdf.ts";
+import dcBrowserExtension from "./features/dc-browser/dc-browser.ts";
+import dcApiExtension from "./features/dc-api/dc-api.ts";
+import dcServicesExtension from "./features/dc-services/dc-services.ts";
+import dcYoutubeExtension from "./features/dc-youtube/dc-youtube.ts";
+import dcAudioExtension from "./features/dc-audio/dc-audio.ts";
+import dcDateExtension from "./features/dc-date/dc-date.ts";
+import dcCodegraphExtension from "./features/dc-codegraph/dc-codegraph.ts";
+import dcScanGuardExtension from "./features/dc-scan-guard/index.ts";
+import dcCheckpointExtension from "./features/dc-checkpoint/index.ts";
+import dcHandoffExtension from "./features/dc-handoff/index.ts";
 
 export const profileDuelExtension = dcFaceExtension;
 export const dcFacesExtension = dcFaceExtension;
@@ -83,12 +98,40 @@ export {
   dcBodyExtension,
   dcPlanExtension,
   dcAgentsExtension,
+  dcWebsearchExtension,
+  dcGitSyncExtension,
+  dcContext7Extension,
+  dcPdfExtension,
+  dcBrowserExtension,
+  dcApiExtension,
+  dcServicesExtension,
+  dcYoutubeExtension,
+  dcAudioExtension,
+  dcDateExtension,
+  dcCodegraphExtension,
+  dcScanGuardExtension,
+  dcCheckpointExtension,
+  dcHandoffExtension,
 };
 
 export * from "./features/dc-engram/index.ts";
 export * from "./features/dc-body/index.ts";
 export * from "./features/dc-plan/index.ts";
 export * from "./features/dc-agents/index.ts";
+export * from "./features/dc-websearch/index.ts";
+export * from "./features/dc-git-sync/index.ts";
+export * from "./features/dc-context7/index.ts";
+export * from "./features/dc-pdf/index.ts";
+export * from "./features/dc-browser/index.ts";
+export * from "./features/dc-api/index.ts";
+export * from "./features/dc-services/index.ts";
+export * from "./features/dc-youtube/index.ts";
+export * from "./features/dc-audio/index.ts";
+export * from "./features/dc-date/index.ts";
+export * from "./features/dc-codegraph/index.ts";
+export * from "./features/dc-scan-guard/index.ts";
+export * from "./features/dc-checkpoint/index.ts";
+export * from "./features/dc-handoff/index.ts";
 
 /**
  * Unified DC Studio Extension.
@@ -119,6 +162,20 @@ export function dcStudioExtension(pi: ExtensionAPI, ctx?: ExtensionContext): voi
   dcBodyExtension(pi);
   dcPlanExtension(pi);
   dcAgentsExtension(pi);
+  dcWebsearchExtension(pi);
+  dcGitSyncExtension(pi);
+  dcContext7Extension(pi);
+  dcPdfExtension(pi);
+  dcBrowserExtension(pi);
+  dcApiExtension(pi);
+  dcServicesExtension(pi);
+  dcYoutubeExtension(pi);
+  dcAudioExtension(pi);
+  dcDateExtension(pi);
+  dcCodegraphExtension(pi);
+  dcScanGuardExtension(pi);
+  dcCheckpointExtension(pi);
+  dcHandoffExtension(pi);
   dcHerdrAgentStateExtension(pi);
   dcEngramExtension(pi);
   dcDialogsExtension(pi, ctx);

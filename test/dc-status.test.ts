@@ -50,7 +50,7 @@ test("DcStatusPanel renders environment info and toggles alerts tab", () => {
   assert.ok(lines1.some((l) => l.includes("main")));
   assert.ok(lines1.some((l) => l.includes("gemini-3-flash")));
 
-  // Switch to alerts tab with Tab or '2'
+  // Switch to alerts tab with '2'
   assert.equal(panel.getCurrentTab(), "info");
   panel.handleInput("2");
   assert.equal(panel.getCurrentTab(), "alerts");

@@ -9,8 +9,8 @@ import {
 } from "@earendil-works/pi-tui";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { openDcModal } from "../../../ui/dc-modal.ts";
-import { BIG_DEFAULT } from "../art/dcdev.ts";
-import { CUBIS_DEFAULT } from "../art/cubis.ts";
+import { listFaceProfiles } from "../art/index.ts";
+import type { FaceProfile } from "../core/dc-face-types.ts";
 import { paintBigLine } from "../art/painter.ts";
 import { readFacePrefs, writeFacePrefs } from "../core/dc-face-prefs.ts";
 import { dcNotifier } from "../../../integrations/dc-notify/dc-notifier.ts";
@@ -20,31 +20,40 @@ export interface DuelTheme {
   bold: (text: string) => string;
 }
 
+/**
+ * ProfileDuel N-way: Renderiza dinámicamente N perfiles de caritas lado a lado
+ * con divisores verticales continuos `│`, navegación con flechas `← →` y clic de mouse.
+ */
 export class ProfileDuel implements Component {
-  public selected: 0 | 1;
-  public onPick?: (profile: "dcdev" | "cubis") => void;
+  public selectedIndex: number = 0;
+  public profiles: FaceProfile[];
+  public onPick?: (profileId: string) => void;
   public onCancel?: () => void;
-  private lastColW: number = 24;
-  private lastH: number = 12;
+  private lastColWidths: number[] = [];
+  private lastH: number = 10;
 
   constructor(
     private theme: DuelTheme,
-    current: "dcdev" | "cubis" = "dcdev",
+    currentProfileId = "dcdev",
   ) {
-    this.selected = current === "cubis" ? 1 : 0;
+    this.profiles = listFaceProfiles();
+    const idx = this.profiles.findIndex((p) => p.id === currentProfileId);
+    this.selectedIndex = idx >= 0 ? idx : 0;
   }
 
   invalidate(): void {}
 
   private metrics(inner: number) {
-    const colW = Math.max(22, Math.floor((inner - 3) / 2));
-    const H = Math.max(BIG_DEFAULT.length, CUBIS_DEFAULT.length);
-    return { colW, H };
+    const N = Math.max(1, this.profiles.length);
+    const divWidthTotal = (N - 1) * 3;
+    const colW = Math.max(20, Math.floor((inner - divWidthTotal) / N));
+    const maxFaceH = Math.max(...this.profiles.map((p) => p.defaultFace.length), 3);
+    return { colW, H: maxFaceH };
   }
 
   private faceCell(lines: readonly string[], selected: boolean, colW: number, H: number): string[] {
     const fg = this.theme.fg;
-    const w = Math.max(...lines.map((l) => visibleWidth(l)));
+    const w = Math.max(1, ...lines.map((l) => visibleWidth(l)));
     const norm = lines.map((l) => l + " ".repeat(Math.max(0, w - visibleWidth(l))));
     const top = Math.floor((H - norm.length) / 2);
     const full: string[] = [
@@ -69,35 +78,55 @@ export class ProfileDuel implements Component {
   }
 
   render(width: number): string[] {
-    const inner = width;
-    const { colW, H } = this.metrics(inner);
-    this.lastColW = colW;
+    const { colW, H } = this.metrics(width);
     this.lastH = H;
     const fg = this.theme.fg;
-
-    const left = this.faceCell(BIG_DEFAULT, this.selected === 0, colW, H);
-    const right = this.faceCell(CUBIS_DEFAULT, this.selected === 1, colW, H);
     const div = fg("accent", "│");
-    const emptyDivider = `${" ".repeat(colW)} ${div} ${" ".repeat(colW)}`;
-    const rows = left.map((l, i) => `${l} ${div} ${right[i]}`);
-    const labelRow = `${this.label("dcdev", this.selected === 0, colW)} ${div} ${this.label("cubis", this.selected === 1, colW)}`;
+    const N = this.profiles.length;
+
+    this.lastColWidths = Array(N).fill(colW);
+
+    // 1. Celdas de cada carita
+    const faceColumns = this.profiles.map((p, idx) =>
+      this.faceCell(p.defaultFace, idx === this.selectedIndex, colW, H),
+    );
+
+    // 2. Líneas vacías de separación con barras divisoras
+    const emptyRow = faceColumns.map(() => " ".repeat(colW)).join(` ${div} `);
+
+    // 3. Filas de caras unidas por el divisor vertical
+    const faceRows: string[] = [];
+    for (let rowIdx = 0; rowIdx < H; rowIdx++) {
+      const cells = faceColumns.map((col) => col[rowIdx] ?? " ".repeat(colW));
+      faceRows.push(cells.join(` ${div} `));
+    }
+
+    // 4. Fila de etiquetas radio
+    const labels = this.profiles.map((p, idx) =>
+      this.label(p.id, idx === this.selectedIndex, colW),
+    );
+    const labelRow = labels.join(` ${div} `);
 
     return [
-      emptyDivider,
-      ...rows,
-      emptyDivider,
+      emptyRow,
+      ...faceRows,
+      emptyRow,
       labelRow,
-      emptyDivider,
+      emptyRow,
     ];
   }
 
   handleInput(data: string): void {
+    const N = this.profiles.length;
     if (matchesKey(data, Key.left) || matchesKey(data, Key.up)) {
-      this.selected = 0;
+      this.selectedIndex = (this.selectedIndex - 1 + N) % N;
     } else if (matchesKey(data, Key.right) || matchesKey(data, Key.down) || matchesKey(data, Key.tab)) {
-      this.selected = 1;
+      this.selectedIndex = (this.selectedIndex + 1) % N;
     } else if (matchesKey(data, Key.enter)) {
-      this.onPick?.(this.selected === 1 ? "cubis" : "dcdev");
+      const chosen = this.profiles[this.selectedIndex];
+      if (chosen) {
+        this.onPick?.(chosen.id);
+      }
     } else if (matchesKey(data, Key.escape)) {
       this.onCancel?.();
     }
@@ -109,60 +138,89 @@ export class ProfileDuel implements Component {
       return undefined;
     }
     if (event.y < 1 || event.y > 1 + this.lastH + 2) return undefined;
-    const side = event.x > this.lastColW + 1 ? 1 : 0;
-    if (event.type === "press") {
-      this.selected = side as 0 | 1;
+
+    let accumulatedX = 0;
+    let clickedCol = -1;
+    for (let i = 0; i < this.lastColWidths.length; i++) {
+      const w = this.lastColWidths[i]!;
+      if (event.x >= accumulatedX && event.x <= accumulatedX + w + 1) {
+        clickedCol = i;
+        break;
+      }
+      accumulatedX += w + 3;
+    }
+
+    if (clickedCol >= 0 && clickedCol < this.profiles.length) {
+      this.selectedIndex = clickedCol;
+      if (event.type === "click") {
+        this.onPick?.(this.profiles[clickedCol]!.id);
+      }
       return { handled: true };
     }
-    this.selected = side as 0 | 1;
-    this.onPick?.(side === 1 ? "cubis" : "dcdev");
-    return { handled: true };
+
+    return undefined;
   }
 }
 
 /**
- * Abre el modal flotante de duelo de perfiles en DcWindow.
+ * Abre el selector modal N-way de perfiles de carita montado sobre openDcModal y DcWindow.
  */
-export async function openProfilePicker(ctx: ExtensionContext): Promise<string | undefined> {
-  const current = readFacePrefs().profile as "dcdev" | "cubis";
-  let activeDuel: ProfileDuel | undefined;
+export async function openProfileDuelModal(ctx: ExtensionContext): Promise<string | undefined> {
+  const prefs = readFacePrefs();
+  let selectedId = prefs.profile ?? "dcdev";
+  const profilesCount = listFaceProfiles().length;
+
+  const modalWidth = `${Math.min(94, Math.max(62, profilesCount * 24 + 6))}%`;
 
   return openDcModal<string>(ctx, {
-    title: "⛩  Dc Studio - Perfil de Carita",
-    width: 62,
-    maxHeight: 24,
-    scrollable: false,
-    showScrollbar: false,
+    title: "Dc Studio - Selector de Perfiles",
+    glyph: "⛩ ",
+    frame: "double",
+    paddingX: 0,
+    width: modalWidth as any,
     footer: (theme) => ({
-      left: ` ${theme.fg("accent", "←→")} ${theme.fg("muted", "elegir")}  ·  ${theme.fg("accent", "Enter")} ${theme.fg("muted", "usar")}  ·  ${theme.fg("accent", "Esc")} ${theme.fg("muted", "cerrar")}`,
-      right: theme.fg("accent", "[ Usar ]"),
+      left: `  ${theme.fg("accent", "←→")} elegir   ${theme.fg("accent", "Enter")} usar   ${theme.fg("accent", "esc")} cerrar`,
+      right: `${theme.fg("accent", "[ Usar ]")}  `,
     }),
     onFooterRightClick: () => {
-      if (activeDuel) {
-        const chosen = activeDuel.selected === 1 ? "cubis" : "dcdev";
-        activeDuel.onPick?.(chosen);
-      }
+      writeFacePrefs({ profile: selectedId });
+      dcNotifier.notify(ctx, "Caritas", `Perfil seleccionado: ${selectedId}`, "info");
     },
-    content: (done) => {
-      const theme: DuelTheme = {
-        fg: (role, text) => {
-          if (role === "accent") return `\x1b[38;2;255;77;77m${text}\x1b[0m`;
-          if (role === "error") return `\x1b[38;2;255;51;51m${text}\x1b[0m`;
-          if (role === "dim" || role === "muted") return `\x1b[2m${text}\x1b[22m`;
-          return text;
+    content: (done, theme, tui) => {
+      const duel = new ProfileDuel(
+        {
+          fg: (role, text) => theme.fg(role as any, text),
+          bold: (text) => theme.bold(text),
         },
-        bold: (text) => `\x1b[1m${text}\x1b[22m`,
+        selectedId,
+      );
+
+      duel.onPick = (profileId) => {
+        selectedId = profileId;
+        writeFacePrefs({ profile: profileId });
+        dcNotifier.notify(ctx, "Caritas", `Perfil cambiado a: ${profileId}`, "info");
+        done(profileId);
       };
 
-      const duel = new ProfileDuel(theme, current);
-      activeDuel = duel;
-      duel.onPick = (chosen) => {
-        writeFacePrefs({ profile: chosen });
-        dcNotifier.notify(ctx, "DC Face", `Perfil cambiado a: ${chosen}`, "info");
-        done(chosen);
+      duel.onCancel = () => {
+        done(undefined);
       };
-      duel.onCancel = () => done(undefined);
-      return duel;
+
+      return {
+        render: (w: number) => duel.render(w),
+        invalidate: () => duel.invalidate(),
+        handleInput: (data: string) => {
+          duel.handleInput(data);
+          tui.requestRender();
+        },
+        handleMouse: (event) => {
+          const res = duel.handleMouse(event);
+          if (res) tui.requestRender();
+          return res;
+        },
+      };
     },
   });
 }
+
+export const openProfilePicker = openProfileDuelModal;

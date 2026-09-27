@@ -15,7 +15,8 @@ import {
   getTerminalColumns,
   invalidateLayout,
 } from "./runtime/dc-sidebar-host.ts";
-import { wrapFooterBrand, unwrapFooterBrand } from "./bottom-bar/index.ts";
+import { wrapFooterBrand, unwrapFooterBrand, wrapDockWidgetsAbove, unwrapDockWidgetsAbove } from "./bottom-bar/index.ts";
+import { patchExtensionWidgets, wrapMountedWidgets } from "./runtime/dc-sidebar-widgets.ts";
 
 export const ANCHOR_KEY = "dc-sidebar-anchor";
 const G_TUI = Symbol.for("dc.sidebar.tui-ref");
@@ -78,6 +79,7 @@ export default function dcSidebarExtension(pi: ExtensionAPI): void {
           enforceBar(tui);
           tryWrap(tui);
           wrapFooterBrand(tui, () => ctx.ui.theme);
+          wrapDockWidgetsAbove(tui);
           invalidateLayout(tui);
           tui.requestRender?.();
         }
@@ -113,6 +115,7 @@ export default function dcSidebarExtension(pi: ExtensionAPI): void {
           enforceBar(tui);
           tryWrap(tui);
           wrapFooterBrand(tui, () => ctx.ui.theme);
+          wrapDockWidgetsAbove(tui);
           invalidateLayout(tui);
           tui.requestRender?.();
         }
@@ -128,12 +131,30 @@ export default function dcSidebarExtension(pi: ExtensionAPI): void {
     (globalThis as any)[Symbol.for("dc.sidebar.theme-fn")] = () => ctx.ui.theme;
     (globalThis as any)[G_CTX] = ctx;
 
+    // Instalar intercepción inteligente de widgets de extensión (para dock aboveEditor cuando sidebar está oculto)
+    patchExtensionWidgets();
+
+    // Escuchar eventos de RDD de Gentle-Pi para mantener sincronizada la tarjeta de status
+    try {
+      pi.events?.on?.("gentle-ai:review-sidebar", (payload: any) => {
+        (globalThis as any)[Symbol.for("gentle-ai.review-sidebar.snapshot")] = payload;
+        const tui = (globalThis as any)[G_TUI];
+        if (tui) {
+          invalidateLayout(tui);
+          tui.requestRender?.();
+        }
+      });
+    } catch {
+      /* noop */
+    }
+
     const onResize = () => {
       const tui = (globalThis as any)[G_TUI];
       if (tui) {
         enforceBar(tui);
         tryWrap(tui);
         wrapFooterBrand(tui, () => ctx.ui.theme);
+        wrapDockWidgetsAbove(tui);
         invalidateLayout(tui);
         tui.requestRender?.();
       }
@@ -153,6 +174,7 @@ export default function dcSidebarExtension(pi: ExtensionAPI): void {
           enforceBar(tui);
           tryWrap(tui);
           wrapFooterBrand(tui, () => ctx.ui.theme);
+          wrapDockWidgetsAbove(tui);
         } catch {
           /* noop */
         }
@@ -164,6 +186,7 @@ export default function dcSidebarExtension(pi: ExtensionAPI): void {
         enforceBar(tui);
         tryWrap(tui);
         wrapFooterBrand(tui, () => ctx.ui.theme);
+        wrapDockWidgetsAbove(tui);
         startPolling(tui);
         tui.requestRender?.();
       }
@@ -178,6 +201,8 @@ export default function dcSidebarExtension(pi: ExtensionAPI): void {
           enforceBar(tui);
           tryWrap(tui);
           wrapFooterBrand(tui, () => ctx.ui.theme);
+          wrapDockWidgetsAbove(tui);
+          wrapMountedWidgets();
           tui.requestRender?.();
         }
       }, ms);
@@ -197,6 +222,7 @@ export default function dcSidebarExtension(pi: ExtensionAPI): void {
     const tui = (globalThis as any)[G_TUI];
     if (tui) {
       unwrapFooterBrand(tui);
+      unwrapDockWidgetsAbove(tui);
     }
     restoreNative();
   });

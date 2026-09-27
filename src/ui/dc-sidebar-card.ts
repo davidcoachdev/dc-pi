@@ -180,24 +180,28 @@ export class DcSidebarCard implements Component {
   }
 
   handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
-    if (event.type !== "click") {
+    const { type, x, y, button } = event;
+    if (button !== undefined && button !== "left") {
       return undefined;
     }
-
-    const y = event.y;
-    const x = event.x;
 
     // Clic en la barra de título (y === 1)
     if (y === 1) {
       if (this.rightStart >= 0 && x >= this.rightStart && x <= this.rightEnd) {
         if (this.options.onRightClick) {
-          this.options.onRightClick(event);
-          return { handled: true };
+          if (type === "press") return { handled: true };
+          if (type === "click") {
+            this.options.onRightClick(event);
+            return { handled: true };
+          }
         }
       }
       if (this.options.onTitleClick) {
-        this.options.onTitleClick(event);
-        return { handled: true };
+        if (type === "press") return { handled: true };
+        if (type === "click") {
+          this.options.onTitleClick(event);
+          return { handled: true };
+        }
       }
       return undefined;
     }
@@ -210,8 +214,11 @@ export class DcSidebarCard implements Component {
         if (res?.handled) return res;
       }
       if (this.options.onLineClick) {
-        this.options.onLineClick(lineIdx, event);
-        return { handled: true };
+        if (type === "press") return { handled: true };
+        if (type === "click") {
+          this.options.onLineClick(lineIdx, event);
+          return { handled: true };
+        }
       }
     }
 

@@ -89,10 +89,15 @@ export function enforceBar(tui: any): void {
   if (tui.terminal) {
     tui.terminal[Symbol.for("dc.sidebar.rail-visible")] = active;
   }
-  if (state.ownsHost && (state.ownsHost as any)[BAR_FORCED]) return;
-  const forced = (() => true) as ((...a: unknown[]) => boolean) & Record<symbol, boolean>;
-  forced[BAR_FORCED] = true;
-  state.ownsHost = forced;
+  // No forzar ownsHost = () => true cuando el rail está inactivo/oculto,
+  // permitiendo que los widgets en dock (aboveEditor) se rendericen normalmente.
+  if (state.ownsHost && (state.ownsHost as any)[BAR_FORCED]) {
+    state.ownsHost = (() => active) as any;
+    return;
+  }
+  const dynamicOwns = (() => isRailActive(tui)) as ((...a: unknown[]) => boolean) & Record<symbol, boolean>;
+  dynamicOwns[BAR_FORCED] = true;
+  state.ownsHost = dynamicOwns;
 }
 
 export function railIndex(node: { entries?: unknown[] } | undefined): number {

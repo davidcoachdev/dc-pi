@@ -70,17 +70,23 @@ export class DcCollapsible implements Component {
   }
 
   handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
-    if (event.type !== "click") return undefined;
+    if (event.button !== undefined && event.button !== "left") return undefined;
     
     if (event.y === 0) {
       if (this.options.onTitleRightClick && event.x !== undefined && event.x >= 32 && event.x <= 45) {
-        this.options.onTitleRightClick();
+        if (event.type === "press") return { handled: true };
+        if (event.type === "click") {
+          this.options.onTitleRightClick();
+          return { handled: true };
+        }
+      }
+      if (event.type === "press") return { handled: true };
+      if (event.type === "click") {
+        this.expanded = !this.expanded;
+        if (this.options.onToggle) this.options.onToggle(this.expanded);
+        if (this.options.requestRender) this.options.requestRender();
         return { handled: true };
       }
-      this.expanded = !this.expanded;
-      if (this.options.onToggle) this.options.onToggle(this.expanded);
-      if (this.options.requestRender) this.options.requestRender();
-      return { handled: true };
     }
 
     if (event.y !== undefined && event.y > 0) {

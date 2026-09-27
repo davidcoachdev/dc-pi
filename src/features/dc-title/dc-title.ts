@@ -6,10 +6,13 @@ export default function dcTitleExtension(
   pi: ExtensionAPI,
   options?: RenameTabOptions,
 ): void {
-  // Renombrar automáticamente en session_start a "⛩  Dc Studio"
-  pi.on("session_start", async (_event, _ctx) => {
+  // Renombrar automáticamente en session_start a "⛩  Dc Studio" y renombrar el Workspace al proyecto/lab
+  pi.on("session_start", async (_event, ctx) => {
     try {
-      renameTab("⛩  Dc Studio", options);
+      renameTab("⛩  Dc Studio", {
+        ...options,
+        cwd: ctx.cwd ?? process.cwd(),
+      });
     } catch {
       /* noop */
     }
@@ -20,14 +23,18 @@ export default function dcTitleExtension(
     description: "Rename active tab or window to Pi (or custom name) in Herdr, Tmux, and Terminal",
     handler: async (args: string | undefined, ctx: ExtensionContext) => {
       const name = (args ?? "").trim() || "Pi";
-      const res = renameTab(name, options);
+      const res = renameTab(name, {
+        ...options,
+        cwd: ctx.cwd ?? process.cwd(),
+      });
       if (ctx.hasUI) {
         const targets: string[] = [];
         if (res.herdr) targets.push("Herdr");
+        if (res.workspaceRenamed) targets.push("Workspace");
         if (res.tmux) targets.push("Tmux");
         if (res.osc) targets.push("Terminal");
         const detail = targets.length ? ` in ${targets.join(" + ")}` : "";
-        dcNotifier.notify(ctx, "DC Title", `Tab renamed to "${name}"${detail}`, "info");
+        dcNotifier.notify(ctx, "DC Title", `Renamed to "${name}"${detail}`, "info");
       }
     },
   });

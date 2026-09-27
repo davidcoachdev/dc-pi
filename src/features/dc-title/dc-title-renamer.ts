@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import * as path from "node:path";
 
 export interface RenameTabOptions {
   /** Función de ejecución personalizada (para pruebas unitarias). */
@@ -7,12 +8,15 @@ export interface RenameTabOptions {
   writeOscFn?: (data: string) => void;
   /** Variables de entorno personalizadas (para pruebas unitarias). */
   env?: Record<string, string | undefined>;
+  /** Directorio de trabajo para derivar el nombre de proyecto / lab. */
+  cwd?: string;
 }
 
 export interface RenameTabResult {
   herdr: boolean;
   tmux: boolean;
   osc: boolean;
+  workspaceRenamed?: boolean;
 }
 
 /**
@@ -30,10 +34,23 @@ export function isTmux(env: Record<string, string | undefined> = process.env): b
 }
 
 /**
- * Renombra la pestaña / ventana activa en Herdr, Tmux y terminal compatible con OSC 0.
+ * Deriva un nombre conciso de proyecto o laboratorio a partir de la ruta del workspace (cwd).
+ * Ejemplos:
+ * - "/home/dc-studio/dc-lab/dc-projects/dc-pi" -> "dc-pi"
+ * - "/home/dc-studio/dc-lab/lab-00" -> "lab-00"
+ * - "/home/dc-studio" -> "home"
+ */
+export function deriveProjectName(cwd: string = process.cwd()): string {
+  const normalized = path.resolve(cwd);
+  const base = path.basename(normalized);
+  return base || "dc-studio";
+}
+
+/**
+ * Renombra la pestaña y el Workspace activo en Herdr, Tmux y terminal compatible con OSC 0.
  */
 export function renameTab(
-  title = "Pi",
+  title = "⛩  Dc Studio",
   options?: RenameTabOptions,
 ): RenameTabResult {
   const result: RenameTabResult = { herdr: false, tmux: false, osc: false };
@@ -41,13 +58,14 @@ export function renameTab(
   const exec = options?.execFn ?? ((cmd, args) => execFileSync(cmd, args, { stdio: "ignore", timeout: 1500 }));
   const writeOsc = options?.writeOscFn ?? ((str) => process.stdout.write(str));
 
-  // 1. Herdr tab rename
+  // 1. Herdr: renombrar tab y renombrar workspace al nombre del proyecto/lab
   if (isHerdr(env)) {
     try {
       const herdrBin = env.HERDR_BIN_PATH ?? "herdr";
       let tabId = env.HERDR_TAB_ID;
+      let workspaceId = env.HERDR_WORKSPACE_ID;
 
-      if (!tabId && env.HERDR_PANE_ID) {
+      if ((!tabId || !workspaceId) && env.HERDR_PANE_ID) {
         try {
           const out = options?.execFn
             ? (options.execFn(herdrBin, ["pane", "get", env.HERDR_PANE_ID]) as string)
@@ -59,15 +77,28 @@ export function renameTab(
           if (typeof out === "string" && out.trim().length > 0) {
             const parsed = JSON.parse(out);
             tabId = parsed?.result?.pane?.tab_id;
+            workspaceId = parsed?.result?.pane?.workspace_id;
           }
         } catch {
-          /* Fallback sin tabId */
+          /* Fallback sin pane info */
         }
       }
 
+      // Renombrar la pestaña
       if (tabId) {
         exec(herdrBin, ["tab", "rename", String(tabId), title]);
         result.herdr = true;
+      }
+
+      // Renombrar el workspace al nombre del proyecto o lab (ej: dc-pi)
+      if (workspaceId) {
+        const projectName = deriveProjectName(options?.cwd ?? process.cwd());
+        try {
+          exec(herdrBin, ["workspace", "rename", String(workspaceId), projectName]);
+          result.workspaceRenamed = true;
+        } catch {
+          /* noop */
+        }
       }
     } catch {
       /* noop */

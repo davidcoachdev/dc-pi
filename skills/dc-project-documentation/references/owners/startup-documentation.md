@@ -1,0 +1,130 @@
+---
+name: startup-documentation
+description: "initialize numbered modular Markdown documentation for a new software application or startup project after project-documentation routes the request. Use for new-project lifecycle setup; do not use as the broad documentation router."
+license: Apache-2.0
+metadata:
+  author: j0k3r
+  version: "1.4"
+---
+
+# Startup Documentation
+
+## Activation Contract
+
+Use this skill after `project-documentation` routes a new software application or startup-project documentation request to new-project lifecycle setup.
+
+This is a new-project documentation lifecycle skill, not the broad documentation router. Broad routing belongs to `project-documentation`. It does not create another Pi execution workflow and does not replace Direct Orchestrator or Planned Workflow. This skill intentionally has no registry metadata, so direct registry resolution does not select it or fan out from it; the router loads it explicitly when needed. Use `existing-project-onboarding` when an existing implementation must be scanned and reconstructed into the modular documentation baseline. Use `product-discovery` when a new project's problem, users, evidence, assumptions, or product direction are not yet established.
+
+Do not create the complete documentation tree eagerly, generate empty placeholder files, split the official project narrative into development phases, or use this skill to decide product scope, architecture, technology, sprint content, or validation thresholds.
+
+## Change Intake Routing
+
+For an MVP or application already being evolved, route only the first unresolved decision. Reuse approved documents and do not restart the lifecycle when existing contracts already answer the change.
+
+| Requested change | First canonical owner or action |
+|---|---|
+| Bug whose expected behavior and acceptance are already approved | Trace the existing requirement/acceptance IDs, select the applicable Pi workflow, and use RED → GREEN → REFACTOR; reopen product documentation only if evidence challenges it. |
+| Bug whose expected behavior is missing, ambiguous, or contradictory | `requirements-definition` before implementation. |
+| Feature inside approved product scope with clear behavior | `requirements-definition`. |
+| New capability, changed user journey, or product-scope expansion | `product-definition`. |
+| Feature whose problem, audience, or value remains uncertain | `product-discovery`, with `product-validation` for an approved bounded experiment when useful. |
+| New or changed architecture driver, responsibility, data/trust, or deployment boundary | `architecture-definition`. |
+| Significant technology, dependency, vendor, protocol, or integration choice | `technical-decisions`. |
+| Approved change ready to become an increment, sprint, or flow item | `delivery-planning`. |
+| Outcome evidence, conformance evidence, experiment result, or learning decision | `product-validation`. |
+| Existing codebase without a trustworthy modular documentation baseline | Principal-only `existing-project-onboarding`. |
+
+Documentation defines and traces the intended change; it does not authorize implementation. Code changes proceed only through Direct Orchestrator or Planned Workflow as selected by workflow triage and must follow the applicable change-type validation protocol. Do not run onboarding for an ordinary feature or bug, repeat discovery for an already supported problem, or regenerate unaffected documentation.
+
+## Implementation Readiness Gate
+
+Before routing lifecycle-backed work into implementation, produce one compact readiness packet from existing approved context; do not create a new document solely for this gate. It contains:
+
+- approved behavior and acceptance IDs, or explicit inline contracts when no durable lifecycle documentation is applicable;
+- exact scope and exclusions for the current increment;
+- only architecture or ADR decisions required to implement safely now;
+- applicable change-type validation and broader acceptance expectations;
+- delivery or Definition of Done expectations only when relevant;
+- unresolved user-owned decisions and blockers: `None`; and
+- selected Direct Orchestrator or Planned Workflow route.
+
+Missing non-applicable lifecycle groups do not block readiness. Missing behavior, acceptance, required architecture/ADR, validation expectations, or user-owned decisions do. The readiness packet proves bounded inputs; it does not itself authorize implementation.
+
+## Hard Rules
+
+- Load and follow `anti-overengineering` whenever this skill is active.
+- Store durable project documentation as Markdown under the exact approved group and owner paths in `references/document-contract.md`.
+- Treat new-project documentation as one coherent product/application. Product, requirement, architecture, and validation documents must describe current app decisions without development phase labels.
+- If the user says phase, stage, etapa, milestone, sprint, or similar, ask whether it is a real product/application part or a development/delivery slice. If it is product scope for the MVP/current app, document it as ordinary app scope, journeys, capabilities, requirements, or architecture. If it is not part of the current product work, record it as a future improvement, possible extension, exclusion, or Delivery `Later` item. If it is delivery sequencing, route it to `delivery-planning` rather than product/architecture docs.
+- Document development as traceable product evolution, not as a chronological diary or hidden rewrite of the base product. A post-base feature that was not in approved documentation must be classified as current-scope refinement, product extension, changed decision, future improvement, or out of scope before any downstream document or implementation route.
+- When an approved extension or changed decision enters the product, update only the canonical owner documents and link back to the original product, requirement, architecture, delivery, validation, or change-request records that it extends or supersedes. Preserve the original decision context instead of editing history to make the extension look preexisting.
+- Create only the group, index, and document needed for the current approved decision. Never scaffold every possible document.
+- Each document owns one coherent subject or decision family. Split it only when parts need independent review, value, risk, evidence, approval, or delivery handling now.
+- Treat summary documents as navigation and decision summaries; put repeated evidence, requirements, decisions, integrations, increments, sprints, and experiments in numbered child files.
+- Preserve creation-order numbers. Never renumber existing documents merely to improve appearance, and never reuse a retired identifier.
+- Use lowercase English kebab-case for paths while allowing document prose in the language explicitly selected by the user.
+- Ask only for unresolved decisions necessary for the next document. Group questions, put the simplest viable option first, explain material trade-offs, and never infer the user's product or technical choices.
+- Reuse approved language, decision owners, scope, evidence references, and metadata unless they are absent, stale, contradicted, or specific to the new decision.
+- Distinguish confirmed evidence, supported evidence, inference, assumption, and unknown. Never promote an assumption to a requirement silently.
+- One canonical owner must exist for each durable fact or decision. Other documents link to it rather than duplicate or overwrite it.
+- Route architecture drivers and views to `architecture-definition`; route ADRs, technology selections, dependency decisions, and integrations to `technical-decisions`.
+- Route product outcome and success/guardrail intent to `product-definition`; route operational metric definitions, thresholds, results, and learning decisions to `product-validation`.
+- When upstream evidence or decisions change, identify affected links and request review only for materially affected descendants. If impact cannot be bounded safely, mark the uncertainty and ask the user.
+- Do not place architecture, technology, delivery, implementation decisions, or development-phase sequencing inside discovery or product documents. Route them to their owning group and skill.
+- Follow `references/document-contract.md` for document metadata, status, numbering, ownership, evidence provenance, material change requests, trace promotion, links, boundaries, and change handling.
+- Load this router once for the current routing decision. Resolve direct matches without related-skill expansion, then select the exact canonical owner by path/decision contract. Generic documentation or supporting skills never co-own a lifecycle artifact and do not displace a matching owner even when also returned by routing. Load only the selected owner and its explicitly applicable mandatory dependencies. Related skills are handoff hints, not an instruction to load the lifecycle. Keep registry-level related expansion minimal for this umbrella router; owner-specific handoffs are selected explicitly from the routing table and must not be encoded as broad automatic fan-out. The selected owner consumes the shared contract directly and must not recursively restart routing.
+
+## Decision Gates
+
+Before creating or changing documentation, resolve only what is necessary now:
+
+- project and document language when no parent or existing convention establishes it;
+- the current decision or question the document must answer;
+- when phase/stage language appears, whether it names a real product part, future extension, or delivery sequencing;
+- the canonical group and owning domain skill;
+- the user who owns any material product, architecture, cost, risk, or delivery decision;
+- whether current claims are evidence, inference, assumptions, or unknowns;
+- whether a new document is necessary or an existing canonical document should be updated.
+
+Stop and ask before:
+
+- selecting among materially different valid product or technical alternatives;
+- adding a new documentation group, cross-project convention, dependency, migration, or compatibility policy;
+- replacing an approved decision;
+- creating a document that would duplicate an existing canonical owner;
+- creating architecture or delivery artifacts before their approved inputs exist.
+
+## Execution Steps
+
+1. Identify the user's current decision and reuse all approved context already available.
+2. If routing has not already been done, defer broad owner selection to `project-documentation`; otherwise load only the canonical domain skill that owns the decision plus mandatory dependencies applicable now; do not expand all lifecycle skills.
+3. Read the relevant existing parent/index document only when it is required and has not already been supplied.
+4. Ask a concise grouped questionnaire for unresolved facts and user-owned choices.
+5. Create or update only the smallest coherent Markdown artifact required now.
+6. Apply the shared document contract, reuse approved metadata, and add links instead of copying canonical content.
+7. Run the shared structural-validation checklist and check that the document has a single responsibility, explicit exclusions, bounded size, evidence provenance when applicable, decision ownership, valid trace links, and one next permitted action.
+8. Run structural validation. Generate the skill registry and run relevant routing checks only when the approved scoped change modifies skill definitions or routing metadata.
+9. Stop when the requested document or routing decision is complete.
+
+## Output Contract
+
+Return:
+
+- Skills applied: `startup-documentation`, `anti-overengineering`, and the selected domain skill.
+- Current lifecycle group and canonical document path.
+- Decision or question documented.
+- User decisions requested and resolved, or `None`.
+- Evidence, inference, assumptions, and unknowns kept distinct.
+- Phase/stage terminology disposition: product part, future extension/exclusion, delivery sequencing, or `None`.
+- Documents created or updated; empty, speculative, or phase-scaffold documents created: `None`.
+- Trace links and materially affected descendants.
+- Validation executed.
+- One next permitted action, or `None`.
+
+## References
+
+- `references/document-contract.md` — canonical modular Markdown, metadata, numbering, ownership, evidence, traceability, and change contract.
+- `~/.pi/agent/skills/anti-overengineering/SKILL.md` — mandatory scope, simplicity, and decision controls.
+- `~/.pi/agent/skills/cognitive-doc-design/SKILL.md` — progressive disclosure and reviewability guidance.
+- `~/.pi/agent/skills/project-documentation/references/owners/product-discovery.md` — discovery-group owner for problem, users, evidence, assumptions, and initial direction.
+- `~/.pi/agent/AGENTS.md` — canonical Pi workflow, authority, and delegation policy.

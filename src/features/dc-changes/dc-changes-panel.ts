@@ -8,14 +8,16 @@ import {
   type TuiMouseEvent,
   type TuiMouseEventResult,
 } from "@earendil-works/pi-tui";
-import type { GitFileChange } from "../../integrations/dc-git/dc-git.ts";
+import type { GitFileChange, GitWorktreeItem } from "../../integrations/dc-git/dc-git.ts";
+import { listGitWorktrees } from "../../integrations/dc-git/dc-git.ts";
 
 export interface DcChangesPanelOptions {
   cwd: string;
   theme: Pick<Theme, "fg" | "bg" | "bold">;
   getChanges: (cwd: string) => GitFileChange[];
   getDiff: (cwd: string, file: string) => string[];
-  onOpenEditor?: (file: string) => void;
+  listWorktreesFn?: (cwd: string) => GitWorktreeItem[];
+  onOpenEditor?: (file: string, worktreePath?: string) => void;
   requestRender: () => void;
 }
 
@@ -24,13 +26,16 @@ export class DcChangesPanel implements Component {
   private selectedIndex = 0;
   private currentDiff: string[] = [];
   private diffScrollOffset = 0;
+  private worktrees: GitWorktreeItem[] = [];
+  private activeWorktreeIndex = 0;
   private lastLeftW = 0;
   private lastHeight = 0;
   private readonly cwd: string;
   private readonly theme: Pick<Theme, "fg" | "bg" | "bold">;
   private readonly getChanges: (cwd: string) => GitFileChange[];
   private readonly getDiff: (cwd: string, file: string) => string[];
-  private readonly onOpenEditor?: (file: string) => void;
+  private readonly listWorktreesFn: (cwd: string) => GitWorktreeItem[];
+  private readonly onOpenEditor?: (file: string, worktreePath?: string) => void;
   private readonly requestRender: () => void;
 
   constructor(options: DcChangesPanelOptions) {
@@ -38,15 +43,45 @@ export class DcChangesPanel implements Component {
     this.theme = options.theme;
     this.getChanges = options.getChanges;
     this.getDiff = options.getDiff;
+    this.listWorktreesFn = options.listWorktreesFn ?? listGitWorktrees;
     this.onOpenEditor = options.onOpenEditor;
     this.requestRender = options.requestRender;
+
+    this.initWorktrees();
     this.refresh();
   }
 
   invalidate(): void {}
 
+  private initWorktrees(): void {
+    const list = this.listWorktreesFn(this.cwd);
+    this.worktrees = list.length > 0 ? list : [{ path: this.cwd, branch: "current", head: "", isCurrent: true }];
+    const curIdx = this.worktrees.findIndex((w) => w.isCurrent);
+    this.activeWorktreeIndex = curIdx >= 0 ? curIdx : 0;
+  }
+
+  getActiveWorktree(): GitWorktreeItem {
+    return this.worktrees[this.activeWorktreeIndex] ?? this.worktrees[0]!;
+  }
+
+  getWorktrees(): GitWorktreeItem[] {
+    return this.worktrees;
+  }
+
+  getActiveWorktreeIndex(): number {
+    return this.activeWorktreeIndex;
+  }
+
+  cycleWorktree(delta: number): void {
+    if (this.worktrees.length <= 1) return;
+    this.activeWorktreeIndex = (this.activeWorktreeIndex + delta + this.worktrees.length) % this.worktrees.length;
+    this.selectedIndex = 0;
+    this.refresh();
+  }
+
   refresh(): void {
-    this.files = this.getChanges(this.cwd);
+    const wt = this.getActiveWorktree();
+    this.files = this.getChanges(wt.path);
     if (this.selectedIndex >= this.files.length) {
       this.selectedIndex = Math.max(0, this.files.length - 1);
     }
@@ -68,12 +103,13 @@ export class DcChangesPanel implements Component {
 
   private loadDiff(): void {
     const file = this.getSelectedFile();
+    const wt = this.getActiveWorktree();
     if (!file) {
-      this.currentDiff = ["(repositorio limpio, sin cambios pendientes)"];
+      this.currentDiff = ["(árbol de trabajo limpio, sin cambios pendientes)"];
       this.diffScrollOffset = 0;
       return;
     }
-    this.currentDiff = this.getDiff(this.cwd, file.file);
+    this.currentDiff = this.getDiff(wt.path, file.file);
     this.diffScrollOffset = 0;
   }
 
@@ -81,77 +117,97 @@ export class DcChangesPanel implements Component {
     const t = this.theme;
     const safeW = Math.max(40, width);
     const leftW = Math.max(16, Math.min(28, Math.floor(safeW * 0.32)));
-    const rightW = Math.max(20, safeW - leftW - 3); // 3 for " │ "
+    const rightW = Math.max(20, safeW - leftW - 3);
     this.lastLeftW = leftW;
 
+    const lines: string[] = [];
+
+    // Barra de navegación entre Git Worktrees si hay más de 1
+    if (this.worktrees.length > 1) {
+      const wtBadges = this.worktrees.map((w, idx) => {
+        const isSel = idx === this.activeWorktreeIndex;
+        const label = `  ${w.branch} `;
+        return isSel ? t.bg("selectedBg", t.bold(t.fg("accent", label))) : t.fg("dim", label);
+      });
+      const wtLine = `  ${t.fg("dim", "Worktrees:")} ${wtBadges.join(" ")}`;
+      lines.push(truncateToWidth(wtLine, safeW, ""));
+      lines.push(t.fg("border", "─".repeat(safeW + 2)));
+    }
+
     if (this.files.length === 0) {
-      return [
-        "",
-        `  ${t.fg("success", "✔")} ${t.fg("text", "No hay cambios modificados ni untracked en el repositorio.")}`,
-        "",
-      ].map((l) => truncateToWidth(l, safeW, ""));
+      lines.push("");
+      lines.push(`  ${t.fg("success", "✔")} ${t.fg("text", "No hay cambios modificados ni untracked en este worktree.")}`);
+      lines.push("");
+      return lines.map((l) => truncateToWidth(l, safeW, ""));
     }
 
     const rowsCount = Math.max(this.files.length, 12);
     this.lastHeight = rowsCount;
-    const lines: string[] = [];
 
     const visibleDiff = this.currentDiff.slice(this.diffScrollOffset, this.diffScrollOffset + rowsCount);
 
+    const pad = (str: string, len: number) => {
+      const v = visibleWidth(str);
+      return v >= len ? truncateToWidth(str, len, "") : str + " ".repeat(len - v);
+    };
+
     for (let i = 0; i < rowsCount; i++) {
-      // 1. Left panel: File list
-      let leftPart = " ".repeat(leftW);
+      // 1. Columna izquierda: Lista de archivos con estado
+      let leftCell = " ".repeat(leftW);
       if (i < this.files.length) {
         const f = this.files[i]!;
         const isSelected = i === this.selectedIndex;
+        const color =
+          f.status.includes("M")
+            ? "accent"
+            : f.status.includes("A") || f.status.includes("?")
+            ? "success"
+            : f.status.includes("D")
+            ? "error"
+            : "dim";
 
-        let badgeColor: "accent" | "success" | "warning" | "error" = "accent";
-        if (f.status.includes("M")) badgeColor = "accent";
-        else if (f.status.includes("A") || f.status.includes("?")) badgeColor = "success";
-        else if (f.status.includes("D")) badgeColor = "error";
+        const badge = t.fg(color, f.status.padEnd(2));
+        const filename = truncateToWidth(f.file, leftW - 6, "", true);
+        const raw = ` ${badge} ${filename}`;
+        const padded = pad(raw, leftW);
 
-        const badge = t.fg(badgeColor, f.status.padEnd(2));
-        const bullet = isSelected ? t.fg("accent", "●") : t.fg("dim", "○");
-        const fileName = truncateToWidth(f.file, leftW - 5, "", true);
-
-        const rawLine = ` ${bullet} ${badge} ${fileName}`;
-        const vLen = visibleWidth(rawLine);
-        const padded = vLen < leftW ? rawLine + " ".repeat(leftW - vLen) : rawLine;
-
-        leftPart = isSelected ? t.bg("selectedBg", t.bold(padded)) : padded;
+        leftCell = isSelected
+          ? t.bg("selectedBg", t.bold(padded))
+          : t.fg("text", padded);
       }
 
-      // 2. Center divider
-      const divider = t.fg("dim", "│");
-
-      // 3. Right panel: Diff line with syntax colors
-      let rightPart = " ".repeat(rightW);
-      if (i < visibleDiff.length) {
-        const diffLine = visibleDiff[i]!;
-        let styled = diffLine;
-
-        if (diffLine.startsWith("+")) {
-          styled = t.fg("success", diffLine);
-        } else if (diffLine.startsWith("-")) {
-          styled = t.fg("error", diffLine);
-        } else if (diffLine.startsWith("@@")) {
-          styled = t.fg("accent", diffLine);
-        } else {
-          styled = t.fg("dim", diffLine);
-        }
-
-        const vLen = visibleWidth(styled);
-        const clipped = truncateToWidth(styled, rightW, "");
-        rightPart = vLen < rightW ? clipped + " ".repeat(rightW - visibleWidth(clipped)) : clipped;
+      // 2. Columna derecha: Líneas de Diff con syntax coloring
+      const diffLine = visibleDiff[i] ?? "";
+      let formattedDiff = diffLine;
+      if (diffLine.startsWith("+") && !diffLine.startsWith("+++")) {
+        formattedDiff = t.fg("success", diffLine);
+      } else if (diffLine.startsWith("-") && !diffLine.startsWith("---")) {
+        formattedDiff = t.fg("error", diffLine);
+      } else if (diffLine.startsWith("@@")) {
+        formattedDiff = t.fg("accent", diffLine);
+      } else {
+        formattedDiff = t.fg("dim", diffLine);
       }
 
-      lines.push(`${leftPart} ${divider} ${rightPart}`);
+      const rightCell = truncateToWidth(formattedDiff, rightW, "");
+      lines.push(`${leftCell}${t.fg("dim", " │ ")}${rightCell}`);
     }
 
     return lines.map((l) => truncateToWidth(l, safeW, ""));
   }
 
   handleInput(data: string): boolean {
+    // Alternar Worktrees con teclas 'w' o 'W'
+    if (data === "w") {
+      this.cycleWorktree(1);
+      return true;
+    }
+    if (data === "W") {
+      this.cycleWorktree(-1);
+      return true;
+    }
+
+    // Navegación en la lista de archivos
     if (matchesKey(data, Key.up)) {
       if (this.selectedIndex > 0) {
         this.selectedIndex--;
@@ -160,6 +216,7 @@ export class DcChangesPanel implements Component {
       }
       return true;
     }
+
     if (matchesKey(data, Key.down)) {
       if (this.selectedIndex < this.files.length - 1) {
         this.selectedIndex++;
@@ -169,14 +226,7 @@ export class DcChangesPanel implements Component {
       return true;
     }
 
-    // Diff scrolling
-    if (matchesKey(data, Key.pageUp)) {
-      if (this.diffScrollOffset > 0) {
-        this.diffScrollOffset = Math.max(0, this.diffScrollOffset - 10);
-        this.requestRender();
-      }
-      return true;
-    }
+    // Scroll vertical del Diff
     if (matchesKey(data, Key.pageDown)) {
       if (this.diffScrollOffset + 10 < this.currentDiff.length) {
         this.diffScrollOffset += 10;
@@ -185,52 +235,78 @@ export class DcChangesPanel implements Component {
       return true;
     }
 
-    // Refresh
+    if (matchesKey(data, Key.pageUp)) {
+      if (this.diffScrollOffset > 0) {
+        this.diffScrollOffset = Math.max(0, this.diffScrollOffset - 10);
+        this.requestRender();
+      }
+      return true;
+    }
+
+    // Abrir archivo en el editor externo
+    if (data === "o" || data === "O" || matchesKey(data, Key.enter)) {
+      const selected = this.getSelectedFile();
+      const wt = this.getActiveWorktree();
+      if (selected && this.onOpenEditor) {
+        this.onOpenEditor(selected.file, wt.path);
+        return true;
+      }
+    }
+
+    // Refrescar
     if (data === "r" || data === "R") {
       this.refresh();
       return true;
     }
 
-    // Open editor
-    if (matchesKey(data, Key.enter) || data === "o" || data === "O") {
-      const file = this.getSelectedFile();
-      if (file && this.onOpenEditor) {
-        this.onOpenEditor(file.file);
-        return true;
-      }
-    }
-
     return false;
   }
 
-  handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
-    // Click on file list
-    if (event.type === "click" && event.button === "left") {
-      if (event.x <= this.lastLeftW) {
-        const clickedRow = event.y;
-        if (clickedRow >= 0 && clickedRow < this.files.length) {
-          this.selectedIndex = clickedRow;
+  handleMouse(event: TuiMouseEvent): TuiMouseEventResult {
+    const { type, x = 0, y = 0 } = event;
+
+    if (type === "wheel") {
+      const delta = (event as any).wheelDelta ?? 0;
+      if (delta === 0) return { handled: false };
+
+      // Rueda en lista de archivos (columna izquierda)
+      if (x <= this.lastLeftW) {
+        if (delta > 0 && this.selectedIndex < this.files.length - 1) {
+          this.selectedIndex++;
           this.loadDiff();
           this.requestRender();
-          return { handled: true, render: true };
+        } else if (delta < 0 && this.selectedIndex > 0) {
+          this.selectedIndex--;
+          this.loadDiff();
+          this.requestRender();
         }
+        return { handled: true };
       }
-    }
 
-    // Wheel on diff panel
-    if (event.type === "wheel") {
-      const delta = event.wheelDelta ?? 0;
-      if (delta > 0 && this.diffScrollOffset + 5 < this.currentDiff.length) {
+      // Rueda en diff (columna derecha)
+      if (delta > 0 && this.diffScrollOffset + 3 < this.currentDiff.length) {
         this.diffScrollOffset += 3;
         this.requestRender();
-        return { handled: true, render: true };
       } else if (delta < 0 && this.diffScrollOffset > 0) {
         this.diffScrollOffset = Math.max(0, this.diffScrollOffset - 3);
         this.requestRender();
-        return { handled: true, render: true };
+      }
+      return { handled: true };
+    }
+
+    if (type === "click") {
+      // Si hay barra de worktrees ocupa las primeras 2 filas
+      const offsetHeader = this.worktrees.length > 1 ? 2 : 0;
+      const fileIndex = y - offsetHeader;
+
+      if (x <= this.lastLeftW && fileIndex >= 0 && fileIndex < this.files.length) {
+        this.selectedIndex = fileIndex;
+        this.loadDiff();
+        this.requestRender();
+        return { handled: true };
       }
     }
 
-    return undefined;
+    return { handled: false };
   }
 }

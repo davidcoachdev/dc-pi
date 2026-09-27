@@ -4,6 +4,8 @@ import { FRAME, RAIL_WIDTH, LAYOUT_NODE } from "../core/dc-sidebar-types.ts";
 import { coloredFrame, titleBarLine } from "./dc-sidebar-header.ts";
 import { createSidebarFooter } from "./dc-sidebar-footer.ts";
 import { createSidebarBody } from "./dc-sidebar-body.ts";
+import { openProfilePicker } from "../../dc-face/views/dc-profile-duel.ts";
+import { getSidebarContext } from "../dc-sidebar.ts";
 
 function railRows(tui: any): number {
   const rows = (tui?.terminal as { rows?: number })?.rows;
@@ -75,7 +77,18 @@ export function framedRail(tui: any, bodyComp?: Component, footerComp?: Componen
   const bottomLine = b(FRAME.bl + FRAME.h.repeat(total - 2) + FRAME.br);
 
   const body = getSidebarScrollView(tui);
-const footer = footerComp || createSidebarFooter(tui, total);
+  const footer = footerComp || createSidebarFooter(tui, total, {
+    onFaceClick: () => {
+      try {
+        const ctx = getSidebarContext();
+        if (ctx) {
+          void openProfilePicker(ctx);
+        }
+      } catch {
+        /* best-effort */
+      }
+    },
+  });
   const content = wrapVStack(body, footer);
 
   const middle: Component = {

@@ -43,13 +43,18 @@ export async function executeSlashCommand(
   const cmdName = cleanCmd.startsWith("/") ? cleanCmd.slice(1).split(/\s+/)[0]! : cleanCmd.split(/\s+/)[0]!;
   const cmdArgs = cleanCmd.includes(" ") ? cleanCmd.slice(cleanCmd.indexOf(" ") + 1) : "";
 
-  // 1. Intentar mediante la sesión activa de Pi (session.prompt("/command"))
+  const im = (globalThis as any)[G_INTERACTIVE];
+
+  // 1. Prioridad: Buscar el comando registrado en el extensionRunner activo
   try {
-    const im = (globalThis as any)[G_INTERACTIVE];
-    const session = im?.session || (ctx as any)?.session;
-    if (session && typeof session.prompt === "function") {
-      await session.prompt(cleanCmd.startsWith("/") ? cleanCmd : `/${cleanCmd}`);
-      return true;
+    const runner = (ctx as any)?.extensionRunner || im?.session?.extensionRunner || (ctx as any)?.session?.extensionRunner;
+    if (runner) {
+      const command = runner.getCommand?.(cmdName) || runner.getCommands?.()?.get?.(cmdName);
+      if (command && typeof command.handler === "function") {
+        const cmdCtx = runner.createCommandContext ? runner.createCommandContext() : ctx;
+        await command.handler(cmdArgs, cmdCtx);
+        return true;
+      }
     }
   } catch (e: any) {
     if (ctx) {
@@ -58,17 +63,12 @@ export async function executeSlashCommand(
     return false;
   }
 
-  // 2. Intentar buscando el comando en el extensionRunner activo
+  // 2. Si no es un comando de extensión registrado, intentar mediante la sesión activa de Pi (session.prompt("/command"))
   try {
-    const im = (globalThis as any)[G_INTERACTIVE];
-    const runner = im?.session?.extensionRunner || (ctx as any)?.session?.extensionRunner || (ctx as any)?.extensionRunner;
-    if (runner) {
-      const command = runner.getCommand?.(cmdName) || runner.getCommands?.()?.get?.(cmdName);
-      if (command && typeof command.handler === "function") {
-        const cmdCtx = runner.createCommandContext ? runner.createCommandContext() : ctx;
-        await command.handler(cmdArgs, cmdCtx);
-        return true;
-      }
+    const session = im?.session || (ctx as any)?.session;
+    if (session && typeof session.prompt === "function") {
+      await session.prompt(cleanCmd.startsWith("/") ? cleanCmd : `/${cleanCmd}`);
+      return true;
     }
   } catch (e: any) {
     if (ctx) {

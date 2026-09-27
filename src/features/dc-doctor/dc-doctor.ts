@@ -4,6 +4,7 @@ import {
   type DcDoctorOptions,
   runDoctorDiagnostic,
 } from "./dc-doctor-inspector.ts";
+import { runEnvironmentChecks } from "./dc-doctor-env.ts";
 
 /**
  * Extensión dc-doctor para Pi y DC Studio.
@@ -46,20 +47,29 @@ export default function dcDoctorExtension(
 
   // Comando único en inglés: /dc-doctor
   pi.registerCommand("dc-doctor", {
-    description: "Check if Pi and gentle-pi internal layout structure changed (post-update)",
+    description: "Check Pi & gentle-pi UI layout structure, Node version, Git status and GitHub CLI auth",
     handler: async (_args: string | undefined, ctx: ExtensionContext) => {
       if (!ctx.hasUI) return;
       const report = runDoctorDiagnostic(tuiRef, ctx, options);
+      const envChecks = runEnvironmentChecks(ctx.cwd);
+
+      const envSummary = envChecks
+        .map((c) => `${c.ok ? "✓" : "✗"} ${c.name}: ${c.message}`)
+        .join("  ·  ");
+
+      const hasEnvWarning = envChecks.some((c) => !c.ok);
+      const fullMessage = `${report.message.replace(/\n/g, "  ·  ")}  ·  ${envSummary}`;
+
       dcNotifier.notify(
         ctx,
         "DC Doctor",
-        report.message.replace(/\n/g, "  ·  "),
-        report.changed ? "warning" : "info",
+        fullMessage,
+        report.changed || hasEnvWarning ? "warning" : "info",
       );
       dcNotifier.notifyHerdr(
-        report.changed
-          ? "DC UI: estructura CAMBIÓ (ver /dc-doctor)"
-          : "DC UI: estructura OK",
+        report.changed || hasEnvWarning
+          ? "DC Doctor: advertencias en entorno o estructura"
+          : "DC Doctor: entorno y estructura OK",
       );
     },
   });

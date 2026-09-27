@@ -68,7 +68,7 @@ export async function openModelsSelector(
 
   // 2. Discover accounts / prefixes via CLIProxy
   const prefixEmails = await cliProxyClient.fetchPrefixEmails();
-  const tabs: ModelAccountTab[] = [{ id: "all", title: "Todos" }];
+  const tabs: ModelAccountTab[] = [];
 
   // Group prefixes found in model IDs
   const discoveredPrefixes = new Set<string>();
@@ -88,12 +88,27 @@ export async function openModelsSelector(
     });
   }
 
+  // Leer modelThinkingLevels de settings.json para pasarlos al panel
+  let configuredThinkingLevels: Record<string, string> = {};
+  try {
+    if (fs.existsSync(SETTINGS_FILE)) {
+      const raw = fs.readFileSync(SETTINGS_FILE, "utf8");
+      const parsed = JSON.parse(raw);
+      if (parsed.modelThinkingLevels && typeof parsed.modelThinkingLevels === "object") {
+        configuredThinkingLevels = parsed.modelThinkingLevels;
+      }
+    }
+  } catch {
+    /* ignore */
+  }
+
   let panelRef: DcModelsPanel | undefined;
 
   await openDcModal<void>(ctx, {
     title: () => panelRef?.isShowingInfo() ? "Dc Studio - Info del Modelo" : "Dc Studio - Modelos",
     glyph: "⛩ ",
     frame: "double",
+    paddingX: 0,
     width: "62%",
     maxHeight: "85%",
     footer: (theme) => ({
@@ -107,6 +122,7 @@ export async function openModelsSelector(
         tabs,
         currentModelId: options.currentModelId ?? ctx.model?.id,
         currentThinkingLevel: options.currentThinkingLevel,
+        modelThinkingLevels: configuredThinkingLevels,
         onApply: async (selectedModel: ModelItem, effort?: string) => {
           done();
           try {

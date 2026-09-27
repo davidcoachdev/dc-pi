@@ -34,9 +34,19 @@ export function createStatusCard(reqRender: () => void): Component {
     ? bloodBright(bold(proj.changesText)) 
     : dim("sin cambios");
 
+  // Soporte RDD / Review Authority de Gentle-Pi
+  const rddSnapshot = (globalThis as any)[Symbol.for("gentle-ai.review-sidebar.snapshot")];
+  const rddRows = rddSnapshot ? [
+    new DcJustifiedRow(
+      ` 🌹 ${bloodBright(bold("RDD"))}`,
+      `${bloodBright(rddSnapshot.state || "Active")} ${dim(rddSnapshot.scope ? `(${rddSnapshot.scope})` : "")} `
+    )
+  ] : [];
+
   const projectRows = [
     new DcJustifiedRow(` 📁 ${bloodBright(bold("Project"))}`, `${bloodWhite(proj.displayCwd)} `),
     new DcJustifiedRow(` 🗂️ ${bloodSoft("Branch")}`, `${bloodWhite(`» ${proj.branch}`)} `),
+    ...rddRows,
     new DcJustifiedRow(
       ` 📂 ${bloodBright(bold("Changes"))}`, 
       `${changesDisplay} ${bloodBright("[↗]")} `,
@@ -53,7 +63,7 @@ export function createStatusCard(reqRender: () => void): Component {
   const currentCwd = proj.displayCwd.startsWith("~")
     ? path.join(os.homedir(), proj.displayCwd.slice(1))
     : proj.displayCwd;
-  const projectName = path.basename(currentCwd) || "lab-cofig-pi";
+  const projectName = path.basename(currentCwd) || path.basename(process.cwd());
   const engramObs = getProjectObservations(5, projectName);
   const latestId = engramObs[0]?.id ? `#${engramObs[0].id}` : "#0";
   const isEnrolled = isProjectEnrolled(projectName);
@@ -170,6 +180,12 @@ export function createStatusCard(reqRender: () => void): Component {
     title: `🧮 ${bloodBright(bold("Quota:"))}`,
     collapsedInfo: bloodWhite(bold(primaryCollapsed)),
     titleRight: dim("[↗]"),
+    onTitleRightClick: () => {
+      const ctx = getSidebarContext();
+      if (ctx) {
+        void openQuotaViewer(ctx);
+      }
+    },
     expanded: false,
     children: [
       ...providerCollapsibles,
@@ -212,6 +228,10 @@ export function createStatusCard(reqRender: () => void): Component {
     title: `🎛️ ${bloodBright(bold("Profile:"))}`,
     collapsedInfo: bloodWhite(profilesInfo.activeProfile || "default"),
     titleRight: dim("[↗]"),
+    onTitleRightClick: () => {
+      const ctx = getSidebarContext();
+      void executeSlashCommand(ctx, "/gentle:profiles", "Perfiles");
+    },
     expanded: true,
     children: [
       ...profileRows,
@@ -253,6 +273,10 @@ export function createStatusCard(reqRender: () => void): Component {
     title: `🔌 ${bloodBright(bold("MCP:"))}`,
     collapsedInfo: bloodSoft(mcpCollapsedSummary),
     titleRight: dim("[↗]"),
+    onTitleRightClick: () => {
+      const ctx = getSidebarContext();
+      void executeSlashCommand(ctx, "/mcp", "MCP");
+    },
     expanded: true,
     children: [
       ...mcpRows,

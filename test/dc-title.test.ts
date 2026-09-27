@@ -5,8 +5,15 @@ import {
   isHerdr,
   isTmux,
   renameTab,
+  deriveProjectName,
 } from "../src/features/dc-title/dc-title-renamer.ts";
 import dcTitleExtension from "../src/features/dc-title/dc-title.ts";
+
+test("deriveProjectName extracts clean project or lab name from path", () => {
+  assert.equal(deriveProjectName("/home/dc-studio/dc-lab/dc-projects/dc-pi"), "dc-pi");
+  assert.equal(deriveProjectName("/home/dc-studio/dc-lab/lab-00"), "lab-00");
+  assert.equal(deriveProjectName("/home/dc-studio/dc-lab/lab-07-jocker-pi"), "lab-07-jocker-pi");
+});
 
 test("isHerdr and isTmux detect environment correctly", () => {
   assert.equal(isHerdr({}), false);
@@ -32,10 +39,11 @@ test("renameTab emits OSC 0 sequence to terminal", () => {
   assert.equal(emittedOsc, "\x1b]0;My-Project\x07");
 });
 
-test("renameTab calls herdr when HERDR_TAB_ID is present", () => {
+test("renameTab renames Herdr tab and workspace to project name", () => {
   const executed: Array<{ cmd: string; args: string[] }> = [];
-  const res = renameTab("Workspace", {
-    env: { HERDR_ENV: "1", HERDR_TAB_ID: "tab-99" },
+  const res = renameTab("⛩  Dc Studio", {
+    env: { HERDR_ENV: "1", HERDR_TAB_ID: "tab-99", HERDR_WORKSPACE_ID: "w82" },
+    cwd: "/home/dc-studio/dc-lab/dc-projects/dc-pi",
     execFn: (cmd, args) => {
       executed.push({ cmd, args });
     },
@@ -43,9 +51,12 @@ test("renameTab calls herdr when HERDR_TAB_ID is present", () => {
   });
 
   assert.equal(res.herdr, true);
-  assert.equal(executed.length, 1);
+  assert.equal(res.workspaceRenamed, true);
+  assert.equal(executed.length, 2);
   assert.equal(executed[0].cmd, "herdr");
-  assert.deepEqual(executed[0].args, ["tab", "rename", "tab-99", "Workspace"]);
+  assert.deepEqual(executed[0].args, ["tab", "rename", "tab-99", "⛩  Dc Studio"]);
+  assert.equal(executed[1].cmd, "herdr");
+  assert.deepEqual(executed[1].args, ["workspace", "rename", "w82", "dc-pi"]);
 });
 
 test("renameTab calls tmux when TMUX is present", () => {
@@ -86,6 +97,7 @@ test("dcTitleExtension registers only single command /dc-title and session_start
   let notified = "";
   const mockCtx = {
     hasUI: true,
+    cwd: "/home/dc-studio/dc-lab/dc-projects/dc-pi",
     ui: {
       notify(msg: string) {
         notified = msg;
@@ -95,5 +107,5 @@ test("dcTitleExtension registers only single command /dc-title and session_start
 
   const handler = commands.get("dc-title")!.handler;
   await handler("Coding", mockCtx);
-  assert.ok(notified.includes('Tab renamed to "Coding"'));
+  assert.ok(notified.includes('Renamed to "Coding"'));
 });
