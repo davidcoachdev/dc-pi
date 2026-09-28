@@ -1,5 +1,7 @@
 node_modules/
 .npm-cache/
 .test-build/
-# Local Pi runtime state
+# Local Pi & CodeGraph runtime state
 .atl/
+.codegraph/
+.pi/
