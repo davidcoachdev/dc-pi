@@ -233,3 +233,162 @@ test("DcModelsPanel clean model name removes account prefix", () => {
   const lines = panel.render(80);
   assert.ok(lines.some((l) => l.includes("Gemini 3.8 Flash High") && !l.includes("AC03 · Gemini")));
 });
+
+test("DcModelsPanel viewport autoscrolls long model lists (e.g. opencode) to keep active item and last item visible", () => {
+  const manyModels: ModelItem[] = Array.from({ length: 60 }, (_, i) => ({
+    id: `opencode/model-${String(i).padStart(2, "0")}`,
+    provider: "opencode",
+    name: `Opencode Model ${i}`,
+  }));
+
+  const panel = new DcModelsPanel({
+    theme: dummyTheme,
+    models: manyModels,
+    tabs: [{ id: "opencode", title: "OPENCODE" }],
+    maxRows: 15,
+    onApply: () => {},
+    onCancel: () => {},
+    requestRender: () => {},
+  });
+
+  // Initial state: cursor 0, offset 0
+  assert.equal(panel.getModelCursor(), 0);
+  assert.equal(panel.getModelScrollOffset(), 0);
+
+  let lines = panel.render(80);
+  // Header: searchLine (0) + border (1) + cols (2) + sep (3) = 4 lines. Body: 15 rows = 19 lines total.
+  assert.equal(lines.length, 19);
+  assert.ok(lines.some((l) => l.includes("Opencode Model 0")), "First item must be visible initially");
+  assert.ok(!lines.some((l) => l.includes("Opencode Model 59")), "Last item must not be rendered when at top");
+
+  // Navigate with Key.down past the initial viewport
+  for (let i = 0; i < 20; i++) {
+    panel.handleInput("\x1b[B"); // Key.down
+  }
+  assert.equal(panel.getModelCursor(), 20);
+  assert.ok(panel.getModelScrollOffset() > 0, "Viewport offset must scroll down automatically");
+
+  lines = panel.render(80);
+  assert.ok(lines.some((l) => l.includes("Opencode Model 20")), "Cursor item 20 must remain visible");
+
+  // Jump to the very end with Key.end
+  panel.handleInput("\x1b[F"); // Key.end
+  assert.equal(panel.getModelCursor(), 59, "Cursor must jump to last model");
+
+  lines = panel.render(80);
+  assert.ok(lines.some((l) => l.includes("Opencode Model 59")), "Last model (item 59) must be fully visible");
+  assert.equal(panel.getModelScrollOffset(), 45, "Scroll offset must be models.length - maxRows (60 - 15 = 45)");
+
+  // Verify headers remain pinned at lines 0..3
+  assert.ok(lines[2]?.includes("Cuentas") && lines[2]?.includes("OPENCODE"), "Column headers must remain at line 2");
+
+  // Jump back to top with Key.home
+  panel.handleInput("\x1b[H"); // Key.home
+  assert.equal(panel.getModelCursor(), 0);
+  assert.equal(panel.getModelScrollOffset(), 0);
+
+  lines = panel.render(80);
+  assert.ok(lines.some((l) => l.includes("Opencode Model 0")), "Item 0 visible after Home");
+
+  // PageDown advances by viewport size
+  panel.handleInput("\x1b[6~"); // Key.pageDown
+  assert.equal(panel.getModelCursor(), 15);
+  lines = panel.render(80);
+  assert.ok(lines.some((l) => l.includes("Opencode Model 15")));
+
+  // PageUp returns to 0
+  panel.handleInput("\x1b[5~"); // Key.pageUp
+  assert.equal(panel.getModelCursor(), 0);
+  assert.equal(panel.getModelScrollOffset(), 0);
+});
+
+test("DcModelsPanel renders retro scrollbar when models exceed viewport budget", () => {
+  const manyModels: ModelItem[] = Array.from({ length: 50 }, (_, i) => ({
+    id: `opencode/item-${i}`,
+    provider: "opencode",
+    name: `Item ${i}`,
+  }));
+
+  const panel = new DcModelsPanel({
+    theme: dummyTheme,
+    models: manyModels,
+    tabs: [{ id: "opencode", title: "OPENCODE" }],
+    maxRows: 14,
+    onApply: () => {},
+    onCancel: () => {},
+    requestRender: () => {},
+  });
+
+  // At top: bottom row has ▼ indicating more below
+  let lines = panel.render(80);
+  assert.ok(lines.some((l) => l.includes("▼")), "Must render down arrow indicator when items exceed viewport");
+
+  // Jump to middle
+  for (let i = 0; i < 25; i++) {
+    panel.handleInput("\x1b[B");
+  }
+  lines = panel.render(80);
+  assert.ok(lines.some((l) => l.includes("▲")), "Must render up arrow indicator when scrolled past top");
+  assert.ok(lines.some((l) => l.includes("▼")), "Must render down arrow indicator when more below");
+
+  // Jump to end
+  panel.handleInput("\x1b[F"); // End
+  lines = panel.render(80);
+  assert.ok(lines.some((l) => l.includes("▲")), "Must render up arrow indicator when at bottom");
+});
+
+test("DcModelsPanel mouse click and wheel work correctly with viewport scroll offset", () => {
+  const manyModels: ModelItem[] = Array.from({ length: 50 }, (_, i) => ({
+    id: `opencode/model-${i}`,
+    provider: "opencode",
+    name: `Model ${i}`,
+  }));
+
+  const panel = new DcModelsPanel({
+    theme: dummyTheme,
+    models: manyModels,
+    tabs: [{ id: "opencode", title: "OPENCODE" }],
+    maxRows: 15,
+    onApply: () => {},
+    onCancel: () => {},
+    requestRender: () => {},
+  });
+
+  panel.render(80);
+
+  // Jump to offset via End
+  panel.handleInput("\x1b[F"); // End
+  assert.equal(panel.getModelScrollOffset(), 35); // 50 - 15 = 35
+
+  // Click on visual row 2 of center column (header is 4 lines, so y = 4 + 2 = 6, x = 35)
+  panel.handleMouse({
+    type: "click",
+    button: "left",
+    x: 35,
+    y: 6,
+  } as unknown as TuiMouseEvent);
+
+  // Selected item should be modelScrollOffset + rowIdx = 35 + 2 = 37
+  assert.equal(panel.getModelCursor(), 37, "Click on row 2 with offset 35 must select item 37");
+  assert.equal(panel.getSelectedModel()?.id, "opencode/model-37");
+
+  // Mouse wheel up scrolls up by 3
+  panel.handleMouse({
+    type: "wheel",
+    wheelDelta: -1,
+    x: 35,
+    y: 6,
+  } as unknown as TuiMouseEvent);
+
+  assert.equal(panel.getModelCursor(), 34, "Mouse wheel up must rewind cursor by 3");
+
+  // Mouse wheel down scrolls down by 3
+  panel.handleMouse({
+    type: "wheel",
+    wheelDelta: 1,
+    x: 35,
+    y: 6,
+  } as unknown as TuiMouseEvent);
+
+  assert.equal(panel.getModelCursor(), 37, "Mouse wheel down must advance cursor by 3");
+});
