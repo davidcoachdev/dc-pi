@@ -140,3 +140,110 @@ export function getFileDiff(cwd: string, file: string): string[] {
   const startIdx = lines.findIndex((l) => l.startsWith("@@"));
   return startIdx >= 0 ? lines.slice(startIdx) : lines;
 }
+
+/** Retrieve git log with graph and structured delimiters. */
+export function getGitCommitGraph(cwd: string, limit: number = 300): string {
+  try {
+    return execFileSync(
+      "git",
+      [
+        "log",
+        "--graph",
+        "--all",
+        "--date=short",
+        "--pretty=format:COMMIT_REC:%H%x1f%h%x1f%d%x1f%s%x1f%an%x1f%ad",
+        "-n",
+        String(limit),
+      ],
+      {
+        cwd,
+        encoding: "utf8",
+        windowsHide: true,
+        timeout: 4000,
+        maxBuffer: 2 * 1024 * 1024,
+        stdio: ["ignore", "pipe", "pipe"],
+      },
+    );
+  } catch {
+    return "";
+  }
+}
+
+/** Retrieve commit detail with stat and diff patch, safely bounded. */
+export function getGitCommitDetail(cwd: string, commitHash: string, maxLines: number = 500): string[] {
+  if (!commitHash || !commitHash.trim()) {
+    return ["(no hay commit seleccionado)"];
+  }
+  try {
+    const raw = execFileSync(
+      "git",
+      ["show", "--stat", "-p", "--color=never", commitHash.trim()],
+      {
+        cwd,
+        encoding: "utf8",
+        windowsHide: true,
+        timeout: 4000,
+        maxBuffer: 2 * 1024 * 1024,
+        stdio: ["ignore", "pipe", "pipe"],
+      },
+    );
+    const lines = raw.split("\n");
+    if (lines.length > maxLines) {
+      return [
+        ...lines.slice(0, maxLines),
+        "",
+        `[... diff truncado: mostrando ${maxLines} de ${lines.length} líneas ...]`,
+      ];
+    }
+    return lines;
+  } catch (err: any) {
+    return [`(error al obtener detalles del commit: ${err?.message || "comando falló"})`];
+  }
+}
+
+/** Retrieve HEAD commit hash safely. */
+export function getGitHeadHash(cwd: string): string | undefined {
+  try {
+    const out = execFileSync("git", ["rev-parse", "HEAD"], {
+      cwd,
+      encoding: "utf8",
+      windowsHide: true,
+      timeout: 3000,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    return out.trim() || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Retrieve current git branch name or detached state safely. */
+export function getGitCurrentBranch(cwd: string): string {
+  try {
+    const branch = execFileSync("git", ["branch", "--show-current"], {
+      cwd,
+      encoding: "utf8",
+      windowsHide: true,
+      timeout: 3000,
+      stdio: ["ignore", "pipe", "pipe"],
+    }).trim();
+    if (branch) return branch;
+  } catch {
+    // fallback
+  }
+
+  try {
+    const head = execFileSync("git", ["rev-parse", "--short", "HEAD"], {
+      cwd,
+      encoding: "utf8",
+      windowsHide: true,
+      timeout: 3000,
+      stdio: ["ignore", "pipe", "pipe"],
+    }).trim();
+    if (head) return `detached (${head})`;
+  } catch {
+    // empty repo
+  }
+
+  return "sin rama";
+}
