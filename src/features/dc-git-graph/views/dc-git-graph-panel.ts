@@ -29,9 +29,9 @@ function formatCommitGraphPrefix(
   kind: GitGraphCommitKind,
   t: Pick<Theme, "fg" | "bg" | "bold">,
 ): string {
-  let styledNode = t.fg("text", "*");
+  let styledNode = t.fg("text", "●");
   if (kind === "head") {
-    styledNode = t.bold(t.fg("accent", "*"));
+    styledNode = t.bold(t.fg("accent", "●"));
   } else if (kind === "merge") {
     styledNode = t.bold(t.fg("warning", "M"));
   } else if (kind === "remote-tip") {
@@ -47,8 +47,14 @@ function formatCommitGraphPrefix(
     if (ch === "*" && !replaced) {
       res += styledNode;
       replaced = true;
-    } else if (ch === "|" || ch === "/" || ch === "\\" || ch === "_") {
-      res += t.fg("dim", ch);
+    } else if (ch === "|") {
+      res += t.fg("dim", "│");
+    } else if (ch === "\\") {
+      res += t.fg("dim", "╲");
+    } else if (ch === "/") {
+      res += t.fg("dim", "╱");
+    } else if (ch === "_") {
+      res += t.fg("dim", "─");
     } else {
       res += ch;
     }
@@ -348,8 +354,14 @@ export class DcGitGraphPanel implements Component {
           let styledConn = "";
           for (let j = 0; j < row.graphText.length; j++) {
             const ch = row.graphText[j]!;
-            if (ch === "|" || ch === "/" || ch === "\\" || ch === "_") {
-              styledConn += t.fg("dim", ch);
+            if (ch === "|") {
+              styledConn += t.fg("dim", "│");
+            } else if (ch === "\\") {
+              styledConn += t.fg("dim", "╲");
+            } else if (ch === "/") {
+              styledConn += t.fg("dim", "╱");
+            } else if (ch === "_") {
+              styledConn += t.fg("dim", "─");
             } else {
               styledConn += ch;
             }
