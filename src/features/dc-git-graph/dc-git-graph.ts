@@ -15,8 +15,8 @@ export async function openGitGraphViewer(ctx: ExtensionContext, cwd?: string): P
     glyph: "⛩ ",
     frame: "double",
     paddingX: 0,
-    width: "85%",
-    maxHeight: "85%",
+    width: "96%",
+    maxHeight: "92%",
     footer: (theme) => ({
       left: theme.fg("accent", footerLeft),
       right: `${theme.fg("accent", "[ Git Graph ]")}  `,
