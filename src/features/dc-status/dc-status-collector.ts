@@ -7,6 +7,7 @@ export interface EnvStatus {
   gitStatus: string;
   cwd: string;
   modelId?: string;
+  modelProvider?: string;
   thinkingLevel?: string;
   mcpServers: Array<{ name: string; toolsCount?: number }>;
   packages: string[];
@@ -58,6 +59,7 @@ export async function collectEnvStatus(
   const git = await getGitInfo(cwd);
 
   const modelId = ctx.model?.id;
+  const modelProvider = ctx.model?.provider ? String(ctx.model.provider) : undefined;
   const thinkingLevel = (pi as any).getThinkingLevel?.() ?? undefined;
 
   // Retrieve registered tools and commands
@@ -111,6 +113,7 @@ export async function collectEnvStatus(
     gitStatus: git.status,
     cwd,
     modelId,
+    modelProvider,
     thinkingLevel,
     mcpServers: [],
     packages: ["dc-pi"],

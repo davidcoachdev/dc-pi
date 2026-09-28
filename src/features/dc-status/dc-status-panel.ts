@@ -121,6 +121,9 @@ export class DcStatusPanel implements Component {
       addRow("Directorio (CWD):", t.fg("text", this.status.cwd));
       addRow("Rama Git:", `${t.bold(t.fg("accent", this.status.gitBranch))} ${t.fg("dim", `(${this.status.gitStatus})`)}`);
       addRow("Modelo activo:", this.status.modelId ? t.bold(t.fg("accent", this.status.modelId)) : t.fg("dim", "Ninguno"));
+      if (this.status.modelProvider) {
+        addRow("Provider / Cuenta:", t.bold(t.fg("accent", this.status.modelProvider.toUpperCase())));
+      }
       if (this.status.thinkingLevel) {
         addRow("Reasoning / Effort:", t.bold(t.fg("accent", `[🧠 ${this.status.thinkingLevel}]`)));
       }
