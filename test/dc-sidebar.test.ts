@@ -1,7 +1,8 @@
-import { getProjectInfo } from "../src/features/dc-sidebar/providers/dc-project-provider.ts";
 import test from "node:test";
 import assert from "node:assert/strict";
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
+import { getProjectInfo } from "../src/features/dc-sidebar/providers/dc-project-provider.ts";
+import { createStatusCard } from "../src/features/dc-sidebar/components/dc-sidebar-status-card.ts";
 import { LAYOUT_NODE } from "../src/features/dc-sidebar/core/dc-sidebar-types.ts";
 import { createSidebarHeader } from "../src/features/dc-sidebar/views/dc-sidebar-header.ts";
 import { createSidebarFooter } from "../src/features/dc-sidebar/views/dc-sidebar-footer.ts";
@@ -237,4 +238,84 @@ test("Alt+Shift+B blocks opening and shows warning when terminal width < 140 wit
 
   // Reset to defaults
   writeSidebarPrefs({ hidden: false, minWidth: DEFAULT_SIDEBAR_BREAKPOINT });
+});
+
+test("Status sidebar Project row wires click handler to open Yazi preview in project root", async () => {
+  const dummyTheme: Pick<Theme, "fg" | "bg" | "bold"> = {
+    fg: (_color: string, text: string) => text,
+    bg: (_color: string, text: string) => text,
+    bold: (text: string) => text,
+  };
+
+  const captured: { modalTitle?: string; modalRendered?: string } = {};
+  let customCalls = 0;
+  const mockCtx = {
+    hasUI: true,
+    mode: "tui",
+    cwd: "/fallback/cwd",
+    ui: {
+      custom: async (factory: any) => {
+        customCalls++;
+        const mockTui = {
+          requestRender() {},
+          terminal: { rows: 40, columns: 80 },
+        };
+        const done = (_val?: any) => {};
+        const windowComp = factory(mockTui, dummyTheme as Theme, {}, done);
+        const rendered = windowComp.render?.(60)?.join("\n") || "";
+        captured.modalTitle = rendered;
+        captured.modalRendered = rendered;
+        done(undefined);
+        return undefined; // user cancels
+      },
+      notify: () => {},
+    },
+  } as unknown as ExtensionContext;
+
+  (globalThis as any)[Symbol.for("dc.sidebar.ctx")] = mockCtx;
+
+  const card = createStatusCard(() => {});
+  const cardContent = (card as any).options.content;
+  const projectRow = cardContent.children[0];
+
+  assert.ok(projectRow, "Project row must exist in Status card");
+  assert.equal(typeof projectRow.onClick, "function", "Project row must have an onClick handler");
+
+  await projectRow.onClick();
+
+  assert.equal(customCalls, 1, "Clicking Project row must open direction modal via Preview flow");
+  assert.ok(captured.modalTitle?.includes("yazi"), "Modal must be for Yazi preview");
+  assert.ok(captured.modalRendered?.includes("derecha"), "Modal must directly ask placement choice");
+  assert.ok(captured.modalRendered?.includes("Abajo"), "Modal must directly ask placement choice");
+  assert.ok(!captured.modalRendered?.includes("fzf"), "Modal must not ask for tool selection");
+});
+
+test("Branch row in Status card has onClick handler that opens Git graph modal", async () => {
+  let customCalls = 0;
+
+  const mockCtx = {
+    hasUI: true,
+    mode: "tui",
+    cwd: "/fake/repo",
+    ui: {
+      custom: async () => {
+        customCalls++;
+        return undefined;
+      },
+      notify: () => {},
+    },
+  } as unknown as ExtensionContext;
+
+  (globalThis as any)[Symbol.for("dc.sidebar.ctx")] = mockCtx;
+
+  const card = createStatusCard(() => {});
+  const cardContent = (card as any).options.content;
+  const branchRow = cardContent.children[1];
+
+  assert.ok(branchRow, "Branch row must exist in Status card");
+  assert.equal(typeof branchRow.onClick, "function", "Branch row must have an onClick handler");
+
+  await branchRow.onClick();
+
+  assert.equal(customCalls, 1, "Clicking Branch row must trigger Git graph modal");
 });

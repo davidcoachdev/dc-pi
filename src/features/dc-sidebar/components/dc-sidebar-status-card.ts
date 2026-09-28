@@ -1,4 +1,4 @@
-import type { Component } from "@earendil-works/pi-tui";
+import type { Component, TuiMouseEvent, TuiMouseEventResult } from "@earendil-works/pi-tui";
 import * as os from "node:os";
 import * as path from "node:path";
 import { DcSidebarCard } from "../../../ui/dc-sidebar-card.ts";
@@ -14,6 +14,8 @@ import { readProfilesInfo, switchActiveProfile } from "../providers/dc-profile-p
 import { getMcpServersInfo } from "../providers/dc-mcp-provider.ts";
 import { executeSlashCommand } from "../../../core/dc-command-executor.ts";
 import { openChangesViewer } from "../../dc-changes/dc-changes.ts";
+import { openGitGraphViewer } from "../../dc-git-graph/index.ts";
+import { openPreviewDirectionMenu } from "../../dc-preview/index.ts";
 import { openQuotaViewer } from "../../dc-quota/dc-quota.ts";
 import { openEngramExplorer, openEngramEnrollModal, openProjectDashboard } from "../../dc-engram/dc-engram.ts";
 import { dcNotifier } from "../../../integrations/dc-notify/dc-notifier.ts";
@@ -44,8 +46,26 @@ export function createStatusCard(reqRender: () => void): Component {
   ] : [];
 
   const projectRows = [
-    new DcJustifiedRow(` 📁 ${bloodBright(bold("Project"))}`, `${bloodWhite(proj.displayCwd)} `),
-    new DcJustifiedRow(` 🗂️ ${bloodSoft("Branch")}`, `${bloodWhite(`» ${proj.branch}`)} `),
+    new DcJustifiedRow(
+      ` 📁 ${bloodBright(bold("Project"))}`,
+      `${bloodWhite(proj.displayCwd)} `,
+      () => {
+        const ctx = getSidebarContext();
+        if (ctx) {
+          void openPreviewDirectionMenu(ctx, "yazi", proj.cwd);
+        }
+      },
+    ),
+    new DcJustifiedRow(
+      ` 🗂️ ${bloodSoft("Branch")}`,
+      `${bloodWhite(`» ${proj.branch}`)} `,
+      () => {
+        const ctx = getSidebarContext();
+        if (ctx) {
+          void openGitGraphViewer(ctx, proj.cwd);
+        }
+      },
+    ),
     ...rddRows,
     new DcJustifiedRow(
       ` 📂 ${bloodBright(bold("Changes"))}`, 
@@ -139,46 +159,107 @@ export function createStatusCard(reqRender: () => void): Component {
   });
 
   // --- Bloque 3: Quota (Conectado al bridge :8325) ---
-  const quotaAccounts = getCachedAccountQuotas(reqRender);
-  const providerCollapsibles = quotaAccounts.map((acc, idx) => {
-    const childrenRows: DcJustifiedRow[] = [];
-    let summary5h = "";
-    let summaryWeek = "";
+  type QuotaAccount = ReturnType<typeof getCachedAccountQuotas>[number];
+  const createQuotaRows = (initial: QuotaAccount, collapsed: boolean) => {
+    let account = initial;
+    return {
+      setAccount(next: QuotaAccount) {
+        account = next;
+      },
+      render(width: number) {
+        if (collapsed) {
+          const available = account.entries
+            .filter((entry) => typeof entry?.pctLeft === "number")
+            .map((entry) => `${entry.pctLeft}%`);
+          const summaryText = available.length > 0 ? available.join("/") : "100%";
+          const collapsedRestante = `${bloodBright("▰▰▱▱▱▱▱▱")} ${bloodWhite(summaryText)} `;
+          return new DcVStack([
+            new DcJustifiedRow(`      ${bloodSoft("Restante")}`, collapsedRestante),
+          ]).render(width);
+        }
 
-    for (const entry of acc.entries) {
-      const bar = renderProgressBar(entry.pctLeft, 8, "▰", "▱", bloodBrightAnsi);
-      const resetLabel = entry.resetStr ? ` ${dim("(" + entry.resetStr + ")")}` : "";
-      childrenRows.push(
-        new DcJustifiedRow(
-          `      ${bloodSoft(entry.label + ":")}`,
-          `${bar} ${bloodWhite(entry.pctLeft + "%")}${resetLabel} `
-        )
-      );
-      if (entry.label === "5h") summary5h = `${entry.pctLeft}%`;
-      if (entry.label === "Sem") summaryWeek = `${entry.pctLeft}%`;
+        return new DcVStack(account.entries.map((entry) => {
+          const isFallback = entry.pctLeft === 100 && entry.pctUsed === 0 && !entry.resetStr;
+          const barColor = isFallback ? "\x1b[38;2;100;100;100m" : bloodBrightAnsi;
+          const bar = renderProgressBar(entry.pctLeft, 8, "▰", "▱", barColor);
+          const valueStr = `${entry.pctLeft}%`;
+          return new DcJustifiedRow(
+            `      ${bloodSoft(entry.label + ":")}`,
+            `${bar} ${bloodWhite(valueStr)} `
+          );
+        })).render(width);
+      },
+      invalidate() {},
+    };
+  };
+
+  class QuotaProviderList implements Component {
+    public children: DcCollapsible[] = [];
+    private stack = new DcVStack([]);
+    private providers = new Map<string, {
+      collapsible: DcCollapsible;
+      rows: ReturnType<typeof createQuotaRows>;
+      summary: ReturnType<typeof createQuotaRows>;
+    }>();
+
+    update(accounts: QuotaAccount[]) {
+      this.children = accounts.map((account, idx) => {
+        let provider = this.providers.get(account.prefix);
+        if (!provider) {
+          const rows = createQuotaRows(account, false);
+          const summary = createQuotaRows(account, true);
+          provider = {
+            rows,
+            summary,
+            collapsible: new DcCollapsible({
+              title: `   🎚️ ${bloodWhite(bold(account.prefix))} ${bloodSoft("(" + account.family + ")")}`,
+              titleRight: "5h / semanal",
+              expanded: idx === 0,
+              children: [rows],
+              collapsedChildren: [summary],
+              requestRender: reqRender,
+            }),
+          };
+          this.providers.set(account.prefix, provider);
+        }
+        provider.rows.setAccount(account);
+        provider.summary.setAccount(account);
+        provider.collapsible.options.title = `   🎚️ ${bloodWhite(bold(account.prefix))} ${bloodSoft("(" + account.family + ")")}`;
+        return provider.collapsible;
+      });
+      this.stack.children = this.children;
     }
 
-    const collapsedRestante = summary5h && summaryWeek
-      ? `${bloodBright("▰▰▱▱▱▱▱▱")} ${bloodWhite(summary5h)} ${bloodSoft("sem")} ${bloodWhite(summaryWeek)} `
-      : `${bloodBright("▰▰▱▱▱▱▱▱")} ${bloodWhite(summary5h || summaryWeek || "100%")} `;
+    render(width: number) {
+      return this.stack.render(width);
+    }
 
-    return new DcCollapsible({
-      title: `   🎚️ ${bloodWhite(bold(acc.prefix))} ${bloodSoft("(" + acc.family + ")")}`,
-      titleRight: "5h / semanal",
-      expanded: idx === 0,
-      children: childrenRows,
-      collapsedChildren: [
-        new DcJustifiedRow(`      ${bloodSoft("Restante")}`, collapsedRestante)
-      ],
-      requestRender: reqRender
-    });
-  });
+    handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
+      return this.stack.handleMouse(event);
+    }
 
-  const primaryCollapsed = quotaAccounts[0]?.collapsedSummary ?? "ac06-100%-100%";
+    invalidate() {
+      this.stack.invalidate();
+    }
+  }
 
-  const quotaCollapsible = new DcCollapsible({
+  const quotaAccounts = getCachedAccountQuotas(reqRender);
+  const providerList = new QuotaProviderList();
+  providerList.update(quotaAccounts);
+
+  class LiveQuotaCollapsible extends DcCollapsible {
+    render(width: number) {
+      const latestAccounts = getCachedAccountQuotas(reqRender);
+      providerList.update(latestAccounts);
+      const primaryCollapsed = latestAccounts[0]?.collapsedSummary ?? "ac06-100%-100%";
+      this.options.collapsedInfo = bloodWhite(bold(primaryCollapsed));
+      return super.render(width);
+    }
+  }
+
+  const quotaCollapsible = new LiveQuotaCollapsible({
     title: `🧮 ${bloodBright(bold("Quota:"))}`,
-    collapsedInfo: bloodWhite(bold(primaryCollapsed)),
+    collapsedInfo: bloodWhite(bold(quotaAccounts[0]?.collapsedSummary ?? "ac06-100%-100%")),
     titleRight: dim("[↗]"),
     onTitleRightClick: () => {
       const ctx = getSidebarContext();
@@ -188,7 +269,7 @@ export function createStatusCard(reqRender: () => void): Component {
     },
     expanded: false,
     children: [
-      ...providerCollapsibles,
+      providerList,
       new DcJustifiedRow(
         `    ⚙️ ${dim("Gestor /quota")}`, 
         `${dim("[abrir ↗]")} `,
