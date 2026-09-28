@@ -1,4 +1,4 @@
-import type { GitGraphCommit, GitGraphData, GitGraphRow } from "./dc-git-graph-types.ts";
+import type { GitGraphCommit, GitGraphCommitKind, GitGraphData, GitGraphRow, GitGraphWorkingTreeStatus } from "./dc-git-graph-types.ts";
 
 export const COMMIT_REC_MARKER = "COMMIT_REC:";
 
@@ -7,6 +7,7 @@ export function parseGitGraph(
   rawOutput: string,
   headCommitHash?: string,
   currentBranch?: string,
+  workingTreeStatus?: GitGraphWorkingTreeStatus,
 ): GitGraphData {
   if (!rawOutput || !rawOutput.trim()) {
     return {
@@ -14,6 +15,7 @@ export function parseGitGraph(
       commits: [],
       headCommitHash,
       currentBranch,
+      workingTreeStatus,
     };
   }
 
@@ -49,6 +51,23 @@ export function parseGitGraph(
       ? hash === headCommitHash || shortHash === headCommitHash
       : rawRefs.includes("HEAD");
 
+    const isMerge =
+      subject.toLowerCase().startsWith("merge ") ||
+      subject.toLowerCase().startsWith("merge pull request");
+
+    const isRemoteTip =
+      !isHead &&
+      refs.some((r) => r.startsWith("origin/") || (r.includes("/") && !r.startsWith("HEAD")));
+
+    let commitKind: GitGraphCommitKind = "commit";
+    if (isHead) {
+      commitKind = "head";
+    } else if (isMerge) {
+      commitKind = "merge";
+    } else if (isRemoteTip) {
+      commitKind = "remote-tip";
+    }
+
     const commit: GitGraphCommit = {
       hash,
       shortHash,
@@ -58,6 +77,9 @@ export function parseGitGraph(
       author,
       date,
       isHead,
+      isMerge,
+      isRemoteTip,
+      commitKind,
       graphPrefix,
     };
 
@@ -77,6 +99,7 @@ export function parseGitGraph(
     commits,
     headCommitHash: resolvedHead,
     currentBranch,
+    workingTreeStatus,
   };
 }
 
