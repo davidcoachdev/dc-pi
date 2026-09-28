@@ -20,6 +20,8 @@ export {
 
 export {
   openPreviewModal,
+  openPreviewDirectionMenu,
+  openToolPreview,
   showTaskManagerSetup,
   default as dcPreviewExtension,
 } from "./dc-preview.ts";
