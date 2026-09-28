@@ -50,6 +50,7 @@ export interface DcModelsPanelOptions {
   currentModelId?: string;
   currentThinkingLevel?: string;
   modelThinkingLevels?: Record<string, string>;
+  maxRows?: number | (() => number);
   onApply: (model: ModelItem, thinkingLevel?: string) => void;
   onCancel: () => void;
   requestRender: () => void;
@@ -65,6 +66,10 @@ export class DcModelsPanel implements Component {
   private tabCursor = 0;
   private modelCursor = 0;
   private effortCursor = 0;
+  private modelScrollOffset = 0;
+  private tabScrollOffset = 0;
+  private maxRowsOption?: number | (() => number);
+  private lastRowCount = 16;
   private searchInput: DcSearchInput;
   private showingInfo = false;
   private pendingThinking = new Map<string, string>();
@@ -83,6 +88,7 @@ export class DcModelsPanel implements Component {
     this.currentModelId = options.currentModelId;
     this.currentThinkingLevel = options.currentThinkingLevel;
     this.initialThinkingLevels = options.modelThinkingLevels ?? {};
+    this.maxRowsOption = options.maxRows;
     this.onApply = options.onApply;
     this.onCancel = options.onCancel;
     this.requestRender = options.requestRender;
@@ -267,6 +273,63 @@ export class DcModelsPanel implements Component {
     return levels[this.effortCursor] ?? levels[0] ?? "off";
   }
 
+  public getModelScrollOffset(): number {
+    return this.modelScrollOffset;
+  }
+
+  public getTabScrollOffset(): number {
+    return this.tabScrollOffset;
+  }
+
+  public getModelCursor(): number {
+    return this.modelCursor;
+  }
+
+  public getMaxRows(): number {
+    if (typeof this.maxRowsOption === "function") {
+      return Math.max(8, this.maxRowsOption());
+    }
+    if (typeof this.maxRowsOption === "number") {
+      return Math.max(8, this.maxRowsOption);
+    }
+    const termRows = process.stdout?.rows ?? 40;
+    return Math.max(10, Math.min(26, Math.floor(termRows * 0.85) - 10));
+  }
+
+  private ensureModelCursorVisible(visibleRowCount: number): void {
+    const models = this.getFilteredModels();
+    if (models.length === 0) {
+      this.modelCursor = 0;
+      this.modelScrollOffset = 0;
+      return;
+    }
+    this.modelCursor = Math.max(0, Math.min(models.length - 1, this.modelCursor));
+    const maxScroll = Math.max(0, models.length - visibleRowCount);
+    if (this.modelCursor < this.modelScrollOffset) {
+      this.modelScrollOffset = this.modelCursor;
+    } else if (this.modelCursor >= this.modelScrollOffset + visibleRowCount) {
+      this.modelScrollOffset = this.modelCursor - visibleRowCount + 1;
+    }
+    this.modelScrollOffset = Math.max(0, Math.min(maxScroll, this.modelScrollOffset));
+  }
+
+  private ensureTabCursorVisible(visibleRowCount: number): void {
+    const visibleTabs = this.getFilteredTabs();
+    if (visibleTabs.length === 0) {
+      this.tabCursor = 0;
+      this.tabScrollOffset = 0;
+      return;
+    }
+    this.tabCursor = Math.max(0, Math.min(visibleTabs.length - 1, this.tabCursor));
+    const maxScroll = Math.max(0, visibleTabs.length - visibleRowCount);
+    if (this.tabCursor < this.tabScrollOffset) {
+      this.tabScrollOffset = this.tabCursor;
+    } else if (this.tabCursor >= this.tabScrollOffset + visibleRowCount) {
+      this.tabScrollOffset = this.tabCursor - visibleRowCount + 1;
+    }
+    this.tabScrollOffset = Math.max(0, Math.min(maxScroll, this.tabScrollOffset));
+  }
+
   isShowingInfo(): boolean {
     return this.showingInfo;
   }
@@ -371,22 +434,32 @@ export class DcModelsPanel implements Component {
     this.lastLeftW = leftW;
     this.lastCenterW = centerW;
 
+    const maxRows = this.getMaxRows();
     const currentTab = this.tabs.find((x) => x.id === this.activeTabId) ?? this.tabs[0]!;
     const visibleTabs = this.getFilteredTabs();
-    const tabsCount = `${visibleTabs.length > 0 ? this.tabCursor + 1 : 0}/${visibleTabs.length}`;
-    const head1 = " " + (this.focus === "tabs" ? t.bold(t.fg("accent", "› Cuentas")) : t.fg("dim", "  Cuentas")) + t.fg("dim", ` ${tabsCount}`);
-
     const models = this.getFilteredModels();
     if (this.modelCursor >= models.length) {
       this.modelCursor = Math.max(0, models.length - 1);
     }
+    const selectedModel = this.getSelectedModel();
+    const currentLevels = this.getEffortLevels(selectedModel);
+
+    // Cantidad de filas visibles delimitadas por maxRows
+    const contentMax = Math.max(visibleTabs.length, Math.max(models.length, currentLevels.length));
+    const rowCount = Math.max(12, Math.min(maxRows, contentMax));
+    this.lastRowCount = rowCount;
+
+    // Autoscroll para asegurar que los cursores estén dentro del viewport
+    this.ensureTabCursorVisible(rowCount);
+    this.ensureModelCursorVisible(rowCount);
+
+    const tabsCount = `${visibleTabs.length > 0 ? this.tabCursor + 1 : 0}/${visibleTabs.length}`;
+    const head1 = " " + (this.focus === "tabs" ? t.bold(t.fg("accent", "› Cuentas")) : t.fg("dim", "  Cuentas")) + t.fg("dim", ` ${tabsCount}`);
+
     const modelsCount = `${models.length > 0 ? this.modelCursor + 1 : 0}/${models.length}`;
     const head2 = " " + (this.focus === "models"
       ? t.bold(t.fg("accent", `› ${currentTab.title}`))
       : t.fg("dim", `  ${currentTab.title}`)) + t.fg("dim", ` ${modelsCount}`);
-
-    const selectedModel = this.getSelectedModel();
-    const currentLevels = this.getEffortLevels(selectedModel);
 
     const head3 = " " + (this.focus === "effort"
       ? t.bold(t.fg("accent", "› Effort / Thinking"))
@@ -418,32 +491,68 @@ export class DcModelsPanel implements Component {
       truncateToWidth(subSep, safeW, ""),
     ];
 
-    const rowCount = Math.max(12, Math.max(visibleTabs.length, Math.max(models.length, currentLevels.length)));
-
     for (let i = 0; i < rowCount; i++) {
       // 1. Columna Cuentas (Filtradas dinámicamente si el foco está en tabs)
+      let tabScrollChar = "";
+      if (visibleTabs.length > rowCount) {
+        if (i === 0) {
+          tabScrollChar = this.tabScrollOffset > 0 ? t.fg("accent", "▲") : t.fg("dim", "─");
+        } else if (i === rowCount - 1) {
+          const hasMore = this.tabScrollOffset + rowCount < visibleTabs.length;
+          tabScrollChar = hasMore ? t.fg("accent", "▼") : t.fg("dim", "─");
+        } else {
+          const maxScroll = visibleTabs.length - rowCount;
+          const trackHeight = rowCount - 2;
+          const thumbRow = Math.min(trackHeight - 1, Math.round((this.tabScrollOffset / maxScroll) * (trackHeight - 1)));
+          const isThumb = (i - 1) === thumbRow;
+          tabScrollChar = isThumb ? t.fg("accent", "█") : t.fg("dim", "░");
+        }
+      }
+      const tabCellW = visibleTabs.length > rowCount ? leftW - 1 : leftW;
+
       let leftCell = " ".repeat(leftW);
-      if (i < visibleTabs.length) {
-        const tab = visibleTabs[i]!;
-        const isSelectedTab = i === this.tabCursor;
+      const tabIdx = this.tabScrollOffset + i;
+      if (tabIdx < visibleTabs.length) {
+        const tab = visibleTabs[tabIdx]!;
+        const isSelectedTab = tabIdx === this.tabCursor;
         const mark = isSelectedTab ? t.fg("accent", "●") : t.fg("dim", "○");
         const titleText = tab.email ? `[${tab.title} - ${tab.email}]` : `[${tab.title}]`;
-        const raw = ` ${mark} ${truncateToWidth(titleText, leftW - 4, "", true)}`;
+        const raw = ` ${mark} ${truncateToWidth(titleText, tabCellW - 4, "", true)}`;
         const vLen = visibleWidth(raw);
-        const padded = vLen < leftW ? raw + " ".repeat(leftW - vLen) : raw;
+        const padded = vLen < tabCellW ? raw + " ".repeat(tabCellW - vLen) : raw;
 
-        leftCell = isSelectedTab
+        leftCell = (isSelectedTab
           ? t.bg("selectedBg", t.bold(padded))
-          : t.fg("text", padded);
+          : t.fg("text", padded)) + tabScrollChar;
       } else if (visibleTabs.length === 0 && i === 0) {
         leftCell = truncateToWidth(`   ${t.fg("dim", "(no hay cuentas)")}`, leftW, "");
+      } else if (visibleTabs.length > rowCount) {
+        leftCell = " ".repeat(tabCellW) + tabScrollChar;
       }
 
-      // 2. Columna Modelos (Nombre limpio sin prefijo)
+      // 2. Columna Modelos (Nombre limpio sin prefijo con retro scrollbar)
+      let modelScrollChar = "";
+      if (models.length > rowCount) {
+        if (i === 0) {
+          modelScrollChar = this.modelScrollOffset > 0 ? t.fg("accent", "▲") : t.fg("dim", "─");
+        } else if (i === rowCount - 1) {
+          const hasMore = this.modelScrollOffset + rowCount < models.length;
+          modelScrollChar = hasMore ? t.fg("accent", "▼") : t.fg("dim", "─");
+        } else {
+          const maxScroll = models.length - rowCount;
+          const trackHeight = rowCount - 2;
+          const thumbRow = Math.min(trackHeight - 1, Math.round((this.modelScrollOffset / maxScroll) * (trackHeight - 1)));
+          const isThumb = (i - 1) === thumbRow;
+          modelScrollChar = isThumb ? t.fg("accent", "█") : t.fg("dim", "░");
+        }
+      }
+      const modelCellW = models.length > rowCount ? centerW - 1 : centerW;
+
       let centerCell = " ".repeat(centerW);
-      if (i < models.length) {
-        const m = models[i]!;
-        const isSelectedModel = i === this.modelCursor;
+      const modelIdx = this.modelScrollOffset + i;
+      if (modelIdx < models.length) {
+        const m = models[modelIdx]!;
+        const isSelectedModel = modelIdx === this.modelCursor;
         const isCurrent = m.id === this.currentModelId;
         const isFocused = isSelectedModel && this.focus === "models";
         const mark = isCurrent ? t.fg("accent", "●") : t.fg("dim", "○");
@@ -453,20 +562,22 @@ export class DcModelsPanel implements Component {
         const hasReasoning = mLevels.length > 1;
         const badge = hasReasoning ? t.fg("dim", " [🧠]") : "";
 
-        const availW = centerW - visibleWidth(badge) - 5;
+        const availW = modelCellW - visibleWidth(badge) - 5;
         const raw = ` ${mark} ${truncateToWidth(cleanName, Math.max(10, availW), "", true)}${badge}`;
         const vLen = visibleWidth(raw);
-        const padded = vLen < centerW ? raw + " ".repeat(centerW - vLen) : raw;
+        const padded = vLen < modelCellW ? raw + " ".repeat(modelCellW - vLen) : raw;
 
         if (isFocused || isSelectedModel) {
-          centerCell = t.bg("selectedBg", t.bold(padded));
+          centerCell = t.bg("selectedBg", t.bold(padded)) + modelScrollChar;
         } else if (isCurrent) {
-          centerCell = t.bold(padded);
+          centerCell = t.bold(padded) + modelScrollChar;
         } else {
-          centerCell = t.fg("text", padded);
+          centerCell = t.fg("text", padded) + modelScrollChar;
         }
       } else if (models.length === 0 && i === 0) {
         centerCell = truncateToWidth(`   ${t.fg("dim", "(no hay modelos)")}`, centerW, "");
+      } else if (models.length > rowCount) {
+        centerCell = " ".repeat(modelCellW) + modelScrollChar;
       }
 
       // 3. Columna Effort / Reasoning (Dinámico según modelo seleccionado)
@@ -560,10 +671,13 @@ export class DcModelsPanel implements Component {
           this.tabCursor--;
           this.activeTabId = visibleTabs[this.tabCursor]!.id;
           this.modelCursor = 0;
+          this.modelScrollOffset = 0;
+          this.ensureTabCursorVisible(this.lastRowCount);
           this.syncEffortCursor();
         }
       } else if (this.focus === "models" && this.modelCursor > 0) {
         this.modelCursor--;
+        this.ensureModelCursorVisible(this.lastRowCount);
         this.syncEffortCursor();
       } else if (this.focus === "effort" && this.effortCursor > 0) {
         this.effortCursor--;
@@ -585,12 +699,15 @@ export class DcModelsPanel implements Component {
           this.tabCursor++;
           this.activeTabId = visibleTabs[this.tabCursor]!.id;
           this.modelCursor = 0;
+          this.modelScrollOffset = 0;
+          this.ensureTabCursorVisible(this.lastRowCount);
           this.syncEffortCursor();
         }
       } else if (this.focus === "models") {
         const models = this.getFilteredModels();
         if (this.modelCursor < models.length - 1) {
           this.modelCursor++;
+          this.ensureModelCursorVisible(this.lastRowCount);
           this.syncEffortCursor();
         }
       } else if (this.focus === "effort") {
@@ -606,6 +723,101 @@ export class DcModelsPanel implements Component {
       }
       this.requestRender();
       return true;
+    }
+
+    // Navegación rápida por páginas y extremos
+    if (matchesKey(data, Key.pageDown)) {
+      if (this.focus === "models") {
+        const models = this.getFilteredModels();
+        if (models.length > 0) {
+          this.modelCursor = Math.min(models.length - 1, this.modelCursor + this.lastRowCount);
+          this.ensureModelCursorVisible(this.lastRowCount);
+          this.syncEffortCursor();
+          this.requestRender();
+          return true;
+        }
+      } else if (this.focus === "tabs") {
+        const tabs = this.getFilteredTabs();
+        if (tabs.length > 0) {
+          this.tabCursor = Math.min(tabs.length - 1, this.tabCursor + this.lastRowCount);
+          this.activeTabId = tabs[this.tabCursor]!.id;
+          this.modelCursor = 0;
+          this.modelScrollOffset = 0;
+          this.ensureTabCursorVisible(this.lastRowCount);
+          this.syncEffortCursor();
+          this.requestRender();
+          return true;
+        }
+      }
+    }
+
+    if (matchesKey(data, Key.pageUp)) {
+      if (this.focus === "models") {
+        this.modelCursor = Math.max(0, this.modelCursor - this.lastRowCount);
+        this.ensureModelCursorVisible(this.lastRowCount);
+        this.syncEffortCursor();
+        this.requestRender();
+        return true;
+      } else if (this.focus === "tabs") {
+        this.tabCursor = Math.max(0, this.tabCursor - this.lastRowCount);
+        const tabs = this.getFilteredTabs();
+        if (tabs[this.tabCursor]) {
+          this.activeTabId = tabs[this.tabCursor]!.id;
+        }
+        this.modelCursor = 0;
+        this.modelScrollOffset = 0;
+        this.ensureTabCursorVisible(this.lastRowCount);
+        this.syncEffortCursor();
+        this.requestRender();
+        return true;
+      }
+    }
+
+    if (matchesKey(data, Key.home)) {
+      if (this.focus === "models") {
+        this.modelCursor = 0;
+        this.ensureModelCursorVisible(this.lastRowCount);
+        this.syncEffortCursor();
+        this.requestRender();
+        return true;
+      } else if (this.focus === "tabs") {
+        this.tabCursor = 0;
+        const tabs = this.getFilteredTabs();
+        if (tabs[0]) {
+          this.activeTabId = tabs[0].id;
+        }
+        this.modelCursor = 0;
+        this.modelScrollOffset = 0;
+        this.ensureTabCursorVisible(this.lastRowCount);
+        this.syncEffortCursor();
+        this.requestRender();
+        return true;
+      }
+    }
+
+    if (matchesKey(data, Key.end)) {
+      if (this.focus === "models") {
+        const models = this.getFilteredModels();
+        if (models.length > 0) {
+          this.modelCursor = models.length - 1;
+          this.ensureModelCursorVisible(this.lastRowCount);
+          this.syncEffortCursor();
+          this.requestRender();
+          return true;
+        }
+      } else if (this.focus === "tabs") {
+        const tabs = this.getFilteredTabs();
+        if (tabs.length > 0) {
+          this.tabCursor = tabs.length - 1;
+          this.activeTabId = tabs[this.tabCursor]!.id;
+          this.modelCursor = 0;
+          this.modelScrollOffset = 0;
+          this.ensureTabCursorVisible(this.lastRowCount);
+          this.syncEffortCursor();
+          this.requestRender();
+          return true;
+        }
+      }
     }
 
     // Espacio: abre info del modelo
@@ -639,8 +851,10 @@ export class DcModelsPanel implements Component {
         this.searchInput.clear();
         if (this.focus === "tabs") {
           this.tabCursor = 0;
+          this.tabScrollOffset = 0;
         } else {
           this.modelCursor = 0;
+          this.modelScrollOffset = 0;
           this.syncEffortCursor();
         }
         this.requestRender();
@@ -655,12 +869,14 @@ export class DcModelsPanel implements Component {
       if (this.searchInput.backspace()) {
         if (this.focus === "tabs") {
           this.tabCursor = 0;
+          this.tabScrollOffset = 0;
           const visibleTabs = this.getFilteredTabs();
           if (visibleTabs.length > 0) {
             this.activeTabId = visibleTabs[0]!.id;
           }
         } else {
           this.modelCursor = 0;
+          this.modelScrollOffset = 0;
           this.syncEffortCursor();
         }
         this.requestRender();
@@ -674,14 +890,17 @@ export class DcModelsPanel implements Component {
       this.searchInput.append(data);
       if (this.focus === "tabs") {
         this.tabCursor = 0;
+        this.tabScrollOffset = 0;
         const visibleTabs = this.getFilteredTabs();
         if (visibleTabs.length > 0) {
           this.activeTabId = visibleTabs[0]!.id;
           this.modelCursor = 0;
+          this.modelScrollOffset = 0;
           this.syncEffortCursor();
         }
       } else {
         this.modelCursor = 0;
+        this.modelScrollOffset = 0;
         this.syncEffortCursor();
       }
       this.requestRender();
@@ -714,12 +933,16 @@ export class DcModelsPanel implements Component {
           this.tabCursor++;
           this.activeTabId = visibleTabs[this.tabCursor]!.id;
           this.modelCursor = 0;
+          this.modelScrollOffset = 0;
+          this.ensureTabCursorVisible(this.lastRowCount);
           this.syncEffortCursor();
           this.requestRender();
         } else if (delta < 0 && this.tabCursor > 0) {
           this.tabCursor--;
           this.activeTabId = visibleTabs[this.tabCursor]!.id;
           this.modelCursor = 0;
+          this.modelScrollOffset = 0;
+          this.ensureTabCursorVisible(this.lastRowCount);
           this.syncEffortCursor();
           this.requestRender();
         }
@@ -729,11 +952,13 @@ export class DcModelsPanel implements Component {
       if (x > this.lastLeftW && x <= this.lastLeftW + this.lastCenterW) {
         const models = this.getFilteredModels();
         if (delta > 0 && this.modelCursor < models.length - 1) {
-          this.modelCursor++;
+          this.modelCursor = Math.min(models.length - 1, this.modelCursor + 3);
+          this.ensureModelCursorVisible(this.lastRowCount);
           this.syncEffortCursor();
           this.requestRender();
         } else if (delta < 0 && this.modelCursor > 0) {
-          this.modelCursor--;
+          this.modelCursor = Math.max(0, this.modelCursor - 3);
+          this.ensureModelCursorVisible(this.lastRowCount);
           this.syncEffortCursor();
           this.requestRender();
         }
@@ -752,11 +977,14 @@ export class DcModelsPanel implements Component {
       // Columna 1: Cuentas
       if (x <= this.lastLeftW) {
         const visibleTabs = this.getFilteredTabs();
-        if (rowIdx < visibleTabs.length) {
-          this.tabCursor = rowIdx;
-          this.activeTabId = visibleTabs[rowIdx]!.id;
+        const targetTabIdx = this.tabScrollOffset + rowIdx;
+        if (targetTabIdx < visibleTabs.length) {
+          this.tabCursor = targetTabIdx;
+          this.activeTabId = visibleTabs[targetTabIdx]!.id;
           this.modelCursor = 0;
+          this.modelScrollOffset = 0;
           this.focus = "tabs";
+          this.ensureTabCursorVisible(this.lastRowCount);
           this.updateSearchPlaceholder();
           this.syncEffortCursor();
           this.requestRender();
@@ -767,9 +995,11 @@ export class DcModelsPanel implements Component {
       // Columna 2: Modelos
       if (x > this.lastLeftW && x <= this.lastLeftW + this.lastCenterW) {
         const models = this.getFilteredModels();
-        if (rowIdx < models.length) {
-          this.modelCursor = rowIdx;
+        const targetModelIdx = this.modelScrollOffset + rowIdx;
+        if (targetModelIdx < models.length) {
+          this.modelCursor = targetModelIdx;
           this.focus = "models";
+          this.ensureModelCursorVisible(this.lastRowCount);
           this.updateSearchPlaceholder();
           this.syncEffortCursor();
           this.requestRender();

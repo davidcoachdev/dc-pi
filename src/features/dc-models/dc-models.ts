@@ -156,8 +156,9 @@ export async function openModelsSelector(
     paddingX: 0,
     width: "62%",
     maxHeight: "85%",
+    scrollable: false,
     footer: (theme) => ({
-      left: `  ${theme.fg("accent", "Tab/←→")} panel   ${theme.fg("accent", "↑↓/Clic")} elegir   ${theme.fg("accent", "Espacio")} info   ${theme.fg("accent", "Enter")} aplicar   ${theme.fg("accent", "esc")} cerrar`,
+      left: `  ${theme.fg("accent", "Tab/←→")} panel   ${theme.fg("accent", "↑↓/PgUp/Dn/Clic")} elegir   ${theme.fg("accent", "Espacio")} info   ${theme.fg("accent", "Enter")} aplicar   ${theme.fg("accent", "esc")} cerrar`,
       right: `${theme.fg("accent", "[ Enter aplicar ]")}  `,
     }),
     content: (done, theme, tui) => {
@@ -168,6 +169,7 @@ export async function openModelsSelector(
         currentModelId: options.currentModelId ?? ctx.model?.id,
         currentThinkingLevel: options.currentThinkingLevel,
         modelThinkingLevels: configuredThinkingLevels,
+        maxRows: () => Math.max(10, Math.min(26, Math.floor((tui.terminal.rows || 40) * 0.85) - 8)),
         onApply: async (selectedModel: ModelItem, effort?: string) => {
           done();
           try {
