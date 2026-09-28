@@ -247,3 +247,44 @@ export function getGitCurrentBranch(cwd: string): string {
 
   return "sin rama";
 }
+
+/** Retrieve working tree status summary (modified count, untracked count, summary string). */
+export function getGitWorkingTreeStatus(cwd: string): {
+  modifiedCount: number;
+  untrackedCount: number;
+  summaryText: string;
+  diffStat?: string;
+} {
+  const changes = getGitChanges(cwd);
+  const modifiedCount = changes.filter((c) => c.status !== "??").length;
+  const untrackedCount = changes.filter((c) => c.status === "??").length;
+
+  let summaryText = "✔ clean";
+  if (modifiedCount > 0 || untrackedCount > 0) {
+    const parts: string[] = [];
+    if (modifiedCount > 0) parts.push(`@ ${modifiedCount} mod`);
+    if (untrackedCount > 0) parts.push(`?${untrackedCount} untracked`);
+    summaryText = parts.join(" » ");
+  }
+
+  let diffStat: string | undefined;
+  try {
+    const out = execFileSync("git", ["diff", "--shortstat"], {
+      cwd,
+      encoding: "utf8",
+      windowsHide: true,
+      timeout: 2000,
+      stdio: ["ignore", "pipe", "pipe"],
+    }).trim();
+    if (out) diffStat = out;
+  } catch {
+    /* ignore */
+  }
+
+  return {
+    modifiedCount,
+    untrackedCount,
+    summaryText,
+    diffStat,
+  };
+}

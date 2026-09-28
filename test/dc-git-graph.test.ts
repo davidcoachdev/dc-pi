@@ -346,3 +346,89 @@ test("openGitGraphViewer opens modal via openDcModal", async () => {
   assert.equal(customCalls, 1);
   assert.ok(capturedTitle.includes("Git Graph") || capturedTitle.includes("Branch"));
 });
+
+test("parseGitGraph classifies commit kinds (head, merge, remote-tip, commit) and parses workingTreeStatus", () => {
+  const customLog = [
+    "*   COMMIT_REC:1111111\x1f1111111\x1f (HEAD -> main)\x1fnormal head commit\x1fDev\x1f2026-09-28",
+    "| * COMMIT_REC:2222222\x1f2222222\x1f (origin/feat-branch)\x1fremote tip commit\x1fDev\x1f2026-09-27",
+    "* | COMMIT_REC:3333333\x1f3333333\x1f\x1fMerge pull request #10 from dev\x1fDev\x1f2026-09-26",
+    "* COMMIT_REC:4444444\x1f4444444\x1f\x1fregular commit\x1fDev\x1f2026-09-25",
+  ].join("\n");
+
+  const wtStatus = {
+    modifiedCount: 4,
+    untrackedCount: 2,
+    summaryText: "@ 4 mod » ?2 untracked",
+    diffStat: "9 files · +662 -14",
+  };
+
+  const data = parseGitGraph(customLog, undefined, "feat/sidebar", wtStatus);
+
+  assert.equal(data.currentBranch, "feat/sidebar");
+  assert.deepEqual(data.workingTreeStatus, wtStatus);
+
+  // 1. HEAD commit
+  assert.equal(data.commits[0]!.commitKind, "head");
+  assert.equal(data.commits[0]!.isHead, true);
+
+  // 2. Remote tip commit (origin/...)
+  assert.equal(data.commits[1]!.commitKind, "remote-tip");
+  assert.equal(data.commits[1]!.isRemoteTip, true);
+
+  // 3. Merge commit
+  assert.equal(data.commits[2]!.commitKind, "merge");
+  assert.equal(data.commits[2]!.isMerge, true);
+
+  // 4. Regular commit
+  assert.equal(data.commits[3]!.commitKind, "commit");
+});
+
+test("DcGitGraphPanel renders enriched status header, glyphs (M, o, *), #shortHash, and bottom summary line", () => {
+  const customLog = [
+    "*   COMMIT_REC:aaa1111\x1faaa1111\x1f (HEAD -> feat/sidebar)\x1fhead commit\x1fAlice\x1f2026-09-28",
+    "| * COMMIT_REC:bbb2222\x1fbbb2222\x1f (origin/remote-branch)\x1fremote branch tip\x1fBob\x1f2026-09-27",
+    "* | COMMIT_REC:ccc3333\x1fccc3333\x1f\x1fMerge pull request #85 from cinta\x1fCharlie\x1f2026-09-26",
+  ].join("\n");
+
+  const wtStatus = {
+    modifiedCount: 4,
+    untrackedCount: 2,
+    summaryText: "@ 4 mod » ?2 untracked",
+    diffStat: "9 files changed, 662 insertions(+)",
+  };
+
+  const graphData = parseGitGraph(customLog, undefined, "feat/sidebar", wtStatus);
+
+  const panel = new DcGitGraphPanel({
+    cwd: "/fake/repo",
+    theme: dummyTheme,
+    getGraphData: () => graphData,
+    getCommitDetail: () => ["diff --git a/file b/file", "+hello"],
+    requestRender: () => {},
+  });
+
+  const lines = panel.render(80);
+
+  // Header must contain enriched branch and status
+  assert.ok(lines[0]?.includes("feat/sidebar"), "Header must include branch name");
+  assert.ok(lines[0]?.includes("4 mod"), "Header must include modified count");
+  assert.ok(lines[0]?.includes("?2 untracked"), "Header must include untracked count");
+
+  // Commits must be formatted with #shortHash
+  assert.ok(lines.some((l) => l.includes("#aaa1111")), "Commit hash must have # prefix");
+  assert.ok(lines.some((l) => l.includes("#bbb2222")), "Remote tip hash must have # prefix");
+  assert.ok(lines.some((l) => l.includes("#ccc3333")), "Merge commit hash must have # prefix");
+
+  // Merge commit must display M glyph
+  assert.ok(lines.some((l) => l.includes("M") && l.includes("#ccc3333")), "Merge commit must have M node glyph");
+
+  // Remote tip must display o glyph
+  assert.ok(lines.some((l) => l.includes("o") && l.includes("#bbb2222")), "Remote tip must have o node glyph");
+
+  // Refs must be wrapped in parentheses
+  assert.ok(lines.some((l) => l.includes("(HEAD -> feat/sidebar)")), "Refs must be in parentheses");
+  assert.ok(lines.some((l) => l.includes("(origin/remote-branch)")), "Remote ref must be in parentheses");
+
+  // Bottom summary line must render
+  assert.ok(lines.some((l) => l.includes("6 files") || l.includes("4 mod")), "Bottom summary line must render");
+});
