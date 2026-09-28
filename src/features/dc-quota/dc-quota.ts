@@ -482,6 +482,7 @@ export async function openQuotaViewer(ctx: ExtensionContext): Promise<void> {
         theme,
         loading: true,
         currentModelId: ctx.model?.id,
+        currentModelProvider: ctx.model?.provider ? String(ctx.model.provider) : undefined,
         onRefresh: async () => {
           await loadQuotas(panel);
           tui.requestRender();

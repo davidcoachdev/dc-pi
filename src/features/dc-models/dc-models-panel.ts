@@ -99,10 +99,19 @@ export class DcModelsPanel implements Component {
 
     // Determinar la pestaña inicial en base al modelo activo de la sesión
     let initialTabId = this.tabs[0]!.id;
-    if (this.currentModelId && this.currentModelId.includes("/")) {
-      const prefix = this.currentModelId.split("/")[0]?.toLowerCase();
-      const found = this.tabs.find((t) => t.id.toLowerCase() === prefix);
-      if (found) initialTabId = found.id;
+    if (this.currentModelId) {
+      if (this.currentModelId.includes("/")) {
+        const prefix = this.currentModelId.split("/")[0]?.toLowerCase();
+        const found = this.tabs.find((t) => t.id.toLowerCase() === prefix);
+        if (found) initialTabId = found.id;
+      } else {
+        // Buscar por provider cuando el modelo no tiene prefijo (ej. opencode-go)
+        const currentModel = this.allModels.find((m) => m.id === this.currentModelId);
+        if (currentModel?.provider) {
+          const found = this.tabs.find((t) => t.id.toLowerCase() === currentModel.provider!.toLowerCase());
+          if (found) initialTabId = found.id;
+        }
+      }
     }
     this.activeTabId = initialTabId;
     const tabIdx = this.tabs.findIndex((t) => t.id === this.activeTabId);

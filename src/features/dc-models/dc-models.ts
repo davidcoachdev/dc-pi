@@ -66,6 +66,31 @@ export async function openModelsSelector(
     /* fallback to empty */
   }
 
+  // Fallback: algunos providers builtin (como opencode-go) pueden no aparecer en
+  // getAvailable() aunque tengan credenciales y modelos en models-store.json.
+  // Completamos la lista leyendo el store directamente.
+  const MODELS_STORE_FILE = path.join(os.homedir(), ".pi/agent/models-store.json");
+  const AUTH_FILE = path.join(os.homedir(), ".pi/agent/auth.json");
+  try {
+    const providersInModels = new Set(models.map((m) => String(m.provider ?? "")));
+    const rawStore = fs.readFileSync(MODELS_STORE_FILE, "utf8");
+    const store = JSON.parse(rawStore) as Record<string, { models?: ModelItem[] }>;
+    const rawAuth = fs.readFileSync(AUTH_FILE, "utf8");
+    const auth = JSON.parse(rawAuth) as Record<string, unknown>;
+
+    for (const [providerId, entry] of Object.entries(store)) {
+      if (providersInModels.has(providerId)) continue;
+      if (!auth[providerId]) continue;
+      const storeModels = entry?.models ?? [];
+      for (const m of storeModels) {
+        if (!m.provider) (m as any).provider = providerId;
+        models.push(m as ModelItem);
+      }
+    }
+  } catch {
+    /* si falla el fallback, seguimos con lo que tenemos */
+  }
+
   // 2. Discover accounts / prefixes via CLIProxy
   const prefixEmails = await cliProxyClient.fetchPrefixEmails();
   const tabs: ModelAccountTab[] = [];
@@ -85,6 +110,26 @@ export async function openModelsSelector(
       id: prefix,
       title: prefix.toUpperCase(),
       email,
+    });
+  }
+
+  // 3. Discover providers without prefixes (e.g. opencode-go, openai, etc.)
+  const providerHasPrefixes = new Set<string>();
+  for (const m of models) {
+    if (m.provider && m.id.includes("/")) {
+      providerHasPrefixes.add(m.provider);
+    }
+  }
+  const discoveredProviders = new Set<string>();
+  for (const m of models) {
+    if (m.provider && !providerHasPrefixes.has(m.provider)) {
+      discoveredProviders.add(m.provider);
+    }
+  }
+  for (const provider of Array.from(discoveredProviders).sort((a, b) => a.localeCompare(b, undefined, { numeric: true }))) {
+    tabs.push({
+      id: provider,
+      title: provider.toUpperCase(),
     });
   }
 

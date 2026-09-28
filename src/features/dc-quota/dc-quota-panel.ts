@@ -20,6 +20,7 @@ export interface DcQuotaPanelOptions {
   sections?: QuotaSection[];
   loading?: boolean;
   currentModelId?: string;
+  currentModelProvider?: string;
   onRefresh?: () => void;
   requestRender: () => void;
 }
@@ -36,6 +37,7 @@ export class DcQuotaPanel implements Component {
   private focus: QuotaFocus = "tabs";
   private searchInput: DcSearchInput;
   private currentModelId?: string;
+  private currentModelProvider?: string;
   private loading: boolean;
   private spinnerIdx = 0;
   private animTimer?: NodeJS.Timeout;
@@ -47,6 +49,7 @@ export class DcQuotaPanel implements Component {
     this.theme = options.theme;
     this.loading = options.loading ?? false;
     this.currentModelId = options.currentModelId;
+    this.currentModelProvider = options.currentModelProvider;
     this.sections = options.sections && options.sections.length > 0 ? options.sections : [];
     this.onRefresh = options.onRefresh;
     this.requestRender = options.requestRender;
@@ -84,7 +87,7 @@ export class DcQuotaPanel implements Component {
 
   public setSections(sections: QuotaSection[]): void {
     this.sections = sections.length > 0 ? sections : [{ id: "none", title: "Sin cuotas", rows: [] }];
-    
+
     // Auto-seleccionar la cuenta del modelo activo si existe en la lista
     let targetIndex = 0;
     if (this.currentModelId && this.currentModelId.includes("/")) {
@@ -97,6 +100,17 @@ export class DcQuotaPanel implements Component {
         if (foundIdx >= 0) {
           targetIndex = foundIdx;
         }
+      }
+    } else if (this.currentModelProvider) {
+      // Modelo sin prefijo (ej. opencode-go): buscar por provider
+      const providerLower = this.currentModelProvider.toLowerCase();
+      const foundIdx = this.sections.findIndex((s) => {
+        const lowerId = s.id.toLowerCase();
+        const lowerTitle = s.title.toLowerCase();
+        return lowerId === providerLower || lowerId === `zen` || lowerTitle.includes(providerLower);
+      });
+      if (foundIdx >= 0) {
+        targetIndex = foundIdx;
       }
     }
 
