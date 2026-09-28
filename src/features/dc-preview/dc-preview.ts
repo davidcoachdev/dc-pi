@@ -60,6 +60,35 @@ export async function showTaskManagerSetup(cwd: string, ctx: ExtensionContext): 
   }
 }
 
+export async function openPreviewDirectionMenu(
+  ctx: ExtensionContext,
+  mode: "nvim" | "fzf" | "yazi" | "dc-studio",
+  cwd?: string,
+  options?: DcPreviewLauncherOptions,
+): Promise<void> {
+  if (!ctx.hasUI) {
+    dcNotifier.notify(ctx, "DC Preview", "dc-preview necesita modo TUI.", "error");
+    return;
+  }
+  const targetCwd = cwd || ctx.cwd || process.cwd();
+  const label = DC_PREVIEW_TOOL_LABELS[mode];
+
+  const picked = await openPreviewModal<DcPreviewOrientation>(
+    ctx,
+    `⛩  Dc Studio - Preview (${label})`,
+    [
+      { value: "h", label: DC_PREVIEW_DIRECTION_LABELS.h },
+      { value: "v", label: DC_PREVIEW_DIRECTION_LABELS.v },
+    ],
+  );
+
+  if (!picked) return;
+  const res = launchPanel(mode, picked, targetCwd, options);
+  dcNotifier.notify(ctx, "DC Preview", res.message, res.success ? "info" : "error");
+}
+
+export const openToolPreview = openPreviewDirectionMenu;
+
 export default function dcPreviewExtension(
   pi: ExtensionAPI,
   options?: DcPreviewLauncherOptions,
@@ -68,25 +97,7 @@ export default function dcPreviewExtension(
     ctx: ExtensionContext,
     mode: "nvim" | "fzf" | "yazi" | "dc-studio",
   ): Promise<void> {
-    if (!ctx.hasUI) {
-      dcNotifier.notify(ctx, "DC Preview", "dc-preview necesita modo TUI.", "error");
-      return;
-    }
-    const cwd = ctx.cwd || process.cwd();
-    const label = DC_PREVIEW_TOOL_LABELS[mode];
-
-    const picked = await openPreviewModal<DcPreviewOrientation>(
-      ctx,
-      `⛩  Dc Studio - Preview (${label})`,
-      [
-        { value: "h", label: DC_PREVIEW_DIRECTION_LABELS.h },
-        { value: "v", label: DC_PREVIEW_DIRECTION_LABELS.v },
-      ],
-    );
-
-    if (!picked) return;
-    const res = launchPanel(mode, picked, cwd, options);
-    dcNotifier.notify(ctx, "DC Preview", res.message, res.success ? "info" : "error");
+    await openPreviewDirectionMenu(ctx, mode, undefined, options);
   }
 
   async function showToolMenu(ctx: ExtensionContext): Promise<void> {
