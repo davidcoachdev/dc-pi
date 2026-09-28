@@ -60,10 +60,10 @@ export function parseGitGraph(
       refs.some((r) => r.startsWith("origin/") || (r.includes("/") && !r.startsWith("HEAD")));
 
     let commitKind: GitGraphCommitKind = "commit";
-    if (isHead) {
-      commitKind = "head";
-    } else if (isMerge) {
+    if (isMerge) {
       commitKind = "merge";
+    } else if (isHead) {
+      commitKind = "head";
     } else if (isRemoteTip) {
       commitKind = "remote-tip";
     }
