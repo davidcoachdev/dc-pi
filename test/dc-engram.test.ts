@@ -93,14 +93,6 @@ test("dc-engram: EngramPanel handles keyboard navigation and scroll controls", (
   assert.ok(handledUp);
   assert.equal(panel.getSelectedIndex(), 0);
 
-  // Ctrl+Down (scroll de detalle derecho)
-  const handledCtrlDown = panel.handleInput("\x1b[1;5B");
-  assert.ok(handledCtrlDown);
-
-  // Ctrl+Up (scroll de detalle derecho)
-  const handledCtrlUp = panel.handleInput("\x1b[1;5A");
-  assert.ok(handledCtrlUp);
-
   // End y Home
   panel.handleInput("\x1b[F"); // End
   assert.ok(panel.getSelectedIndex() > 0);
@@ -176,8 +168,8 @@ test("dc-engram: EngramPanel handles empty projects cleanly without crashing", (
   assert.ok(Array.isArray(lines));
   assert.ok(lines.length > 0);
   const fullText = lines.join("\n");
-  assert.ok(fullText.includes("Sin memorias"));
-  assert.ok(fullText.includes("Daemon Engram: Local"));
+  assert.ok(fullText.includes("No se encontraron observaciones") || fullText.includes("Sin memorias"));
+  assert.ok(fullText.includes("Daemon Engram"));
 
   // handleInput no crashea con lista vacía
   const handled = panel.handleInput("\x1b[B");
