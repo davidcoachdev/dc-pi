@@ -756,3 +756,57 @@ test("DcGitGraphPanel handles mouse click on file tabs and renders dividing line
   assert.equal(panel.getActiveFileIndex(), 1);
   assert.ok(renderRequested >= 1);
 });
+
+test("DcGitGraphPanel renders search input in upper right and filters commits by query", () => {
+  const commitRecords = [
+    "* COMMIT_REC:aaa1111\x1faaa1111\x1f (HEAD -> main)\x1ffeat(ui): add search input\x1fAlice\x1f2026-09-28",
+    "* COMMIT_REC:bbb2222\x1fbbb2222\x1f\x1ffix(core): fix memory leak\x1fBob\x1f2026-09-27",
+    "* COMMIT_REC:ccc3333\x1fccc3333\x1f\x1fdocs: update readme\x1fCharlie\x1f2026-09-26",
+  ];
+  const graphData = parseGitGraph(commitRecords.join("\n"), undefined, "main");
+  let renders = 0;
+
+  const panel = new DcGitGraphPanel({
+    cwd: "/fake/repo",
+    theme: dummyTheme,
+    getGraphData: () => graphData,
+    getCommitDetail: (_cwd, hash) => [`commit ${hash}`],
+    requestRender: () => { renders++; },
+  });
+
+  // Verify search input is present in upper right header
+  const lines = panel.render(100);
+  const headerLine = lines[0]!;
+  assert.ok(headerLine.includes("🔍"), "Header should render search input icon");
+  assert.ok(headerLine.includes("Buscar commit"), "Header should show placeholder when empty");
+
+  // Type search characters: 'fix'
+  panel.handleInput("f");
+  panel.handleInput("i");
+  panel.handleInput("x");
+
+  assert.equal(panel.getSearchQuery(), "fix");
+  assert.equal(panel.getSelectedCommit()?.shortHash, "bbb2222");
+
+  const filteredLines = panel.render(100);
+  assert.ok(filteredLines.some((l) => l.includes("bbb2222")), "Should show matching commit");
+  assert.ok(!filteredLines.some((l) => l.includes("aaa1111")), "Should not show non-matching commit");
+  assert.ok(filteredLines.some((l) => l.includes("1 commit")), "Summary should show 1 commit match");
+
+  // Pressing Escape clears search query
+  panel.handleInput("\x1b"); // Escape
+  assert.equal(panel.getSearchQuery(), "");
+  assert.equal(panel.getSelectedCommit()?.shortHash, "aaa1111");
+
+  // Filter by hash with #
+  panel.handleInput("#");
+  panel.handleInput("c");
+  panel.handleInput("c");
+  panel.handleInput("c");
+
+  assert.equal(panel.getSelectedCommit()?.shortHash, "ccc3333");
+
+  // Backspace removes char
+  panel.handleInput("\x7f"); // Backspace
+  assert.equal(panel.getSearchQuery(), "#cc");
+});
