@@ -11,6 +11,11 @@ import {
   type GitGraphData,
 } from "../src/features/dc-git-graph/index.ts";
 import {
+  getCommitTypeInfo,
+  formatStyledCommitSubject,
+  COMMIT_TYPE_COLORS,
+} from "../src/features/dc-git-graph/core/dc-git-diff-formatter.ts";
+import {
   getGitCommitDetail,
   getGitCommitGraph,
   getGitHeadHash,
@@ -645,4 +650,109 @@ test("DcGitGraphPanel scrolls file tabs horizontally in a sliding window to keep
   lines = panel.render(100);
   assert.ok(lines.some((l) => l.includes("file8.ts")));
   assert.ok(lines.some((l) => l.includes("◀")));
+});
+
+test("getCommitTypeInfo and formatStyledCommitSubject assign semantic colors to commit types", () => {
+  // feat
+  const featInfo = getCommitTypeInfo("feat(ui): add new button");
+  assert.equal(featInfo.type, "feat");
+  assert.equal(featInfo.scope, "ui");
+  assert.equal(featInfo.colorAnsi, COMMIT_TYPE_COLORS.feat);
+
+  // fix
+  const fixInfo = getCommitTypeInfo("fix(api): handle timeout");
+  assert.equal(fixInfo.type, "fix");
+  assert.equal(fixInfo.colorAnsi, COMMIT_TYPE_COLORS.fix);
+
+  // merge
+  const mergeInfo = getCommitTypeInfo("Merge pull request #10 from dev");
+  assert.equal(mergeInfo.type, "merge");
+  assert.equal(mergeInfo.colorAnsi, COMMIT_TYPE_COLORS.merge);
+
+  // style
+  const styleInfo = getCommitTypeInfo("style: format code borders");
+  assert.equal(styleInfo.type, "style");
+  assert.equal(styleInfo.colorAnsi, COMMIT_TYPE_COLORS.style);
+
+  // formatted string checks
+  const styledFeat = formatStyledCommitSubject("feat(ui): add new button", false);
+  assert.ok(styledFeat.includes(COMMIT_TYPE_COLORS.feat));
+  assert.ok(styledFeat.includes("feat(ui):"));
+  assert.equal(styledFeat, `\x1b[1m${COMMIT_TYPE_COLORS.feat}feat(ui):\x1b[0m add new button`);
+
+  const styledFix = formatStyledCommitSubject("fix(sidebar): make Branch, Project, and Changes", false);
+  assert.ok(styledFix.includes(COMMIT_TYPE_COLORS.fix));
+  assert.equal(styledFix, `\x1b[1m${COMMIT_TYPE_COLORS.fix}fix(sidebar):\x1b[0m make Branch, Project, and Changes`);
+
+  // Merge PR checks (whole context up to PR number colored)
+  const styledMergePr = formatStyledCommitSubject("Merge pull request #6 from davidcoachdev/fix/s:", false);
+  assert.ok(styledMergePr.includes(COMMIT_TYPE_COLORS.merge));
+  assert.equal(styledMergePr, `\x1b[1m${COMMIT_TYPE_COLORS.merge}Merge pull request #6\x1b[0m from davidcoachdev/fix/s:`);
+
+  const styledMerge = formatStyledCommitSubject("Merge pull request #10", false);
+  assert.ok(styledMerge.includes(COMMIT_TYPE_COLORS.merge));
+  assert.equal(styledMerge, `\x1b[1m${COMMIT_TYPE_COLORS.merge}Merge pull request #10\x1b[0m`);
+
+  // Plain merge without PR number
+  const styledBranchMerge = formatStyledCommitSubject("Merge branch 'main' into dev", false);
+  assert.ok(styledBranchMerge.includes(COMMIT_TYPE_COLORS.merge));
+  assert.equal(styledBranchMerge, `\x1b[1m${COMMIT_TYPE_COLORS.merge}Merge\x1b[0m branch 'main' into dev`);
+});
+
+test("DcGitGraphPanel handles mouse click on file tabs and renders dividing lines around files", () => {
+  const rawFiles = [
+    "commit 1111222233334444555566667777888899990000",
+    "Author: Alice <alice@example.com>",
+    "Date:   2026-09-28",
+    "",
+    "    feat: add multi files",
+    "",
+    "diff --git a/alpha.ts b/alpha.ts",
+    "@@ -1 +1 @@",
+    "+alpha",
+    "diff --git a/beta.ts b/beta.ts",
+    "@@ -1 +1 @@",
+    "+beta",
+  ];
+
+  const graphData = parseGitGraph("* COMMIT_REC:1111222\x1f1111222\x1f (HEAD -> main)\x1ffeat: multi files\x1fAlice\x1f2026-09-28");
+  let renderRequested = 0;
+
+  const panel = new DcGitGraphPanel({
+    cwd: "/fake/repo",
+    theme: dummyTheme,
+    getGraphData: () => graphData,
+    getCommitDetail: () => rawFiles,
+    requestRender: () => { renderRequested++; },
+  });
+
+  const lines = panel.render(100);
+
+  // Check dividing lines around files exist
+  const dottedLines = lines.filter((l) => l.includes("┄┄┄┄"));
+  assert.ok(dottedLines.length >= 2, "Should have dividing lines before and after files");
+
+  // Initial active file is 0 (alpha.ts)
+  assert.equal(panel.getActiveFileIndex(), 0);
+
+  // Find line index where tabs appear
+  const tabRowIndex = lines.findIndex((l) => l.includes("📂") && l.includes("alpha.ts") && l.includes("beta.ts"));
+  assert.ok(tabRowIndex >= 0);
+
+  // Click on the second tab (beta.ts)
+  // Find column for beta.ts in the line
+  const tabLine = lines[tabRowIndex]!;
+  const betaCol = tabLine.indexOf("beta.ts");
+  assert.ok(betaCol > 0);
+
+  const res = panel.handleMouse({
+    type: "click",
+    button: "left",
+    x: betaCol,
+    y: tabRowIndex,
+  } as unknown as TuiMouseEvent);
+
+  assert.equal(res?.handled, true);
+  assert.equal(panel.getActiveFileIndex(), 1);
+  assert.ok(renderRequested >= 1);
 });

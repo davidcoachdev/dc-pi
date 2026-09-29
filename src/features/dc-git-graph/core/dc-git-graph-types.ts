@@ -15,6 +15,8 @@ export interface GitGraphCommit {
   isRemoteTip: boolean;
   commitKind: GitGraphCommitKind;
   graphPrefix: string;
+  typeTag?: string;
+  typeColorAnsi?: string;
 }
 
 export type GitGraphRow =

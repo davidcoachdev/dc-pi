@@ -213,6 +213,97 @@ export function parseRawCommitDetail(rawLines: string[]): ParsedCommitDetail {
   };
 }
 
+export const COMMIT_TYPE_COLORS: Record<string, string> = {
+  feat: "\x1b[38;2;120;230;140m",     // Emerald green
+  fix: "\x1b[38;2;255;120;120m",      // Coral red
+  merge: "\x1b[38;2;250;150;90m",     // Warm amber
+  style: "\x1b[38;2;215;160;195m",    // Plum pink
+  refactor: "\x1b[38;2;175;120;245m", // Lavender purple
+  test: "\x1b[38;2;245;210;90m",      // Golden yellow
+  docs: "\x1b[38;2;120;190;255m",     // Sky blue
+  chore: "\x1b[38;2;160;160;170m",    // Slate gray
+  perf: "\x1b[38;2;80;230;220m",      // Cyan turquoise
+  ci: "\x1b[38;2;140;200;180m",       // Teal
+  build: "\x1b[38;2;200;170;140m",    // Sand
+};
+
+export const DEFAULT_COMMIT_COLOR = "\x1b[38;2;200;195;200m";
+
+/**
+ * Extracts conventional commit type and assigns semantic ANSI color.
+ */
+export function getCommitTypeInfo(subject: string): {
+  type: string;
+  scope?: string;
+  colorAnsi: string;
+  isMerge: boolean;
+} {
+  const trimmed = (subject || "").trim();
+  if (trimmed.toLowerCase().startsWith("merge ")) {
+    return {
+      type: "merge",
+      colorAnsi: COMMIT_TYPE_COLORS.merge!,
+      isMerge: true,
+    };
+  }
+
+  const match = trimmed.match(/^([a-z]+)(?:\(([^)]+)\))?!?:/i);
+  if (match) {
+    const rawType = match[1]!.toLowerCase();
+    const scope = match[2]?.trim();
+    const colorAnsi = COMMIT_TYPE_COLORS[rawType] || DEFAULT_COMMIT_COLOR;
+    return {
+      type: rawType,
+      scope,
+      colorAnsi,
+      isMerge: false,
+    };
+  }
+
+  return {
+    type: "other",
+    colorAnsi: DEFAULT_COMMIT_COLOR,
+    isMerge: false,
+  };
+}
+
+/**
+ * Formats a commit subject with semantic color highlighting for its conventional commit type.
+ */
+export function formatStyledCommitSubject(subject: string, isSelected: boolean): string {
+  const info = getCommitTypeInfo(subject);
+  if (info.type === "other") {
+    return isSelected ? `\x1b[1m${subject}\x1b[22m` : subject;
+  }
+
+  if (info.isMerge) {
+    const prMatch = subject.match(/^(Merge\s+.*?#\d+)(.*)$/i);
+    if (prMatch) {
+      const prPrefix = prMatch[1]!;
+      const rest = prMatch[2]!;
+      const styledTag = `\x1b[1m${info.colorAnsi}${prPrefix}\x1b[0m`;
+      const bodyText = isSelected ? `\x1b[1m${rest}\x1b[22m` : rest;
+      return `${styledTag}${bodyText}`;
+    }
+
+    const rest = subject.slice(5);
+    const mergeTag = `\x1b[1m${info.colorAnsi}Merge\x1b[0m`;
+    const bodyText = isSelected ? `\x1b[1m${rest}\x1b[22m` : rest;
+    return `${mergeTag}${bodyText}`;
+  }
+
+  const match = subject.match(/^([a-z]+)(\([^)]+\))?(!?:)(.*)$/i);
+  if (!match) {
+    return isSelected ? `\x1b[1m${subject}\x1b[22m` : subject;
+  }
+
+  const [, typeStr, scopeStr = "", colon = ":", rest = ""] = match;
+  const styledPrefix = `\x1b[1m${info.colorAnsi}${typeStr}${scopeStr}${colon}\x1b[0m`;
+  const styledRest = isSelected ? `\x1b[1m${rest}\x1b[22m` : rest;
+
+  return `${styledPrefix}${styledRest}`;
+}
+
 /**
  * Wraps commit subject and body text into lines of at most `maxWidth` display cells,
  * breaking on word boundaries and punctuation when possible.

@@ -16,7 +16,7 @@ import type {
   GitGraphRow,
 } from "../core/dc-git-graph-types.ts";
 import { parseGitGraph } from "../core/dc-git-graph-parser.ts";
-import { parseRawCommitDetail, formatDiffLine, renderDcCodeBox, wrapMessageText, computeSlidingFileTabs } from "../core/dc-git-diff-formatter.ts";
+import { parseRawCommitDetail, formatDiffLine, renderDcCodeBox, wrapMessageText, computeSlidingFileTabs, formatStyledCommitSubject } from "../core/dc-git-diff-formatter.ts";
 import {
   getGitCommitDetail,
   getGitCommitGraph,
@@ -28,15 +28,17 @@ import {
 function formatCommitGraphPrefix(
   rawPrefix: string,
   kind: GitGraphCommitKind,
+  colorAnsi: string | undefined,
   t: Pick<Theme, "fg" | "bg" | "bold">,
 ): string {
-  let styledNode = t.fg("text", "●");
+  const nodeColor = colorAnsi || "\x1b[38;2;200;195;200m";
+  let styledNode = `${nodeColor}●\x1b[0m`;
   if (kind === "head") {
-    styledNode = t.bold(t.fg("accent", "●"));
+    styledNode = `\x1b[1m${nodeColor}●\x1b[0m`;
   } else if (kind === "merge") {
-    styledNode = t.bold(t.fg("warning", "M"));
+    styledNode = `\x1b[1m\x1b[38;2;250;150;90mM\x1b[0m`;
   } else if (kind === "remote-tip") {
-    styledNode = t.bold(t.fg("accent", "o"));
+    styledNode = `\x1b[1m${nodeColor}o\x1b[0m`;
   }
 
   if (!rawPrefix) return styledNode + " ";
@@ -83,6 +85,8 @@ export class DcGitGraphPanel implements Component {
   private lastLeftW = 30;
   private lastHeaderRows = 2;
   private lastRowsCount = 15;
+  private lastTabsVisualRow = -1;
+  private lastTabHitboxes: Array<{ start: number; end: number; targetIndex: number }> = [];
 
   constructor(options: DcGitGraphPanelOptions) {
     this.cwd = options.cwd;
@@ -113,7 +117,9 @@ export class DcGitGraphPanel implements Component {
       return Math.max(16, this.maxRowsOption);
     }
     const termRows = process.stdout?.rows ?? 40;
-    return Math.max(18, Math.min(48, Math.floor(termRows * 0.94) - 6));
+    // DcWindow con footer tiene 6 filas de chrome (3 arriba y 3 abajo).
+    // Para no exceder el budget del overlay y no cortar las últimas filas, restamos 8.
+    return Math.max(12, Math.min(48, Math.floor(termRows * 0.94) - 8));
   }
 
   refresh(initialHash?: string): void {
@@ -303,8 +309,10 @@ export class DcGitGraphPanel implements Component {
     const { type, x = 0, y = 0 } = event;
 
     if (type === "wheel") {
-      const delta = (event as any).wheelDelta ?? 0;
-      if (delta === 0) return { handled: false };
+      const rawDelta =
+        (event as any).wheelDelta ??
+        ((event as any).button === 4 ? -1 : (event as any).button === 5 ? 1 : undefined);
+      const delta = rawDelta !== undefined && rawDelta !== 0 ? (rawDelta > 0 ? 1 : -1) : 1;
 
       // Wheel on left column (graph commits tree - 1/3)
       if (x <= this.lastLeftW) {
@@ -355,6 +363,25 @@ export class DcGitGraphPanel implements Component {
                 this.requestRender();
                 return { handled: true };
               }
+            }
+          }
+        }
+      }
+
+      // Click on right column (files tabs)
+      if (x > this.lastLeftW) {
+        const visualRow = y - this.lastHeaderRows;
+        if (visualRow === this.lastTabsVisualRow && this.lastTabHitboxes.length > 0) {
+          const relX = x - (this.lastLeftW + 3);
+          if (relX >= 0) {
+            const hit = this.lastTabHitboxes.find((h) => relX >= h.start && relX < h.end);
+            if (hit) {
+              if (hit.targetIndex !== this.activeFileIndex) {
+                this.activeFileIndex = hit.targetIndex;
+                this.detailScrollOffset = 0;
+                this.requestRender();
+              }
+              return { handled: true };
             }
           }
         }
@@ -417,25 +444,6 @@ export class DcGitGraphPanel implements Component {
     const rowsCount = Math.max(16, Math.min(maxRowsBudget, Math.max(this.data.rows.length, 16)));
     this.lastRowsCount = rowsCount;
 
-    // Adjust graphScrollOffset to ensure selected commit is visible
-    if (selCommit) {
-      const selRowIndex = this.data.rows.findIndex(
-        (r) => r.kind === "commit" && r.commit.hash === selCommit.hash,
-      );
-      if (selRowIndex >= 0) {
-        if (selRowIndex < this.graphScrollOffset) {
-          this.graphScrollOffset = selRowIndex;
-        } else if (selRowIndex >= this.graphScrollOffset + rowsCount) {
-          this.graphScrollOffset = selRowIndex - rowsCount + 1;
-        }
-      }
-    }
-
-    const visibleRows = this.data.rows.slice(
-      this.graphScrollOffset,
-      this.graphScrollOffset + rowsCount,
-    );
-
     // Prepare Right Panel Lines (Commit info card + tabs/files + diff - 2/3)
     const rightLines: string[] = [];
 
@@ -463,13 +471,14 @@ export class DcGitGraphPanel implements Component {
       : ` 👤 ${t.fg("dim", "—")}`;
     rightLines.push(pad(metaLine, rightW));
 
-    // Wordwrap commit subject
+    // Wordwrap commit subject with semantic color
     if (parsedDetail.subject) {
       const wrappedSubject = wrapMessageText(parsedDetail.subject, rightW - 6);
       for (let s = 0; s < wrappedSubject.length; s++) {
         const line = wrappedSubject[s]!;
         const prefix = s === 0 ? " 📝 " : "    ";
-        rightLines.push(pad(`${prefix}${t.bold(t.fg("text", line))}`, rightW));
+        const styled = s === 0 ? formatStyledCommitSubject(line, true) : t.bold(t.fg("text", line));
+        rightLines.push(pad(`${prefix}${styled}`, rightW));
       }
     }
 
@@ -483,6 +492,12 @@ export class DcGitGraphPanel implements Component {
       }
     }
 
+    // Línea divisoria antes de los files
+    rightLines.push(t.fg("border", "┄".repeat(Math.max(10, rightW - 2))));
+
+    // Record visual row for mouse click hit testing
+    this.lastTabsVisualRow = rightLines.length;
+
     // 2. Changed Files bar: Sliding horizontal window
     if (parsedDetail.files.length > 0) {
       const sliding = computeSlidingFileTabs(
@@ -491,26 +506,59 @@ export class DcGitGraphPanel implements Component {
         rightW - 8,
       );
 
-      const leftIndicator =
-        sliding.hiddenLeft > 0
-          ? `${t.bold(t.fg("accent", `+${sliding.hiddenLeft}`))} ${t.fg("dim", "◀ ")}`
-          : "";
-      const rightIndicator =
-        sliding.hiddenRight > 0
-          ? ` ${t.fg("dim", "▶")} ${t.bold(t.fg("accent", `+${sliding.hiddenRight}`))}`
-          : "";
+      let currentCol = 4; // " 📂 " ocupa visibleWidth 4
+      this.lastTabHitboxes = [];
 
-      const fileBadges = sliding.slice
-        .map((item) => {
-          const label = ` 📄 ${item.file.shortName} `;
-          return item.isActive
+      let leftIndicator = "";
+      if (sliding.hiddenLeft > 0) {
+        const leftText = `+${sliding.hiddenLeft} ◀ `;
+        const w = visibleWidth(leftText);
+        this.lastTabHitboxes.push({
+          start: currentCol,
+          end: currentCol + w,
+          targetIndex: Math.max(0, this.activeFileIndex - 1),
+        });
+        currentCol += w;
+        leftIndicator = `${t.bold(t.fg("accent", `+${sliding.hiddenLeft}`))} ${t.fg("dim", "◀ ")}`;
+      }
+
+      const fileBadges: string[] = [];
+      for (let idx = 0; idx < sliding.slice.length; idx++) {
+        const item = sliding.slice[idx]!;
+        const label = ` 📄 ${item.file.shortName} `;
+        const w = visibleWidth(label);
+        this.lastTabHitboxes.push({
+          start: currentCol,
+          end: currentCol + w,
+          targetIndex: item.index,
+        });
+        currentCol += w;
+        if (idx < sliding.slice.length - 1) {
+          currentCol += 1;
+        }
+
+        fileBadges.push(
+          item.isActive
             ? t.bg("selectedBg", t.bold(t.fg("accent", label)))
-            : t.fg("dim", label);
-        })
-        .join(" ");
+            : t.fg("dim", label),
+        );
+      }
 
-      rightLines.push(pad(` 📂 ${leftIndicator}${fileBadges}${rightIndicator}`, rightW));
+      let rightIndicator = "";
+      if (sliding.hiddenRight > 0) {
+        const rightText = ` ▶ +${sliding.hiddenRight}`;
+        const w = visibleWidth(rightText);
+        this.lastTabHitboxes.push({
+          start: currentCol,
+          end: currentCol + w,
+          targetIndex: Math.min(parsedDetail.files.length - 1, this.activeFileIndex + 1),
+        });
+        rightIndicator = ` ${t.fg("dim", "▶")} ${t.bold(t.fg("accent", `+${sliding.hiddenRight}`))}`;
+      }
+
+      rightLines.push(pad(` 📂 ${leftIndicator}${fileBadges.join(" ")}${rightIndicator}`, rightW));
     } else {
+      this.lastTabHitboxes = [];
       rightLines.push(pad(` 📂 ${t.fg("dim", "Sin archivos modificados o diff no disponible")}`, rightW));
     }
 
@@ -518,7 +566,8 @@ export class DcGitGraphPanel implements Component {
 
     // 3. Diff renderizado dentro de la caja de código estilizada de DC Studio (dc-code)
     const headerLinesCount = rightLines.length;
-    const diffBudget = Math.max(6, rowsCount - headerLinesCount - 3);
+    // rowsCount es el budget total para las filas del panel antes del separador inferior y summaries (+2 líneas)
+    const diffBudget = Math.max(4, rowsCount - headerLinesCount);
 
     const activeFile = parsedDetail.files[this.activeFileIndex] || parsedDetail.files[0];
     const activeLines = activeFile
@@ -531,7 +580,7 @@ export class DcGitGraphPanel implements Component {
       title: activeFile?.shortName || selCommit?.shortHash || "diff",
       lines: activeLines,
       width: rightW,
-      maxRows: diffBudget + 2,
+      maxRows: diffBudget,
       scrollOffset: this.detailScrollOffset,
     });
 
@@ -539,8 +588,32 @@ export class DcGitGraphPanel implements Component {
       rightLines.push(cLine);
     }
 
-    const totalRows = Math.max(rowsCount, rightLines.length);
+    // El grid usa exactamente rowsCount filas para no desbordar el modal ni recortar el footer/summary
+    const totalRows = rowsCount;
     this.lastRowsCount = totalRows;
+
+    // Adjust graphScrollOffset to ensure selected commit is visible within totalRows
+    if (selCommit) {
+      const selRowIndex = this.data.rows.findIndex(
+        (r) => r.kind === "commit" && r.commit.hash === selCommit.hash,
+      );
+      if (selRowIndex >= 0) {
+        if (selRowIndex < this.graphScrollOffset) {
+          this.graphScrollOffset = selRowIndex;
+        } else if (selRowIndex >= this.graphScrollOffset + totalRows) {
+          this.graphScrollOffset = selRowIndex - totalRows + 1;
+        }
+      }
+    }
+
+    // Clamp graphScrollOffset so the last elements don't scroll off into empty void
+    const maxGraphScroll = Math.max(0, this.data.rows.length - totalRows);
+    this.graphScrollOffset = Math.max(0, Math.min(this.graphScrollOffset, maxGraphScroll));
+
+    const visibleRows = this.data.rows.slice(
+      this.graphScrollOffset,
+      this.graphScrollOffset + totalRows,
+    );
 
     // Render the grid
     for (let i = 0; i < totalRows; i++) {
@@ -569,9 +642,9 @@ export class DcGitGraphPanel implements Component {
           const c = row.commit;
           const isSelected = selCommit?.hash === c.hash;
           const pointer = isSelected ? t.fg("accent", "▶ ") : "  ";
-          const graphSymbol = formatCommitGraphPrefix(c.graphPrefix, c.commitKind, t);
+          const graphSymbol = formatCommitGraphPrefix(c.graphPrefix, c.commitKind, c.typeColorAnsi, t);
           const hashStr = t.fg("dim", `#${c.shortHash}`);
-          const subjStr = isSelected ? t.bold(c.subject) : c.subject;
+          const subjStr = formatStyledCommitSubject(c.subject, isSelected);
 
           leftCell = `${pointer}${graphSymbol}${hashStr} ${subjStr}`;
         }

@@ -16,6 +16,7 @@ export async function openGitGraphViewer(ctx: ExtensionContext, cwd?: string): P
     paddingX: 0,
     width: "98%",
     maxHeight: "96%",
+    scrollable: false,
     footer: (theme) => ({
       left: `  ${theme.fg("accent", "↑↓/Clic")} elegir commit   ${theme.fg("accent", "Ctrl+←/→")} cambiar archivo   ${theme.fg("accent", "Ctrl+↑/↓/Rueda")} scroll diff   ${theme.fg("accent", "r")} refrescar   ${theme.fg("accent", "esc")} cerrar`,
       right: `${theme.fg("accent", "[ Git Graph ]")}  `,
@@ -24,7 +25,7 @@ export async function openGitGraphViewer(ctx: ExtensionContext, cwd?: string): P
       return new DcGitGraphPanel({
         cwd: targetCwd,
         theme,
-        maxRows: () => Math.max(18, Math.floor((tui.terminal.rows || 40) * 0.94) - 6),
+        maxRows: () => Math.max(12, Math.floor((tui.terminal.rows || 40) * 0.94) - 8),
         requestRender: () => tui.requestRender(),
       });
     },
