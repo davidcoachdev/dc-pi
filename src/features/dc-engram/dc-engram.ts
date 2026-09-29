@@ -19,14 +19,17 @@ export async function openEngramExplorer(ctx: ExtensionContext, project?: string
     glyph: "⛩ ",
     width: "90%",
     maxHeight: "85%",
+    scrollable: false,
+    showScrollbar: false,
     footer: (theme) => ({
-      left: ` ${theme.fg("accent", "↑↓/Clic")} seleccionar  ·  ${theme.fg("accent", "Esc")} cerrar`,
+      left: ` ${theme.fg("accent", "↑↓/Clic")} seleccionar  ·  ${theme.fg("accent", "Ctrl+↑↓")} detalle  ·  ${theme.fg("accent", "Esc")} limpiar/cerrar`,
       right: theme.fg("accent", `${obs.length} registros (${projectName})`),
     }),
     content: (_done, theme, tui) => {
       return new EngramPanel({
         theme,
         projectName,
+        maxRows: () => Math.max(12, Math.floor(((tui as any)?.terminal?.rows ?? process.stdout?.rows ?? 35) * 0.85) - 6),
         requestRender: () => tui.requestRender(),
       });
     },

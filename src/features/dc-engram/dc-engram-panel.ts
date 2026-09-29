@@ -8,27 +8,47 @@ import {
   type TuiMouseEvent,
   type TuiMouseEventResult,
 } from "@earendil-works/pi-tui";
+import { DcSearchInput } from "../../ui/dc-search-input.ts";
+import { justifyRow } from "../../ui/dc-row.ts";
 import { getProjectObservations, resolveEngramProjectName, type EngramObservation } from "./dc-engram-db.ts";
 
 export interface EngramPanelOptions {
   theme: Pick<Theme, "fg" | "bg" | "bold">;
   requestRender: () => void;
   projectName?: string;
+  maxRows?: number | (() => number);
 }
 
 export class EngramPanel implements Component {
   private theme: Pick<Theme, "fg" | "bg" | "bold">;
   private observations: EngramObservation[];
   private selectedIndex = 0;
+  private listScrollOffset = 0;
+  private detailScrollOffset = 0;
+  private searchInput: DcSearchInput;
   private requestRender: () => void;
-  private lastLeftW = 32;
+  private maxRowsOption?: number | (() => number);
+  private lastLeftW = 34;
+  private lastRowsCount = 14;
+  private readonly headerRows = 2;
   public projectName: string;
 
   constructor(options: EngramPanelOptions) {
     this.theme = options.theme;
     this.requestRender = options.requestRender;
+    this.maxRowsOption = options.maxRows;
     this.projectName = resolveEngramProjectName(options.projectName);
     this.observations = getProjectObservations(500, this.projectName);
+
+    this.searchInput = new DcSearchInput({
+      placeholder: "Buscar (#id, tipo, palabra clave)...",
+      width: 32,
+      theme: {
+        fg: (c, text) => this.theme.fg(c as any, text),
+        bold: (text) => this.theme.bold(text),
+      },
+      showEscHint: true,
+    });
   }
 
   invalidate(): void {
@@ -39,22 +59,60 @@ export class EngramPanel implements Component {
     return this.observations;
   }
 
+  getFilteredObservations(): EngramObservation[] {
+    const q = this.searchInput.getQuery().trim().toLowerCase();
+    if (!q) return this.observations;
+
+    return this.observations.filter((obs) => {
+      const idStr = `#${obs.id}`.toLowerCase();
+      if (idStr.includes(q) || String(obs.id).includes(q)) return true;
+      if (obs.title.toLowerCase().includes(q)) return true;
+      if (obs.type.toLowerCase().includes(q)) return true;
+      if (obs.content.toLowerCase().includes(q)) return true;
+      if (obs.scope.toLowerCase().includes(q)) return true;
+      return false;
+    });
+  }
+
   getSelectedIndex(): number {
     return this.selectedIndex;
   }
 
   setSelectedIndex(index: number): void {
-    if (this.observations.length === 0) return;
-    this.selectedIndex = Math.max(0, Math.min(this.observations.length - 1, index));
+    const filtered = this.getFilteredObservations();
+    if (filtered.length === 0) return;
+    this.selectedIndex = Math.max(0, Math.min(filtered.length - 1, index));
+    this.detailScrollOffset = 0;
+    this.adjustListScroll();
     this.requestRender();
+  }
+
+  public getMaxRows(): number {
+    if (typeof this.maxRowsOption === "function") {
+      return Math.max(12, this.maxRowsOption());
+    }
+    if (typeof this.maxRowsOption === "number") {
+      return Math.max(12, this.maxRowsOption);
+    }
+    const termRows = process.stdout?.rows ?? 35;
+    return Math.max(12, Math.floor(termRows * 0.85) - 6);
+  }
+
+  private adjustListScroll(): void {
+    const rowsBudget = this.lastRowsCount;
+    if (this.selectedIndex < this.listScrollOffset) {
+      this.listScrollOffset = this.selectedIndex;
+    } else if (this.selectedIndex >= this.listScrollOffset + rowsBudget) {
+      this.listScrollOffset = this.selectedIndex - rowsBudget + 1;
+    }
   }
 
   render(width: number): string[] {
     const t = this.theme;
-    const safeW = Math.max(48, width);
+    const safeW = Math.max(50, width);
 
-    // 1/3 para el índice de memorias (izq), 2/3 para el detalle (der)
-    const leftW = Math.max(26, Math.min(38, Math.floor(safeW * 0.35)));
+    // 1/3 (36%) izquierda para índice, 2/3 (64%) derecha para detalle
+    const leftW = Math.max(28, Math.min(42, Math.floor(safeW * 0.36)));
     this.lastLeftW = leftW;
     const rightW = Math.max(20, safeW - leftW - 3);
 
@@ -63,43 +121,69 @@ export class EngramPanel implements Component {
       return v >= len ? truncateToWidth(str, len, "") : str + " ".repeat(len - v);
     };
 
-    if (this.observations.length === 0) {
-      const lines: string[] = [
-        "",
-        `  ${t.fg("accent", "◆")} ${t.bold(t.fg("accent", `Proyecto: [${this.projectName}]`))}`,
-        `    ${t.fg("dim", "Daemon Engram:")} ${t.fg("success", "127.0.0.1:7437")} ${t.fg("dim", "· SQLite: ~/.engram/engram.db")}`,
-        `    ${t.fg("border", "─".repeat(safeW - 8))}`,
-        "",
-        `    ${t.fg("text", "No se encontraron observaciones registradas para este proyecto.")}`,
-        "",
-        `    ${t.fg("dim", "• Las memorias se guardan automáticamente durante sesiones con /engram o ODD.")}`,
-        `    ${t.fg("dim", "• Para consultar la TUI interactiva oficial de Engram, usá /dc-preview engram.")}`,
-        `    ${t.fg("dim", "• Para sincronizar con la nube, usá /dc-engram-enroll.")}`,
-        "",
-      ];
+    const filtered = this.getFilteredObservations();
+    const total = this.observations.length;
+
+    // Asegurar selección dentro de rango tras filtros
+    if (this.selectedIndex >= filtered.length) {
+      this.selectedIndex = Math.max(0, filtered.length - 1);
+    }
+
+    // Cabecera Fila 0
+    const filterBadge = this.searchInput.isEmpty()
+      ? `${t.fg("accent", String(total))} obs`
+      : `${t.bold(t.fg("accent", String(filtered.length)))}${t.fg("dim", `/${total}`)}`;
+    const headerLeft = ` 🧠 ${t.bold(t.fg("accent", this.projectName))} ${t.fg("dim", "(")}${filterBadge}${t.fg("dim", ")")}`;
+
+    const titleText = ` 📌 ${t.bold(t.fg("accent", "Detalle de Memoria"))}`;
+    const searchWidth = Math.min(36, Math.max(16, rightW - visibleWidth(" 📌 Detalle de Memoria") - 2));
+    const searchRender = this.searchInput.render(searchWidth);
+    const headerRight = justifyRow(titleText, searchRender + " ", rightW);
+
+    const lines: string[] = [];
+    lines.push(`${pad(headerLeft, leftW)} ${t.fg("border", "│")} ${pad(headerRight, rightW)}`);
+    lines.push(`${t.fg("border", "─".repeat(leftW))}─┼─${t.fg("border", "─".repeat(rightW))}`);
+
+    // Si no hay observaciones en general o tras el filtro
+    if (filtered.length === 0) {
+      const emptyMsg = total === 0
+        ? `  ${t.fg("dim", "(sin memorias guardadas)")}`
+        : `  ${t.fg("warning", "(sin coincidencias de búsqueda)")}`;
+      const emptyDetail = total === 0
+        ? `  ${t.fg("dim", "Daemon :7437 activo · ~/.engram/engram.db")}`
+        : `  ${t.fg("dim", "Probá con otro término o presioná Esc para limpiar.")}`;
+
+      lines.push(`${pad(emptyMsg, leftW)} ${t.fg("border", "│")} ${pad(emptyDetail, rightW)}`);
+      for (let i = 0; i < 10; i++) {
+        lines.push(`${" ".repeat(leftW)} ${t.fg("border", "│")} ${" ".repeat(rightW)}`);
+      }
       return lines.map((l) => truncateToWidth(l, safeW, ""));
     }
 
-    // 1. Preparar líneas del panel de detalle derecho
-    const current = this.observations[this.selectedIndex] || this.observations[0]!;
-    const rightLines: string[] = [];
+    // Altura del cuerpo visible
+    const availableRows = Math.max(10, this.getMaxRows() - this.headerRows);
+    this.lastRowsCount = availableRows;
+    this.adjustListScroll();
 
-    rightLines.push(` 📌 ${t.bold(t.fg("accent", `ID: #${current.id}`))}  ${t.fg("dim", "·")}  ${t.fg("accent", `[${current.type}]`)}`);
-    rightLines.push(` 📅 ${t.fg("dim", current.created_at)}  ${t.fg("dim", "·")}  Scope: ${t.fg("text", current.scope)}`);
-    rightLines.push(t.fg("border", "─".repeat(Math.max(1, rightW - 2))));
-    rightLines.push(` ${t.bold(t.fg("text", current.title))}`);
-    rightLines.push("");
+    // 1. Preparar detalle derecho
+    const current = filtered[this.selectedIndex] || filtered[0]!;
+    const rightContent: string[] = [];
+
+    rightContent.push(` 📌 ${t.bold(t.fg("accent", `ID: #${current.id}`))}  ${t.fg("dim", "·")}  ${t.fg("accent", `[${current.type}]`)}  ${t.fg("dim", "·")}  Scope: ${t.fg("text", current.scope)}`);
+    rightContent.push(` 📅 ${t.fg("dim", current.created_at)}`);
+    rightContent.push(t.fg("border", "─".repeat(Math.max(1, rightW - 2))));
+    rightContent.push(` ${t.bold(t.fg("text", current.title))}`);
+    rightContent.push("");
 
     const contentRaw = current.content || "(Sin contenido)";
     const paragraphs = contentRaw.split("\n");
     for (const p of paragraphs) {
       const trimmed = p.trim();
       if (!trimmed) {
-        rightLines.push("");
+        rightContent.push("");
         continue;
       }
 
-      // Estilizar secciones conocidas de Engram (What, Why, Where, Learned, Goal, etc.)
       const isHeaderPrefix = /^(what|why|where|learned|goal|instructions|discoveries|accomplished|next steps|relevant files):/i.test(trimmed);
       let lineToWrap = trimmed;
 
@@ -114,85 +198,200 @@ export class EngramPanel implements Component {
       const words = lineToWrap.split(/\s+/);
       for (const w of words) {
         if (visibleWidth(currentLine + " " + w) > rightW - 3) {
-          rightLines.push(` ${currentLine}`);
+          rightContent.push(` ${currentLine}`);
           currentLine = w;
         } else {
           currentLine = currentLine ? `${currentLine} ${w}` : w;
         }
       }
       if (currentLine) {
-        rightLines.push(` ${currentLine}`);
+        rightContent.push(` ${currentLine}`);
       }
     }
 
-    // 2. Calcular altura combinada
-    const rowsCount = Math.max(this.observations.length, rightLines.length, 14);
-    const lines: string[] = [];
+    // Scroll vertical del detalle derecho
+    const maxDetailScroll = Math.max(0, rightContent.length - availableRows);
+    this.detailScrollOffset = Math.max(0, Math.min(this.detailScrollOffset, maxDetailScroll));
+    const visibleDetail = rightContent.slice(this.detailScrollOffset, this.detailScrollOffset + availableRows);
 
-    for (let r = 0; r < rowsCount; r++) {
-      // Columna izquierda: índice de observaciones
+    // 2. Columna izquierda con scroll vertical (Sliding Window)
+    const maxListScroll = Math.max(0, filtered.length - availableRows);
+    this.listScrollOffset = Math.max(0, Math.min(this.listScrollOffset, maxListScroll));
+    const visibleObservations = filtered.slice(this.listScrollOffset, this.listScrollOffset + availableRows);
+
+    // 3. Renderizar filas combinadas
+    for (let r = 0; r < availableRows; r++) {
+      // 3.1 Izquierda (Observación con scrollbar retro si la lista supera el viewport)
       let leftCell = " ".repeat(leftW);
-      if (r < this.observations.length) {
-        const obs = this.observations[r]!;
-        const isSelected = r === this.selectedIndex;
+      if (r < visibleObservations.length) {
+        const obsIndex = this.listScrollOffset + r;
+        const obs = visibleObservations[r]!;
+        const isSelected = obsIndex === this.selectedIndex;
         const typeBadge = `[${obs.type}]`;
         const lineStr = ` #${obs.id} ${typeBadge} ${obs.title}`;
-        const truncated = truncateToWidth(lineStr, leftW - 2, "…");
-        const padded = pad(` ${truncated}`, leftW);
+        
+        // Reservar 1 columna a la derecha para el scrollbar si hay overflow
+        const contentW = maxListScroll > 0 ? leftW - 2 : leftW - 1;
+        const truncated = truncateToWidth(lineStr, contentW, "…");
+        const paddedContent = pad(` ${truncated}`, contentW);
 
+        // Carácter de scrollbar vertical en la lista izquierda
+        let scrollbarChar = " ";
+        if (maxListScroll > 0) {
+          if (r === 0) {
+            scrollbarChar = this.listScrollOffset > 0 ? t.fg("accent", "▲") : t.fg("dim", "░");
+          } else if (r === availableRows - 1) {
+            scrollbarChar = this.listScrollOffset < maxListScroll ? t.fg("accent", "▼") : t.fg("dim", "░");
+          } else {
+            const trackH = availableRows - 2;
+            const thumbPos = Math.round((this.listScrollOffset / maxListScroll) * (trackH - 1));
+            scrollbarChar = (r - 1) === thumbPos ? t.fg("accent", "█") : t.fg("dim", "░");
+          }
+        }
+
+        const fullLeft = `${paddedContent}${scrollbarChar}`;
         leftCell = isSelected
-          ? t.bg("selectedBg", t.bold(t.fg("accent", padded)))
-          : t.fg("text", padded);
+          ? t.bg("selectedBg", t.bold(t.fg("accent", fullLeft)))
+          : t.fg("text", fullLeft);
       }
 
-      // Columna derecha: detalle
-      const rightCell = truncateToWidth(rightLines[r] ?? "", rightW, "");
-      lines.push(`${leftCell}${t.fg("border", "│")}${rightCell}`);
+      // 3.2 Derecha (Detalle de contenido)
+      const detailLine = visibleDetail[r] ?? "";
+      const rightCell = pad(detailLine, rightW);
+
+      lines.push(`${leftCell} ${t.fg("border", "│")} ${rightCell}`);
     }
 
     return lines.map((l) => truncateToWidth(l, safeW, ""));
   }
 
   handleInput(data: string): boolean {
-    const total = this.observations.length;
-    if (total === 0) return false;
+    const filtered = this.getFilteredObservations();
 
+    // Si la lista está vacía y no estamos buscando ni borrando, no consumir teclas de navegación
+    if (filtered.length === 0 && !matchesKey(data, Key.escape) && !matchesKey(data, Key.backspace) && !(data.length === 1 && data >= " " && data <= "~")) {
+      return false;
+    }
+
+    // Navegación en la lista izquierda (Up / Down)
     if (matchesKey(data, Key.up)) {
       if (this.selectedIndex > 0) {
-        this.selectedIndex -= 1;
+        this.selectedIndex--;
+        this.detailScrollOffset = 0;
+        this.adjustListScroll();
         this.requestRender();
       }
       return true;
     }
 
     if (matchesKey(data, Key.down)) {
-      if (this.selectedIndex < total - 1) {
-        this.selectedIndex += 1;
+      if (this.selectedIndex < filtered.length - 1) {
+        this.selectedIndex++;
+        this.detailScrollOffset = 0;
+        this.adjustListScroll();
         this.requestRender();
       }
       return true;
     }
 
+    // PageUp / PageDown
     if (matchesKey(data, Key.pageUp)) {
-      this.selectedIndex = Math.max(0, this.selectedIndex - 8);
-      this.requestRender();
+      if (filtered.length > 0) {
+        this.selectedIndex = Math.max(0, this.selectedIndex - 8);
+        this.detailScrollOffset = 0;
+        this.adjustListScroll();
+        this.requestRender();
+      }
       return true;
     }
 
     if (matchesKey(data, Key.pageDown)) {
-      this.selectedIndex = Math.min(total - 1, this.selectedIndex + 8);
-      this.requestRender();
+      if (filtered.length > 0) {
+        this.selectedIndex = Math.min(filtered.length - 1, this.selectedIndex + 8);
+        this.detailScrollOffset = 0;
+        this.adjustListScroll();
+        this.requestRender();
+      }
       return true;
     }
 
+    // Home / End
     if (matchesKey(data, Key.home)) {
-      this.selectedIndex = 0;
-      this.requestRender();
+      if (filtered.length > 0) {
+        this.selectedIndex = 0;
+        this.listScrollOffset = 0;
+        this.detailScrollOffset = 0;
+        this.requestRender();
+      }
       return true;
     }
 
     if (matchesKey(data, Key.end)) {
-      this.selectedIndex = total - 1;
+      if (filtered.length > 0) {
+        this.selectedIndex = filtered.length - 1;
+        this.adjustListScroll();
+        this.detailScrollOffset = 0;
+        this.requestRender();
+      }
+      return true;
+    }
+
+    // Scroll vertical del detalle derecho con Ctrl+Up / Ctrl+Down
+    const isScrollDown =
+      matchesKey(data, "ctrl+down") ||
+      matchesKey(data, Key.ctrl("down")) ||
+      data === "\x1b[1;5B";
+
+    const isScrollUp =
+      matchesKey(data, "ctrl+up") ||
+      matchesKey(data, Key.ctrl("up")) ||
+      data === "\x1b[1;5A";
+
+    if (isScrollDown) {
+      this.detailScrollOffset = Math.min(100, this.detailScrollOffset + 4);
+      this.requestRender();
+      return true;
+    }
+
+    if (isScrollUp) {
+      if (this.detailScrollOffset > 0) {
+        this.detailScrollOffset = Math.max(0, this.detailScrollOffset - 4);
+        this.requestRender();
+      }
+      return true;
+    }
+
+    // Escape: si la búsqueda tiene texto, la limpia sin cerrar el modal
+    if (matchesKey(data, Key.escape)) {
+      if (!this.searchInput.isEmpty()) {
+        this.searchInput.clear();
+        this.selectedIndex = 0;
+        this.listScrollOffset = 0;
+        this.detailScrollOffset = 0;
+        this.requestRender();
+        return true;
+      }
+      return false; // permite cerrar la ventana modal si la búsqueda ya está vacía
+    }
+
+    // Backspace en búsqueda
+    if (matchesKey(data, Key.backspace)) {
+      if (this.searchInput.backspace()) {
+        this.selectedIndex = 0;
+        this.listScrollOffset = 0;
+        this.detailScrollOffset = 0;
+        this.requestRender();
+        return true;
+      }
+      return true;
+    }
+
+    // Caracteres imprimibles (búsqueda en tiempo real)
+    if (data.length === 1 && data >= " " && data <= "~") {
+      this.searchInput.append(data);
+      this.selectedIndex = 0;
+      this.listScrollOffset = 0;
+      this.detailScrollOffset = 0;
       this.requestRender();
       return true;
     }
@@ -201,14 +400,24 @@ export class EngramPanel implements Component {
   }
 
   handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
-    const total = this.observations.length;
-    if (total === 0) return undefined;
+    const filtered = this.getFilteredObservations();
 
+    // Rueda del mouse
     if (event.type === "wheel") {
       const delta = (event as any).wheelDelta ?? ((event as any).deltaY > 0 ? 1 : -1);
-      const next = Math.max(0, Math.min(total - 1, this.selectedIndex + (delta > 0 ? 1 : -1)));
-      if (next !== this.selectedIndex) {
-        this.selectedIndex = next;
+      if (event.x !== undefined && event.x < this.lastLeftW && filtered.length > 0) {
+        // Scroll en la lista izquierda
+        const next = Math.max(0, Math.min(filtered.length - 1, this.selectedIndex + (delta > 0 ? 1 : -1)));
+        if (next !== this.selectedIndex) {
+          this.selectedIndex = next;
+          this.detailScrollOffset = 0;
+          this.adjustListScroll();
+          this.requestRender();
+          return { handled: true };
+        }
+      } else {
+        // Scroll en el detalle derecho
+        this.detailScrollOffset = Math.max(0, this.detailScrollOffset + (delta > 0 ? 3 : -3));
         this.requestRender();
         return { handled: true };
       }
@@ -219,9 +428,13 @@ export class EngramPanel implements Component {
       return undefined;
     }
 
-    if (event.x !== undefined && event.x < this.lastLeftW && event.y !== undefined) {
-      if (event.y >= 0 && event.y < total) {
-        this.selectedIndex = event.y;
+    // Clic en la lista izquierda (después de la cabecera de 2 filas)
+    if (event.x !== undefined && event.x < this.lastLeftW && event.y !== undefined && event.y >= this.headerRows) {
+      const clickedRow = event.y - this.headerRows;
+      const clickedIndex = this.listScrollOffset + clickedRow;
+      if (clickedIndex >= 0 && clickedIndex < filtered.length) {
+        this.selectedIndex = clickedIndex;
+        this.detailScrollOffset = 0;
         this.requestRender();
         return { handled: true };
       }
