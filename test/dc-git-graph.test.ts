@@ -6,6 +6,7 @@ import {
   parseGitGraph,
   DcGitGraphPanel,
   openGitGraphViewer,
+  dcGitGraphExtension,
   type GitGraphCommit,
   type GitGraphData,
 } from "../src/features/dc-git-graph/index.ts";
@@ -345,6 +346,25 @@ test("openGitGraphViewer opens modal via openDcModal", async () => {
 
   assert.equal(customCalls, 1);
   assert.ok(capturedTitle.includes("Git Graph") || capturedTitle.includes("Branch"));
+});
+
+test("dcGitGraphExtension registers dc-git-graph command and alt+h shortcut", () => {
+  const registeredCommands: string[] = [];
+  let registeredShortcut: string | undefined;
+
+  const mockPi = {
+    registerCommand(name: string) {
+      registeredCommands.push(name);
+    },
+    registerShortcut(name: string) {
+      registeredShortcut = name;
+    },
+  } as unknown as any;
+
+  dcGitGraphExtension(mockPi);
+
+  assert.ok(registeredCommands.includes("dc-git-graph"));
+  assert.equal(registeredShortcut, "alt+h");
 });
 
 test("parseGitGraph classifies commit kinds (head, merge, remote-tip, commit) and parses workingTreeStatus", () => {
