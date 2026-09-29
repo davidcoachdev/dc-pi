@@ -43,9 +43,15 @@ export class DcPadding implements Component {
 }
 
 export class DcJustifiedRow implements Component {
-  constructor(public left: string, public right: string, public onClick?: () => void) {}
+  constructor(
+    public left: string | (() => string),
+    public right: string | (() => string),
+    public onClick?: () => void,
+  ) {}
   render(width: number): string[] {
-    return [justifyRow(this.left, this.right, width)];
+    const leftText = typeof this.left === "function" ? this.left() : this.left;
+    const rightText = typeof this.right === "function" ? this.right() : this.right;
+    return [justifyRow(leftText, rightText, width)];
   }
   invalidate() {}
   handleMouse(event: any) {
