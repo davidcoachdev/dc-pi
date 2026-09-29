@@ -22,7 +22,7 @@ export async function openEngramExplorer(ctx: ExtensionContext, project?: string
     scrollable: false,
     showScrollbar: false,
     footer: (theme) => ({
-      left: ` ${theme.fg("accent", "↑↓/Clic")} seleccionar  ·  ${theme.fg("accent", "Ctrl+↑↓")} detalle  ·  ${theme.fg("accent", "Esc")} limpiar/cerrar`,
+      left: ` ${theme.fg("accent", "↑↓/Clic")} elegir  ·  ${theme.fg("accent", "Ctrl+↑↓")} detalle  ·  ${theme.fg("accent", "c")} copiar  ·  ${theme.fg("accent", "o")} browser  ·  ${theme.fg("accent", "Esc")} salir`,
       right: theme.fg("accent", `${obs.length} registros (${projectName})`),
     }),
     content: (_done, theme, tui) => {
@@ -91,9 +91,16 @@ export default function dcEngramExtension(pi: ExtensionAPI): void {
     },
   });
 
-  // Atajo canónico Alt+Shift+G
+  // Atajo canónico Alt+G / Alt+Shift+G
+  pi.registerShortcut("alt+g" as never, {
+    description: "Abrir visor de memorias Engram de DC Studio (Alt+G)",
+    handler: async (ctx: ExtensionContext) => {
+      await openEngramExplorer(ctx);
+    },
+  });
+
   pi.registerShortcut("alt+shift+g" as never, {
-    description: "Abrir visor de memorias Engram de DC Studio",
+    description: "Abrir visor de memorias Engram de DC Studio (Alt+Shift+G)",
     handler: async (ctx: ExtensionContext) => {
       await openEngramExplorer(ctx);
     },

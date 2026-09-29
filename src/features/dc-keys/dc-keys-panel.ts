@@ -24,10 +24,18 @@ export function getDefaultCategories(): ShortcutCategory[] {
     {
       title: "DC Studio",
       rows: [
+        { key: "Alt+G / Alt+Shift+G", action: "visor de memorias Engram (Engram Manager)" },
         { key: "Alt+H", action: "visor de historial Git y grafo (Git Graph)" },
+        { key: "Alt+F", action: "control de cambios y diff Git (Changes)" },
+        { key: "Alt+M", action: "selector de modelos y reasoning (Models)" },
+        { key: "Alt+Shift+Q", action: "monitor de cuotas de modelos (Quota)" },
+        { key: "Alt+Shift+B", action: "alternar visibilidad del sidebar DC Studio" },
+        { key: "Alt+Shift+V", action: "lanzador de herramientas split en terminal (Preview)" },
         { key: "Alt+C", action: "duelo de perfiles (dcdev vs cubis)" },
         { key: "Alt+Shift+C", action: "picker de kaomojis (caritas)" },
         { key: "Alt+?", action: "visor de atajos de teclado (Keyboard Shortcuts)" },
+        { key: "/dc-engram", action: "abrir visor interactivo de memorias Engram" },
+        { key: "/dc-preview", action: "abrir herramienta split (manager|nvim|fzf|yazi|dc|engram)" },
         { key: "/dc-faces", action: "abrir duelo de perfiles" },
         { key: "/dc-caritas", action: "abrir selector de kaomojis" },
         { key: "/dc-window-demo", action: "ver demo de la ventana clásica con scroll" },

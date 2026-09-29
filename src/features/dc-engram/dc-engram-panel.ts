@@ -10,6 +10,8 @@ import {
 } from "@earendil-works/pi-tui";
 import { DcSearchInput } from "../../ui/dc-search-input.ts";
 import { justifyRow } from "../../ui/dc-row.ts";
+import { dcClipboard } from "../../integrations/dc-clipboard/dc-clipboard.ts";
+import { openProjectDashboard } from "./dc-engram-enroll-panel.ts";
 import { getProjectObservations, resolveEngramProjectName, type EngramObservation } from "./dc-engram-db.ts";
 
 export interface EngramPanelOptions {
@@ -358,6 +360,23 @@ export class EngramPanel implements Component {
         this.detailScrollOffset = Math.max(0, this.detailScrollOffset - 4);
         this.requestRender();
       }
+      return true;
+    }
+
+    // Copiar memoria activa al portapapeles: 'c' / 'C' (cuando la búsqueda está vacía)
+    if (this.searchInput.isEmpty() && (data === "c" || data === "C")) {
+      const cur = filtered[this.selectedIndex];
+      if (cur) {
+        const textToCopy = `#${cur.id} [${cur.type}] ${cur.title}\n\n${cur.content}`;
+        dcClipboard.copy(textToCopy);
+        this.requestRender();
+      }
+      return true;
+    }
+
+    // Abrir dashboard web en navegador: 'o' / 'O' (cuando la búsqueda está vacía)
+    if (this.searchInput.isEmpty() && (data === "o" || data === "O")) {
+      openProjectDashboard(this.projectName);
       return true;
     }
 
