@@ -24,6 +24,7 @@ export function getDefaultCategories(): ShortcutCategory[] {
     {
       title: "DC Studio",
       rows: [
+        { key: "Alt+H", action: "visor de historial Git y grafo (Git Graph)" },
         { key: "Alt+C", action: "duelo de perfiles (dcdev vs cubis)" },
         { key: "Alt+Shift+C", action: "picker de kaomojis (caritas)" },
         { key: "Alt+?", action: "visor de atajos de teclado (Keyboard Shortcuts)" },

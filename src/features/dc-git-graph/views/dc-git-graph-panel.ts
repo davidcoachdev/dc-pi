@@ -16,6 +16,7 @@ import type {
   GitGraphRow,
 } from "../core/dc-git-graph-types.ts";
 import { parseGitGraph } from "../core/dc-git-graph-parser.ts";
+import { parseRawCommitDetail, formatDiffLine, renderDcCodeBox } from "../core/dc-git-diff-formatter.ts";
 import {
   getGitCommitDetail,
   getGitCommitGraph,
@@ -77,6 +78,7 @@ export class DcGitGraphPanel implements Component {
   private currentDetail: string[] = [];
   private detailScrollOffset = 0;
   private graphScrollOffset = 0;
+  private activeFileIndex = 0;
   private lastLeftW = 30;
   private lastHeaderRows = 2;
   private lastRowsCount = 15;
@@ -143,15 +145,21 @@ export class DcGitGraphPanel implements Component {
     return this.detailScrollOffset;
   }
 
+  getActiveFileIndex(): number {
+    return this.activeFileIndex;
+  }
+
   private loadCommitDetail(): void {
     const commit = this.getSelectedCommit();
     if (!commit) {
       this.currentDetail = ["(sin commits en este repositorio)"];
       this.detailScrollOffset = 0;
+      this.activeFileIndex = 0;
       return;
     }
     this.currentDetail = this.getCommitDetailFn(this.cwd, commit.hash);
     this.detailScrollOffset = 0;
+    this.activeFileIndex = 0;
   }
 
   handleInput(data: string): boolean {
@@ -193,18 +201,76 @@ export class DcGitGraphPanel implements Component {
       return true;
     }
 
-    // Scrolling right pane (diff / commit detail)
-    if (matchesKey(data, Key.pageDown)) {
-      if (this.detailScrollOffset + 10 < this.currentDetail.length) {
-        this.detailScrollOffset += 10;
+    // Alternar tabs de archivos modificados: Ctrl+Right o Ctrl+Left (o ] / [ o t / T)
+    const isNextFile =
+      matchesKey(data, "ctrl+right") ||
+      matchesKey(data, Key.ctrl("right")) ||
+      data === "\x1b[1;5C" ||
+      data === "\x1b[5C" ||
+      data === "\x1bOc" ||
+      data === "]" ||
+      data === "t";
+
+    const isPrevFile =
+      matchesKey(data, "ctrl+left") ||
+      matchesKey(data, Key.ctrl("left")) ||
+      data === "\x1b[1;5D" ||
+      data === "\x1b[5D" ||
+      data === "\x1bOd" ||
+      data === "[" ||
+      data === "T";
+
+    if (isNextFile) {
+      const parsedDetail = parseRawCommitDetail(this.currentDetail);
+      if (parsedDetail.files.length > 1) {
+        this.activeFileIndex = (this.activeFileIndex + 1) % parsedDetail.files.length;
+        this.detailScrollOffset = 0;
+        this.requestRender();
+        return true;
+      }
+    }
+    if (isPrevFile) {
+      const parsedDetail = parseRawCommitDetail(this.currentDetail);
+      if (parsedDetail.files.length > 1) {
+        this.activeFileIndex = (this.activeFileIndex - 1 + parsedDetail.files.length) % parsedDetail.files.length;
+        this.detailScrollOffset = 0;
+        this.requestRender();
+        return true;
+      }
+    }
+
+    // Scrolling right pane (diff): Ctrl+Down o Ctrl+Up (o PageDown / PageUp)
+    const isScrollDown =
+      matchesKey(data, "ctrl+down") ||
+      matchesKey(data, Key.ctrl("down")) ||
+      data === "\x1b[1;5B" ||
+      data === "\x1b[5B" ||
+      data === "\x1bOb" ||
+      matchesKey(data, Key.pageDown);
+
+    const isScrollUp =
+      matchesKey(data, "ctrl+up") ||
+      matchesKey(data, Key.ctrl("up")) ||
+      data === "\x1b[1;5A" ||
+      data === "\x1b[5A" ||
+      data === "\x1bOa" ||
+      matchesKey(data, Key.pageUp);
+
+    if (isScrollDown) {
+      const parsedDetail = parseRawCommitDetail(this.currentDetail);
+      const activeFile = parsedDetail.files[this.activeFileIndex] || parsedDetail.files[0];
+      const activeLines = activeFile ? activeFile.lines : (parsedDetail.diffLines.length > 0 ? parsedDetail.diffLines : this.currentDetail);
+      const maxScroll = Math.max(0, activeLines.length - 6);
+      if (this.detailScrollOffset < maxScroll) {
+        this.detailScrollOffset = Math.min(maxScroll, this.detailScrollOffset + 5);
         this.requestRender();
       }
       return true;
     }
 
-    if (matchesKey(data, Key.pageUp)) {
+    if (isScrollUp) {
       if (this.detailScrollOffset > 0) {
-        this.detailScrollOffset = Math.max(0, this.detailScrollOffset - 10);
+        this.detailScrollOffset = Math.max(0, this.detailScrollOffset - 5);
         this.requestRender();
       }
       return true;
@@ -227,7 +293,7 @@ export class DcGitGraphPanel implements Component {
       const delta = (event as any).wheelDelta ?? 0;
       if (delta === 0) return { handled: false };
 
-      // Wheel on left column (graph commits)
+      // Wheel on left column (graph commits tree - 1/3)
       if (x <= this.lastLeftW) {
         if (delta > 0 && this.selectedIndex < this.data.commits.length - 1) {
           this.selectedIndex++;
@@ -241,18 +307,27 @@ export class DcGitGraphPanel implements Component {
         return { handled: true };
       }
 
-      // Wheel on right column (commit detail diff)
-      if (delta > 0 && this.detailScrollOffset + 3 < this.currentDetail.length) {
-        this.detailScrollOffset += 3;
-        this.requestRender();
-      } else if (delta < 0 && this.detailScrollOffset > 0) {
-        this.detailScrollOffset = Math.max(0, this.detailScrollOffset - 3);
-        this.requestRender();
+      // Wheel on right column (commit detail diff - 2/3)
+      if (x > this.lastLeftW) {
+        const parsedDetail = parseRawCommitDetail(this.currentDetail);
+        const activeFile = parsedDetail.files[this.activeFileIndex] || parsedDetail.files[0];
+        const activeLines = activeFile ? activeFile.lines : (parsedDetail.diffLines.length > 0 ? parsedDetail.diffLines : this.currentDetail);
+        const maxScroll = Math.max(0, activeLines.length - 6);
+        if (delta > 0 && this.detailScrollOffset < maxScroll) {
+          this.detailScrollOffset = Math.min(maxScroll, this.detailScrollOffset + 3);
+          this.requestRender();
+        } else if (delta < 0 && this.detailScrollOffset > 0) {
+          this.detailScrollOffset = Math.max(0, this.detailScrollOffset - 3);
+          this.requestRender();
+        }
+        return { handled: true };
       }
-      return { handled: true };
+
+      return { handled: false };
     }
 
     if (type === "click") {
+      // Click on left column (graph commits tree - 1/3) selects commit
       if (x <= this.lastLeftW) {
         const visualRow = y - this.lastHeaderRows;
         if (visualRow >= 0 && visualRow < this.lastRowsCount) {
@@ -278,9 +353,10 @@ export class DcGitGraphPanel implements Component {
 
   render(width: number): string[] {
     const t = this.theme;
-    const safeW = Math.max(40, width);
-    const leftW = Math.max(28, Math.min(Math.floor(safeW * 0.52), safeW - 22));
-    const rightW = Math.max(20, safeW - leftW - 3);
+    const safeW = Math.max(50, width);
+    // 1/3 (35%) left for graph tree, 2/3 (65%) right for detail & diff
+    const leftW = Math.max(26, Math.min(Math.floor(safeW * 0.35), safeW - 35));
+    const rightW = Math.max(35, safeW - leftW - 3);
     this.lastLeftW = leftW;
 
     const pad = (str: string, len: number) => {
@@ -288,20 +364,26 @@ export class DcGitGraphPanel implements Component {
       return v >= len ? truncateToWidth(str, len, "") : str + " ".repeat(len - v);
     };
 
+    const selCommit = this.getSelectedCommit();
+    const parsedDetail = parseRawCommitDetail(this.currentDetail);
+
+    // Header left: Branch name and status (1/3)
     const branchName = this.data.currentBranch || "HEAD";
     const wt = this.data.workingTreeStatus;
     let branchBadge = t.bold(t.fg("accent", branchName));
     if (wt) {
       if (wt.modifiedCount > 0 || wt.untrackedCount > 0) {
-        const modLabel = leftW < 36 ? `${wt.modifiedCount}m` : `${wt.modifiedCount} mod`;
-        const untrackedLabel = leftW < 36 ? `?${wt.untrackedCount}u` : `?${wt.untrackedCount} untracked`;
+        const modLabel = leftW < 38 ? `${wt.modifiedCount}m` : `${wt.modifiedCount} mod`;
+        const untrackedLabel = leftW < 38 ? `?${wt.untrackedCount}u` : `?${wt.untrackedCount} untracked`;
         branchBadge += ` ${t.fg("dim", "@")} ${t.bold(t.fg("warning", modLabel))} ${t.fg("dim", "»")} ${t.fg("accent", untrackedLabel)}`;
       } else {
         branchBadge += ` ${t.fg("success", "✔ clean")}`;
       }
     }
     const headerLeft = ` 🗂️  ${branchBadge}`;
-    const headerRight = ` ${t.bold(t.fg("accent", "Commit detail & diff"))}`;
+
+    // Header right: Commit detail & diff title (2/3)
+    const headerRight = ` 📝 ${t.bold(t.fg("accent", "Commit detail & diff"))}`;
 
     const lines: string[] = [];
     lines.push(`${pad(headerLeft, leftW)} ${t.fg("border", "│")} ${pad(headerRight, rightW)}`);
@@ -318,11 +400,10 @@ export class DcGitGraphPanel implements Component {
       return lines.map((l) => truncateToWidth(l, safeW, ""));
     }
 
-    const rowsCount = Math.max(12, Math.min(26, Math.max(this.data.rows.length, 12)));
+    const rowsCount = Math.max(14, Math.min(28, Math.max(this.data.rows.length, 14)));
     this.lastRowsCount = rowsCount;
 
     // Adjust graphScrollOffset to ensure selected commit is visible
-    const selCommit = this.getSelectedCommit();
     if (selCommit) {
       const selRowIndex = this.data.rows.findIndex(
         (r) => r.kind === "commit" && r.commit.hash === selCommit.hash,
@@ -340,13 +421,88 @@ export class DcGitGraphPanel implements Component {
       this.graphScrollOffset,
       this.graphScrollOffset + rowsCount,
     );
-    const visibleDetail = this.currentDetail.slice(
-      this.detailScrollOffset,
-      this.detailScrollOffset + rowsCount,
-    );
 
-    for (let i = 0; i < rowsCount; i++) {
-      // 1. Left cell: graph row
+    // Prepare Right Panel Lines (Commit info card + tabs/files + diff - 2/3)
+    const rightLines: string[] = [];
+
+    // 1. Commit Header card
+    let refBadge = "";
+    if (selCommit && selCommit.refs.length > 0) {
+      const shortRefs = selCommit.refs
+        .map((r) => {
+          if (r.startsWith("HEAD ->")) return t.bold(t.fg("accent", r));
+          if (r.startsWith("tag:")) return t.fg("warning", r);
+          if (r.startsWith("origin/")) return t.fg("accent", r);
+          return t.fg("success", r);
+        })
+        .join(t.fg("dim", ", "));
+      refBadge = ` ${t.fg("dim", "(")}${shortRefs}${t.fg("dim", ")")}`;
+    }
+
+    const commitTitle = selCommit?.shortHash
+      ? `📌 ${t.bold(t.fg("accent", "Commit #" + selCommit.shortHash))}${refBadge}`
+      : `📌 ${t.fg("dim", "(sin commit)")}`;
+    rightLines.push(pad(` ${commitTitle}`, rightW));
+
+    const metaLine = parsedDetail.author
+      ? ` 👤 ${t.fg("text", parsedDetail.author)} · 📅 ${t.fg("dim", parsedDetail.date)}`
+      : ` 👤 ${t.fg("dim", "—")}`;
+    rightLines.push(pad(metaLine, rightW));
+
+    const subjLine = parsedDetail.subject
+      ? ` 📝 ${t.bold(t.fg("text", truncateToWidth(parsedDetail.subject, rightW - 6, "")))}`
+      : "";
+    rightLines.push(pad(subjLine, rightW));
+
+    // 2. Changed Files bar (tabs de archivos: SOLO el nombre del archivo)
+    if (parsedDetail.files.length > 0) {
+      const fileBadges = parsedDetail.files
+        .slice(0, 4)
+        .map((f, idx) => {
+          const isAct = idx === this.activeFileIndex;
+          const label = ` 📄 ${f.shortName} `;
+          return isAct
+            ? t.bg("selectedBg", t.bold(t.fg("accent", label)))
+            : t.fg("dim", label);
+        })
+        .join(" ");
+      const extraCount = parsedDetail.files.length > 4 ? ` ${t.fg("dim", `+${parsedDetail.files.length - 4} más`)}` : "";
+      rightLines.push(pad(` 📂 ${fileBadges}${extraCount}`, rightW));
+    } else {
+      rightLines.push(pad(` 📂 ${t.fg("dim", "Sin archivos modificados o diff no disponible")}`, rightW));
+    }
+
+    rightLines.push(t.fg("border", "┄".repeat(Math.max(10, rightW - 2))));
+
+    // 3. Diff renderizado dentro de la caja de código estilizada de DC Studio (dc-code)
+    const headerLinesCount = rightLines.length;
+    const diffBudget = Math.max(6, rowsCount - headerLinesCount - 3);
+
+    const activeFile = parsedDetail.files[this.activeFileIndex] || parsedDetail.files[0];
+    const activeLines = activeFile
+      ? activeFile.lines
+      : parsedDetail.diffLines.length > 0
+      ? parsedDetail.diffLines
+      : this.currentDetail;
+
+    const codeBox = renderDcCodeBox({
+      title: activeFile?.shortName || selCommit?.shortHash || "diff",
+      lines: activeLines,
+      width: rightW,
+      maxRows: diffBudget + 2,
+      scrollOffset: this.detailScrollOffset,
+    });
+
+    for (const cLine of codeBox) {
+      rightLines.push(cLine);
+    }
+
+    const totalRows = Math.max(rowsCount, rightLines.length);
+    this.lastRowsCount = totalRows;
+
+    // Render the grid
+    for (let i = 0; i < totalRows; i++) {
+      // 1. Left cell: Graph commit tree (1/3)
       let leftCell = " ".repeat(leftW);
       if (i < visibleRows.length) {
         const row = visibleRows[i]!;
@@ -373,70 +529,40 @@ export class DcGitGraphPanel implements Component {
           const pointer = isSelected ? t.fg("accent", "▶ ") : "  ";
           const graphSymbol = formatCommitGraphPrefix(c.graphPrefix, c.commitKind, t);
           const hashStr = t.fg("dim", `#${c.shortHash}`);
-
-          let refBadge = "";
-          if (c.refs.length > 0) {
-            const shortRefs = c.refs
-              .map((r) => {
-                if (r.startsWith("HEAD ->")) return t.bold(t.fg("accent", r));
-                if (r.startsWith("tag:")) return t.fg("warning", r);
-                if (r.startsWith("origin/")) return t.fg("accent", r);
-                return t.fg("success", r);
-              })
-              .join(t.fg("dim", ", "));
-            refBadge = `${t.fg("dim", "(")}${shortRefs}${t.fg("dim", ")")} `;
-          }
-
           const subjStr = isSelected ? t.bold(c.subject) : c.subject;
-          leftCell = `${pointer}${graphSymbol}${hashStr} ${refBadge}${subjStr}`;
+
+          leftCell = `${pointer}${graphSymbol}${hashStr} ${subjStr}`;
         }
       }
 
-      // 2. Right cell: commit detail / diff line
-      let rightCell = " ".repeat(rightW);
-      if (i < visibleDetail.length) {
-        const rawLine = visibleDetail[i]!;
-        let styled = rawLine;
-
-        if (rawLine.startsWith("commit ")) {
-          styled = t.bold(t.fg("accent", rawLine));
-        } else if (rawLine.startsWith("Author:") || rawLine.startsWith("Date:")) {
-          styled = t.fg("dim", rawLine);
-        } else if (rawLine.startsWith("+") && !rawLine.startsWith("+++")) {
-          styled = t.fg("success", rawLine);
-        } else if (rawLine.startsWith("-") && !rawLine.startsWith("---")) {
-          styled = t.fg("error", rawLine);
-        } else if (rawLine.startsWith("@@")) {
-          styled = t.fg("accent", rawLine);
-        } else if (rawLine.startsWith("[... diff truncado")) {
-          styled = t.bold(t.fg("warning", rawLine));
-        }
-
-        rightCell = ` ${styled}`;
-      }
+      // 2. Right cell: Commit detail / diff (2/3)
+      const rightCell = rightLines[i] ?? " ".repeat(rightW);
 
       lines.push(`${pad(leftCell, leftW)} ${t.fg("border", "│")} ${pad(rightCell, rightW)}`);
     }
 
-    // Separator line before bottom summary
+    // Bottom Separator
     const bottomSep = `${t.fg("border", "─".repeat(leftW))}─┼─${t.fg("border", "─".repeat(rightW))}`;
     lines.push(bottomSep);
 
-    // Left summary: working tree files & counts
+    // Left summary: Working tree / clean state (1/3)
     let leftSummary = "";
     if (wt && (wt.modifiedCount > 0 || wt.untrackedCount > 0)) {
       const totalChanges = wt.modifiedCount + wt.untrackedCount;
       const countNoun = totalChanges === 1 ? "file" : "files";
-      const statPart = wt.diffStat ? ` · ${wt.diffStat}` : "";
-      leftSummary = ` ${t.bold(t.fg("accent", `${totalChanges} ${countNoun}`))} · ${t.fg("warning", `@${wt.modifiedCount} mod`)} · ${t.fg("accent", `?${wt.untrackedCount} untracked`)}${statPart}`;
+      leftSummary = ` ${t.bold(t.fg("accent", `${totalChanges} ${countNoun}`))} · ${t.fg("warning", `@${wt.modifiedCount}m`)} · ${t.fg("accent", `?${wt.untrackedCount}u`)}`;
     } else {
-      leftSummary = ` ${t.fg("success", "✔ working tree clean")} · ${t.fg("dim", `HEAD: ${this.data.headCommitHash?.slice(0, 7) || "clean"}`)}`;
+      leftSummary = ` ${t.fg("success", "✔ clean")} · ${t.fg("dim", `HEAD: ${this.data.headCommitHash?.slice(0, 7) || "clean"}`)}`;
     }
 
-    // Right summary: selected commit info
+    // Right summary: [📄 archivo: líneas start-end + ins - del] con colores del footer
     let rightSummary = "";
-    if (selCommit) {
-      rightSummary = ` ${t.fg("dim", selCommit.date)} · ${t.bold(t.fg("accent", selCommit.author))}`;
+    if (activeFile && activeLines.length > 0) {
+      const start = this.detailScrollOffset + 1;
+      const end = Math.min(this.detailScrollOffset + Math.max(1, diffBudget), activeLines.length);
+      rightSummary = ` ${t.fg("accent", "📄")} ${t.bold(t.fg("text", activeFile.shortName + ":"))} ${t.fg("dim", `líneas ${start}-${end}`)} ${t.bold(t.fg("success", `+ ${activeFile.additions}`))} ${t.bold(t.fg("error", `- ${activeFile.deletions}`))}`;
+    } else {
+      rightSummary = ` 📄 ${t.fg("dim", "Sin diff para mostrar")}`;
     }
 
     lines.push(`${pad(leftSummary, leftW)} ${t.fg("border", "│")} ${pad(rightSummary, rightW)}`);

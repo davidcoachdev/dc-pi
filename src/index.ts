@@ -64,6 +64,7 @@ import dcCodegraphExtension from "./features/dc-codegraph/dc-codegraph.ts";
 import dcScanGuardExtension from "./features/dc-scan-guard/index.ts";
 import dcCheckpointExtension from "./features/dc-checkpoint/index.ts";
 import dcHandoffExtension from "./features/dc-handoff/index.ts";
+import dcGitGraphExtension from "./features/dc-git-graph/dc-git-graph.ts";
 
 export const profileDuelExtension = dcFaceExtension;
 export const dcFacesExtension = dcFaceExtension;
@@ -112,6 +113,7 @@ export {
   dcScanGuardExtension,
   dcCheckpointExtension,
   dcHandoffExtension,
+  dcGitGraphExtension,
 };
 
 export * from "./features/dc-engram/index.ts";
@@ -176,6 +178,7 @@ export function dcStudioExtension(pi: ExtensionAPI, ctx?: ExtensionContext): voi
   dcScanGuardExtension(pi);
   dcCheckpointExtension(pi);
   dcHandoffExtension(pi);
+  dcGitGraphExtension(pi);
   dcHerdrAgentStateExtension(pi);
   dcEngramExtension(pi);
   dcDialogsExtension(pi, ctx);

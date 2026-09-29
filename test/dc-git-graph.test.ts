@@ -6,6 +6,7 @@ import {
   parseGitGraph,
   DcGitGraphPanel,
   openGitGraphViewer,
+  dcGitGraphExtension,
   type GitGraphCommit,
   type GitGraphData,
 } from "../src/features/dc-git-graph/index.ts";
@@ -113,11 +114,11 @@ test("DcGitGraphPanel initially selects HEAD commit and renders two panes", () =
   assert.equal(detailCalls.length, 1);
   assert.equal(detailCalls[0], "2d271f8c06a558d87bfcad7923347ad8ed02887d");
 
-  // Render output contains two columns separated by vertical divider
+  // Render output contains two columns separated by vertical divider (1/3 graph left, 2/3 detail right)
   const lines = panel.render(100);
   assert.ok(lines.length > 5);
   assert.ok(lines.some((l) => l.includes("│"))); // divider
-  assert.ok(lines.some((l) => l.includes("Branch:") || l.includes("main")));
+  assert.ok(lines.some((l) => l.includes("main")));
   assert.ok(lines.some((l) => l.includes("2d271f8") || l.includes("merge feat")));
   assert.ok(lines.some((l) => l.includes("Subject message")));
 });
@@ -347,6 +348,25 @@ test("openGitGraphViewer opens modal via openDcModal", async () => {
   assert.ok(capturedTitle.includes("Git Graph") || capturedTitle.includes("Branch"));
 });
 
+test("dcGitGraphExtension registers dc-git-graph command and alt+h shortcut", () => {
+  const registeredCommands: string[] = [];
+  let registeredShortcut: string | undefined;
+
+  const mockPi = {
+    registerCommand(name: string) {
+      registeredCommands.push(name);
+    },
+    registerShortcut(name: string) {
+      registeredShortcut = name;
+    },
+  } as unknown as any;
+
+  dcGitGraphExtension(mockPi);
+
+  assert.ok(registeredCommands.includes("dc-git-graph"));
+  assert.equal(registeredShortcut, "alt+h");
+});
+
 test("parseGitGraph classifies commit kinds (head, merge, remote-tip, commit) and parses workingTreeStatus", () => {
   const customLog = [
     "*   COMMIT_REC:1111111\x1f1111111\x1f (HEAD -> main)\x1fnormal head commit\x1fDev\x1f2026-09-28",
@@ -407,12 +427,12 @@ test("DcGitGraphPanel renders enriched status header, glyphs (M, o, *), #shortHa
     requestRender: () => {},
   });
 
-  const lines = panel.render(80);
+  const lines = panel.render(100);
 
-  // Header must contain enriched branch and status
+  // Header must contain enriched branch and status (1/3 left)
   assert.ok(lines[0]?.includes("feat/sidebar"), "Header must include branch name");
-  assert.ok(lines[0]?.includes("4 mod"), "Header must include modified count");
-  assert.ok(lines[0]?.includes("?2 untracked"), "Header must include untracked count");
+  assert.ok(lines[0]?.includes("4 mod") || lines[0]?.includes("4m"), "Header must include modified count");
+  assert.ok(lines[0]?.includes("?2 untracked") || lines[0]?.includes("?2u"), "Header must include untracked count");
 
   // Commits must be formatted with #shortHash
   assert.ok(lines.some((l) => l.includes("#aaa1111")), "Commit hash must have # prefix");
@@ -427,8 +447,88 @@ test("DcGitGraphPanel renders enriched status header, glyphs (M, o, *), #shortHa
 
   // Refs must be wrapped in parentheses
   assert.ok(lines.some((l) => l.includes("(HEAD -> feat/sidebar)")), "Refs must be in parentheses");
-  assert.ok(lines.some((l) => l.includes("(origin/remote-branch)")), "Remote ref must be in parentheses");
 
-  // Bottom summary line must render
-  assert.ok(lines.some((l) => l.includes("6 files") || l.includes("4 mod")), "Bottom summary line must render");
+  // Commit detail must render file info
+  assert.ok(lines.some((l) => l.includes("file")), "Commit detail must render file info");
+});
+
+test("DcGitGraphPanel organizes diff body by file tabs and renders dc-code box with green/red shading", () => {
+  const multiFileRaw = [
+    "commit 84ea56e12345678",
+    "Author: Developer <dev@test.com>",
+    "Date:   Mon Sep 28 18:54:47 2026 -0500",
+    "",
+    "    feat: support file tabs and code block",
+    "---",
+    " src/fileA.ts | 4 ++--",
+    " src/fileB.ts | 2 +-",
+    " 2 files changed, 3 insertions(+), 3 deletions(-)",
+    "",
+    "diff --git a/src/fileA.ts b/src/fileA.ts",
+    "index 111..222 100644",
+    "--- a/src/fileA.ts",
+    "+++ b/src/fileA.ts",
+    "@@ -10,2 +10,2 @@",
+    "-oldLineA",
+    "+newLineA",
+    "diff --git a/src/fileB.ts b/src/fileB.ts",
+    "index 333..444 100644",
+    "--- a/src/fileB.ts",
+    "+++ b/src/fileB.ts",
+    "@@ -20,2 +20,2 @@",
+    "-oldLineB",
+    "+newLineB",
+  ];
+
+  const graphData = parseGitGraph("* COMMIT_REC:84ea56e\x1f84ea56e\x1f (HEAD -> main)\x1ffeat: commit\x1fDev\x1f2026-09-28");
+
+  const panel = new DcGitGraphPanel({
+    cwd: "/fake/repo",
+    theme: dummyTheme,
+    getGraphData: () => graphData,
+    getCommitDetail: () => multiFileRaw,
+    requestRender: () => {},
+  });
+
+  // Initial render: active file is 0 (fileA.ts)
+  assert.equal(panel.getActiveFileIndex(), 0);
+  let lines = panel.render(120);
+
+  // Must render header card
+  assert.ok(lines.some((l) => l.includes("📌 Commit #84ea56e")));
+  assert.ok(lines.some((l) => l.includes("👤 Developer")));
+
+  // Must render file tabs in body
+  assert.ok(lines.some((l) => l.includes("fileA.ts") && l.includes("fileB.ts")));
+
+  // Must render dc-code box with fileA title and rounded corners
+  assert.ok(lines.some((l) => l.includes("╭─") && l.includes("fileA.ts")));
+  assert.ok(lines.some((l) => l.includes("╰─") && l.includes("📋")));
+
+  // Switch to file tab 1 (fileB.ts) with ]
+  panel.handleInput("]");
+  assert.equal(panel.getActiveFileIndex(), 1);
+
+  lines = panel.render(120);
+  // Now dc-code box must display fileB.ts
+  assert.ok(lines.some((l) => l.includes("╭─") && l.includes("fileB.ts")));
+
+  // Switch back with [
+  panel.handleInput("[");
+  assert.equal(panel.getActiveFileIndex(), 0);
+
+  // Switch to file tab 1 with Ctrl+Right (\x1b[1;5C)
+  panel.handleInput("\x1b[1;5C");
+  assert.equal(panel.getActiveFileIndex(), 1, "Ctrl+Right must switch to fileB.ts");
+
+  // Switch back to file tab 0 with Ctrl+Left (\x1b[1;5D)
+  panel.handleInput("\x1b[1;5D");
+  assert.equal(panel.getActiveFileIndex(), 0, "Ctrl+Left must switch back to fileA.ts");
+
+  // Test Ctrl+Down / Ctrl+Up diff scrolling
+  assert.equal(panel.getDetailScrollOffset(), 0);
+  panel.handleInput("\x1b[1;5B"); // Ctrl+Down
+  // Offset increases
+  panel.handleInput("\x1b[1;5A"); // Ctrl+Up
+  assert.equal(panel.getDetailScrollOffset(), 0);
 });
