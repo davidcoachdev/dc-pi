@@ -532,3 +532,46 @@ test("DcGitGraphPanel organizes diff body by file tabs and renders dc-code box w
   panel.handleInput("\x1b[1;5A"); // Ctrl+Up
   assert.equal(panel.getDetailScrollOffset(), 0);
 });
+
+test("DcGitGraphPanel wordwraps long commit subjects and descriptions in header card without truncation", () => {
+  const longRaw = [
+    "commit a1b2c3d4e5f6789",
+    "Author: Lead Architect <arch@dc.studio>",
+    "Date:   Mon Sep 28 20:00:00 2026 -0500",
+    "",
+    "    feat(git-graph): redesign modal with 1/3 tree, 2/3 friendly detail card, and green/red shaded diff",
+    "    This is an extended explanation of the architectural refactoring to wrap headers and increase window height.",
+    "---",
+    " src/file.ts | 2 +-",
+    " 1 file changed, 1 insertion(+), 1 deletion(-)",
+    "",
+    "diff --git a/src/file.ts b/src/file.ts",
+    "index 111..222 100644",
+    "--- a/src/file.ts",
+    "+++ b/src/file.ts",
+    "@@ -1 +1 @@",
+    "-old",
+    "+new",
+  ];
+
+  const graphData = parseGitGraph("* COMMIT_REC:a1b2c3d\x1fa1b2c3d\x1f (HEAD -> main)\x1ffeat: long\x1fDev\x1f2026-09-28");
+
+  const panel = new DcGitGraphPanel({
+    cwd: "/fake/repo",
+    theme: dummyTheme,
+    maxRows: 24,
+    getGraphData: () => graphData,
+    getCommitDetail: () => longRaw,
+    requestRender: () => {},
+  });
+
+  const lines = panel.render(95);
+
+  // Both parts of wrapped subject must be rendered
+  assert.ok(lines.some((l) => l.includes("redesign modal with 1/3 tree")));
+  assert.ok(lines.some((l) => l.includes("friendly detail card")));
+
+  // Body paragraph must be rendered
+  assert.ok(lines.some((l) => l.includes("extended explanation of the architectural")));
+  assert.ok(lines.some((l) => l.includes("increase window")));
+});

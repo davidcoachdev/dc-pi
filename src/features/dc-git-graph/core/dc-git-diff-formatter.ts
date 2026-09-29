@@ -214,6 +214,50 @@ export function parseRawCommitDetail(rawLines: string[]): ParsedCommitDetail {
 }
 
 /**
+ * Wraps commit subject and body text into lines of at most `maxWidth` display cells,
+ * breaking on word boundaries and punctuation when possible.
+ */
+export function wrapMessageText(text: string, maxWidth: number): string[] {
+  if (!text || maxWidth <= 0) return [text || ""];
+  const lines: string[] = [];
+  let remaining = text.trim();
+
+  while (remaining.length > 0) {
+    if (visibleWidth(remaining) <= maxWidth) {
+      lines.push(remaining);
+      break;
+    }
+
+    let breakIdx = -1;
+    for (let i = Math.min(remaining.length, maxWidth); i > Math.floor(maxWidth * 0.4); i--) {
+      const ch = remaining[i];
+      if (
+        ch === " " ||
+        ch === "\t" ||
+        ch === "," ||
+        ch === ";" ||
+        ch === "(" ||
+        ch === ")" ||
+        ch === ":" ||
+        ch === "-"
+      ) {
+        breakIdx = i + 1;
+        break;
+      }
+    }
+
+    if (breakIdx <= 0) {
+      breakIdx = maxWidth;
+    }
+
+    lines.push(remaining.slice(0, breakIdx).trim());
+    remaining = remaining.slice(breakIdx).trim();
+  }
+
+  return lines.length > 0 ? lines : [""];
+}
+
+/**
  * Pure diff syntax shader:
  * Applies green background/foreground for additions (+),
  * red background/foreground for deletions (-),
