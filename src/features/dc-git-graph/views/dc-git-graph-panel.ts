@@ -538,33 +538,6 @@ export class DcGitGraphPanel implements Component {
       lines.push(`${pad(leftCell, leftW)} ${t.fg("border", "│")} ${pad(rightCell, rightW)}`);
     }
 
-    // Bottom Separator
-    const bottomSep = `${t.fg("border", "─".repeat(leftW))}─┼─${t.fg("border", "─".repeat(rightW))}`;
-    lines.push(bottomSep);
-
-    // Left summary: Working tree / clean state (1/3)
-    let leftSummary = "";
-    if (wt && (wt.modifiedCount > 0 || wt.untrackedCount > 0)) {
-      const totalChanges = wt.modifiedCount + wt.untrackedCount;
-      const countNoun = totalChanges === 1 ? "file" : "files";
-      leftSummary = ` ${t.bold(t.fg("accent", `${totalChanges} ${countNoun}`))} · ${t.fg("warning", `@${wt.modifiedCount}m`)} · ${t.fg("accent", `?${wt.untrackedCount}u`)}`;
-    } else {
-      leftSummary = ` ${t.fg("success", "✔ clean")} · ${t.fg("dim", `HEAD: ${this.data.headCommitHash?.slice(0, 7) || "clean"}`)}`;
-    }
-
-    // Right summary: Diff scroll progress (2/3)
-    let rightSummary = "";
-    if (activeLines.length > 0) {
-      const start = this.detailScrollOffset + 1;
-      const end = Math.min(this.detailScrollOffset + Math.max(1, diffBudget - 2), activeLines.length);
-      const tabHint = parsedDetail.files.length > 1 ? " | [/] cambiar archivo" : "";
-      rightSummary = ` 📄 ${activeFile?.shortName || "Diff"}: líneas ${start}-${end}/${activeLines.length} (Rueda/PgUp/Dn scroll${tabHint})`;
-    } else {
-      rightSummary = ` 📄 ${t.fg("dim", "No hay patch diff para mostrar")}`;
-    }
-
-    lines.push(`${pad(leftSummary, leftW)} ${t.fg("border", "│")} ${pad(rightSummary, rightW)}`);
-
     return lines.map((l) => truncateToWidth(l, safeW, ""));
 
     return lines.map((l) => truncateToWidth(l, safeW, ""));

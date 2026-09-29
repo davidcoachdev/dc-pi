@@ -428,8 +428,8 @@ test("DcGitGraphPanel renders enriched status header, glyphs (M, o, *), #shortHa
   // Refs must be wrapped in parentheses
   assert.ok(lines.some((l) => l.includes("(HEAD -> feat/sidebar)")), "Refs must be in parentheses");
 
-  // Bottom summary line must render
-  assert.ok(lines.some((l) => l.includes("Diff:") || l.includes("files")), "Bottom summary line must render");
+  // Commit detail must render file info
+  assert.ok(lines.some((l) => l.includes("file")), "Commit detail must render file info");
 });
 
 test("DcGitGraphPanel organizes diff body by file tabs and renders dc-code box with green/red shading", () => {
