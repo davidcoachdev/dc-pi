@@ -16,7 +16,7 @@ import type {
   GitGraphRow,
 } from "../core/dc-git-graph-types.ts";
 import { parseGitGraph } from "../core/dc-git-graph-parser.ts";
-import { parseRawCommitDetail, formatDiffLine, renderDcCodeBox, wrapMessageText } from "../core/dc-git-diff-formatter.ts";
+import { parseRawCommitDetail, formatDiffLine, renderDcCodeBox, wrapMessageText, computeSlidingFileTabs } from "../core/dc-git-diff-formatter.ts";
 import {
   getGitCommitDetail,
   getGitCommitGraph,
@@ -483,20 +483,33 @@ export class DcGitGraphPanel implements Component {
       }
     }
 
-    // 2. Changed Files bar (tabs de archivos: SOLO el nombre del archivo)
+    // 2. Changed Files bar: Sliding horizontal window
     if (parsedDetail.files.length > 0) {
-      const fileBadges = parsedDetail.files
-        .slice(0, 4)
-        .map((f, idx) => {
-          const isAct = idx === this.activeFileIndex;
-          const label = ` 📄 ${f.shortName} `;
-          return isAct
+      const sliding = computeSlidingFileTabs(
+        parsedDetail.files,
+        this.activeFileIndex,
+        rightW - 8,
+      );
+
+      const leftIndicator =
+        sliding.hiddenLeft > 0
+          ? `${t.bold(t.fg("accent", `+${sliding.hiddenLeft}`))} ${t.fg("dim", "◀ ")}`
+          : "";
+      const rightIndicator =
+        sliding.hiddenRight > 0
+          ? ` ${t.fg("dim", "▶")} ${t.bold(t.fg("accent", `+${sliding.hiddenRight}`))}`
+          : "";
+
+      const fileBadges = sliding.slice
+        .map((item) => {
+          const label = ` 📄 ${item.file.shortName} `;
+          return item.isActive
             ? t.bg("selectedBg", t.bold(t.fg("accent", label)))
             : t.fg("dim", label);
         })
         .join(" ");
-      const extraCount = parsedDetail.files.length > 4 ? ` ${t.fg("dim", `+${parsedDetail.files.length - 4} más`)}` : "";
-      rightLines.push(pad(` 📂 ${fileBadges}${extraCount}`, rightW));
+
+      rightLines.push(pad(` 📂 ${leftIndicator}${fileBadges}${rightIndicator}`, rightW));
     } else {
       rightLines.push(pad(` 📂 ${t.fg("dim", "Sin archivos modificados o diff no disponible")}`, rightW));
     }

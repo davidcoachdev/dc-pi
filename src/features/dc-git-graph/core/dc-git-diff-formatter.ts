@@ -461,3 +461,80 @@ export function renderDcCodeBox(options: {
   result.push(bottomBorder);
   return result;
 }
+
+export interface SlidingTabItem {
+  file: CommitFileDiff;
+  index: number;
+  isActive: boolean;
+}
+
+export interface SlidingTabsResult {
+  slice: SlidingTabItem[];
+  hiddenLeft: number;
+  hiddenRight: number;
+}
+
+/**
+ * Computa una ventana deslizante horizontal (sliding window) para las pestañas de archivos.
+ * Mantiene la pestaña activa (activeIndex) siempre visible y muestra indicadores (+N ◀ / ▶ +M)
+ * cuando hay archivos adicionales fuera del ancho disponible.
+ */
+export function computeSlidingFileTabs(
+  files: CommitFileDiff[],
+  activeIndex: number,
+  maxWidth: number,
+): SlidingTabsResult {
+  const n = files.length;
+  if (n <= 1) {
+    return {
+      slice: files.map((f, i) => ({ file: f, index: i, isActive: true })),
+      hiddenLeft: 0,
+      hiddenRight: 0,
+    };
+  }
+
+  const safeActive = Math.max(0, Math.min(n - 1, activeIndex));
+  // Reserva de espacio para los indicadores de bordes: ej. " +9 ◀ " y " ▶ +9 "
+  const reserve = 16;
+  const availableW = Math.max(16, maxWidth - reserve);
+
+  let start = safeActive;
+  let end = safeActive;
+  let currentW = visibleWidth(` 📄 ${files[safeActive]!.shortName} `) + 2;
+
+  let expanded = true;
+  while (expanded) {
+    expanded = false;
+    // Intentar expandir hacia la derecha
+    if (end + 1 < n) {
+      const nextW = visibleWidth(` 📄 ${files[end + 1]!.shortName} `) + 2;
+      if (currentW + nextW <= availableW) {
+        end++;
+        currentW += nextW;
+        expanded = true;
+      }
+    }
+    // Intentar expandir hacia la izquierda
+    if (start - 1 >= 0) {
+      const prevW = visibleWidth(` 📄 ${files[start - 1]!.shortName} `) + 2;
+      if (currentW + prevW <= availableW) {
+        start--;
+        currentW += prevW;
+        expanded = true;
+      }
+    }
+  }
+
+  const hiddenLeft = start;
+  const hiddenRight = n - 1 - end;
+  const slice: SlidingTabItem[] = [];
+  for (let i = start; i <= end; i++) {
+    slice.push({
+      file: files[i]!,
+      index: i,
+      isActive: i === safeActive,
+    });
+  }
+
+  return { slice, hiddenLeft, hiddenRight };
+}

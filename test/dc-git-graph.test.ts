@@ -575,3 +575,74 @@ test("DcGitGraphPanel wordwraps long commit subjects and descriptions in header 
   assert.ok(lines.some((l) => l.includes("extended explanation of the architectural")));
   assert.ok(lines.some((l) => l.includes("increase window")));
 });
+
+test("DcGitGraphPanel scrolls file tabs horizontally in a sliding window to keep active tab visible", () => {
+  const raw8Files = [
+    "commit c1c2c3c4",
+    "Author: Dev <dev@test.com>",
+    "Date:   Mon Sep 28 20:30:00 2026 -0500",
+    "",
+    "    feat: commit touching 8 files",
+    "---",
+    " file1.ts | 2 +-",
+    " file2.ts | 2 +-",
+    " file3.ts | 2 +-",
+    " file4.ts | 2 +-",
+    " file5.ts | 2 +-",
+    " file6.ts | 2 +-",
+    " file7.ts | 2 +-",
+    " file8.ts | 2 +-",
+    " 8 files changed, 8 insertions(+), 8 deletions(-)",
+    "",
+    "diff --git a/file1.ts b/file1.ts",
+    "@@ -1 +1 @@",
+    "+1",
+    "diff --git a/file2.ts b/file2.ts",
+    "@@ -1 +1 @@",
+    "+2",
+    "diff --git a/file3.ts b/file3.ts",
+    "@@ -1 +1 @@",
+    "+3",
+    "diff --git a/file4.ts b/file4.ts",
+    "@@ -1 +1 @@",
+    "+4",
+    "diff --git a/file5.ts b/file5.ts",
+    "@@ -1 +1 @@",
+    "+5",
+    "diff --git a/file6.ts b/file6.ts",
+    "@@ -1 +1 @@",
+    "+6",
+    "diff --git a/file7.ts b/file7.ts",
+    "@@ -1 +1 @@",
+    "+7",
+    "diff --git a/file8.ts b/file8.ts",
+    "@@ -1 +1 @@",
+    "+8",
+  ];
+
+  const graphData = parseGitGraph("* COMMIT_REC:c1c2c3c\x1fc1c2c3c\x1f (HEAD -> main)\x1ffeat: 8 files\x1fDev\x1f2026-09-28");
+
+  const panel = new DcGitGraphPanel({
+    cwd: "/fake/repo",
+    theme: dummyTheme,
+    getGraphData: () => graphData,
+    getCommitDetail: () => raw8Files,
+    requestRender: () => {},
+  });
+
+  // At file 0: shows file1.ts, and right indicator ▶ +N
+  let lines = panel.render(100);
+  assert.ok(lines.some((l) => l.includes("file1.ts")));
+  assert.ok(lines.some((l) => l.includes("▶")));
+
+  // Navigate to file 7 (last)
+  for (let i = 0; i < 7; i++) {
+    panel.handleInput("]");
+  }
+  assert.equal(panel.getActiveFileIndex(), 7);
+
+  // At file 7: shows left indicator +N ◀ and file8.ts
+  lines = panel.render(100);
+  assert.ok(lines.some((l) => l.includes("file8.ts")));
+  assert.ok(lines.some((l) => l.includes("◀")));
+});
