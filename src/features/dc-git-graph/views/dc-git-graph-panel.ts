@@ -17,6 +17,8 @@ import type {
 } from "../core/dc-git-graph-types.ts";
 import { parseGitGraph } from "../core/dc-git-graph-parser.ts";
 import { parseRawCommitDetail, formatDiffLine, renderDcCodeBox, wrapMessageText, computeSlidingFileTabs, formatStyledCommitSubject } from "../core/dc-git-diff-formatter.ts";
+import { DcSearchInput } from "../../../ui/dc-search-input.ts";
+import { justifyRow } from "../../../ui/dc-row.ts";
 import {
   getGitCommitDetail,
   getGitCommitGraph,
@@ -77,6 +79,7 @@ export class DcGitGraphPanel implements Component {
   private readonly requestRender: () => void;
 
   private data: GitGraphData = { rows: [], commits: [] };
+  private searchInput: DcSearchInput;
   private selectedIndex = -1;
   private currentDetail: string[] = [];
   private detailScrollOffset = 0;
@@ -103,6 +106,16 @@ export class DcGitGraphPanel implements Component {
     this.getCommitDetailFn = options.getCommitDetail ?? getGitCommitDetail;
     this.maxRowsOption = options.maxRows;
     this.requestRender = options.requestRender;
+
+    this.searchInput = new DcSearchInput({
+      placeholder: "Buscar commit (#hash, mensaje, autor)...",
+      width: 32,
+      theme: {
+        fg: (c, text) => this.theme.fg(c as any, text),
+        bold: (text) => this.theme.bold(text),
+      },
+      showEscHint: true,
+    });
 
     this.refresh(options.initialSelectedHash);
   }
@@ -154,10 +167,11 @@ export class DcGitGraphPanel implements Component {
   }
 
   getSelectedCommit(): GitGraphCommit | undefined {
-    if (this.selectedIndex < 0 || this.selectedIndex >= this.data.commits.length) {
+    const { commits } = this.getFilteredData();
+    if (this.selectedIndex < 0 || this.selectedIndex >= commits.length) {
       return undefined;
     }
-    return this.data.commits[this.selectedIndex];
+    return commits[this.selectedIndex];
   }
 
   getDetailScrollOffset(): number {
@@ -168,10 +182,77 @@ export class DcGitGraphPanel implements Component {
     return this.activeFileIndex;
   }
 
+  getSearchQuery(): string {
+    return this.searchInput.getQuery();
+  }
+
+  setSearchQuery(query: string): void {
+    this.searchInput.setQuery(query);
+    this.syncSelectionAfterFilter();
+  }
+
+  getFilteredData(): { rows: GitGraphRow[]; commits: GitGraphCommit[] } {
+    const q = this.searchInput.getQuery().trim().toLowerCase();
+    if (!q) {
+      return { rows: this.data.rows, commits: this.data.commits };
+    }
+
+    const cleanQ = q.startsWith("#") ? q.slice(1).trim() : q;
+    const matchingCommits = this.data.commits.filter((c) => {
+      return (
+        c.hash.toLowerCase().includes(cleanQ) ||
+        c.shortHash.toLowerCase().includes(cleanQ) ||
+        c.subject.toLowerCase().includes(q) ||
+        c.author.toLowerCase().includes(q) ||
+        (c.refString && c.refString.toLowerCase().includes(q))
+      );
+    });
+
+    const matchingHashes = new Set(matchingCommits.map((c) => c.hash));
+    const matchingRows = this.data.rows.filter((r) => {
+      if (r.kind === "commit") {
+        return matchingHashes.has(r.commit.hash);
+      }
+      return false; // omit pure connector lines when filtering so matching commits are cleanly listed
+    });
+
+    return { rows: matchingRows, commits: matchingCommits };
+  }
+
+  private syncSelectionAfterFilter(): void {
+    const { commits } = this.getFilteredData();
+    if (commits.length === 0) {
+      this.selectedIndex = -1;
+      this.currentDetail = ["(no hay commits que coincidan con la búsqueda)"];
+      this.detailScrollOffset = 0;
+      this.graphScrollOffset = 0;
+      return;
+    }
+
+    // Keep current selected commit if it matches the filter
+    const cur = this.getSelectedCommit();
+    if (cur) {
+      const idx = commits.findIndex((c) => c.hash === cur.hash);
+      if (idx >= 0) {
+        this.selectedIndex = idx;
+        this.loadCommitDetail();
+        return;
+      }
+    }
+
+    // Otherwise select the first matching commit
+    this.selectedIndex = 0;
+    this.loadCommitDetail();
+  }
+
   private loadCommitDetail(): void {
     const commit = this.getSelectedCommit();
     if (!commit) {
-      this.currentDetail = ["(sin commits en este repositorio)"];
+      this.currentDetail = [
+        this.searchInput.isEmpty()
+          ? "(sin commits en este repositorio)"
+          : "(no hay commits que coincidan con la búsqueda)",
+      ];
       this.detailScrollOffset = 0;
       this.activeFileIndex = 0;
       return;
@@ -182,8 +263,10 @@ export class DcGitGraphPanel implements Component {
   }
 
   handleInput(data: string): boolean {
+    const { commits } = this.getFilteredData();
+
     // Navigation in commits list (Up / Down / k / j)
-    if (matchesKey(data, Key.up) || data === "k") {
+    if (matchesKey(data, Key.up) || (this.searchInput.isEmpty() && data === "k")) {
       if (this.selectedIndex > 0) {
         this.selectedIndex--;
         this.loadCommitDetail();
@@ -192,8 +275,8 @@ export class DcGitGraphPanel implements Component {
       return true;
     }
 
-    if (matchesKey(data, Key.down) || data === "j") {
-      if (this.selectedIndex < this.data.commits.length - 1) {
+    if (matchesKey(data, Key.down) || (this.searchInput.isEmpty() && data === "j")) {
+      if (this.selectedIndex < commits.length - 1) {
         this.selectedIndex++;
         this.loadCommitDetail();
         this.requestRender();
@@ -203,7 +286,7 @@ export class DcGitGraphPanel implements Component {
 
     // Home / End
     if (matchesKey(data, Key.home)) {
-      if (this.data.commits.length > 0) {
+      if (commits.length > 0) {
         this.selectedIndex = 0;
         this.loadCommitDetail();
         this.requestRender();
@@ -212,8 +295,8 @@ export class DcGitGraphPanel implements Component {
     }
 
     if (matchesKey(data, Key.end)) {
-      if (this.data.commits.length > 0) {
-        this.selectedIndex = this.data.commits.length - 1;
+      if (commits.length > 0) {
+        this.selectedIndex = commits.length - 1;
         this.loadCommitDetail();
         this.requestRender();
       }
@@ -295,9 +378,38 @@ export class DcGitGraphPanel implements Component {
       return true;
     }
 
-    // Refresh
-    if (data === "r" || data === "R") {
+    // Refresh (solo si la búsqueda está vacía para no interferir con la letra 'r' al escribir)
+    if (this.searchInput.isEmpty() && (data === "r" || data === "R")) {
       this.refresh();
+      this.requestRender();
+      return true;
+    }
+
+    // Escape: limpia búsqueda
+    if (matchesKey(data, Key.escape)) {
+      if (!this.searchInput.isEmpty()) {
+        this.searchInput.clear();
+        this.syncSelectionAfterFilter();
+        this.requestRender();
+        return true;
+      }
+      return false; // permite que el modal cierre si la búsqueda ya está vacía
+    }
+
+    // Backspace: borra caracter de búsqueda
+    if (matchesKey(data, Key.backspace)) {
+      if (this.searchInput.backspace()) {
+        this.syncSelectionAfterFilter();
+        this.requestRender();
+        return true;
+      }
+      return true;
+    }
+
+    // Caracteres imprimibles (búsqueda interactiva de commits)
+    if (data.length === 1 && data >= " " && data <= "~") {
+      this.searchInput.append(data);
+      this.syncSelectionAfterFilter();
       this.requestRender();
       return true;
     }
@@ -353,10 +465,11 @@ export class DcGitGraphPanel implements Component {
         const visualRow = y - this.lastHeaderRows;
         if (visualRow >= 0 && visualRow < this.lastRowsCount) {
           const rowIndex = this.graphScrollOffset + visualRow;
-          if (rowIndex >= 0 && rowIndex < this.data.rows.length) {
-            const row = this.data.rows[rowIndex]!;
+          const { rows, commits } = this.getFilteredData();
+          if (rowIndex >= 0 && rowIndex < rows.length) {
+            const row = rows[rowIndex]!;
             if (row.kind === "commit") {
-              const idx = this.data.commits.findIndex((c) => c.hash === row.commit.hash);
+              const idx = commits.findIndex((c) => c.hash === row.commit.hash);
               if (idx >= 0) {
                 this.selectedIndex = idx;
                 this.loadCommitDetail();
@@ -422,8 +535,11 @@ export class DcGitGraphPanel implements Component {
     }
     const headerLeft = ` 🗂️  ${branchBadge}`;
 
-    // Header right: Commit detail & diff title (2/3)
-    const headerRight = ` 📝 ${t.bold(t.fg("accent", "Commit detail & diff"))}`;
+    // Header right: Title on left ("📝 Commit detail & diff"), Search input on right (pegado a la derecha)
+    const titleText = ` 📝 ${t.bold(t.fg("accent", "Commit detail & diff"))}`;
+    const searchWidth = Math.min(36, Math.max(16, rightW - visibleWidth(" 📝 Commit detail & diff") - 3));
+    const searchRender = this.searchInput.render(searchWidth);
+    const headerRight = justifyRow(titleText, searchRender + " ", rightW);
 
     const lines: string[] = [];
     lines.push(`${pad(headerLeft, leftW)} ${t.fg("border", "│")} ${pad(headerRight, rightW)}`);
@@ -592,9 +708,11 @@ export class DcGitGraphPanel implements Component {
     const totalRows = rowsCount;
     this.lastRowsCount = totalRows;
 
+    const { rows: filteredRows, commits: filteredCommits } = this.getFilteredData();
+
     // Adjust graphScrollOffset to ensure selected commit is visible within totalRows
     if (selCommit) {
-      const selRowIndex = this.data.rows.findIndex(
+      const selRowIndex = filteredRows.findIndex(
         (r) => r.kind === "commit" && r.commit.hash === selCommit.hash,
       );
       if (selRowIndex >= 0) {
@@ -607,10 +725,10 @@ export class DcGitGraphPanel implements Component {
     }
 
     // Clamp graphScrollOffset so the last elements don't scroll off into empty void
-    const maxGraphScroll = Math.max(0, this.data.rows.length - totalRows);
+    const maxGraphScroll = Math.max(0, filteredRows.length - totalRows);
     this.graphScrollOffset = Math.max(0, Math.min(this.graphScrollOffset, maxGraphScroll));
 
-    const visibleRows = this.data.rows.slice(
+    const visibleRows = filteredRows.slice(
       this.graphScrollOffset,
       this.graphScrollOffset + totalRows,
     );
@@ -662,7 +780,12 @@ export class DcGitGraphPanel implements Component {
 
     // Left summary: Working tree / clean state (1/3)
     let leftSummary = "";
-    if (wt && (wt.modifiedCount > 0 || wt.untrackedCount > 0)) {
+    const isFiltered = !this.searchInput.isEmpty();
+    if (isFiltered) {
+      const matchCount = filteredCommits.length;
+      const countNoun = matchCount === 1 ? "commit" : "commits";
+      leftSummary = ` 🔍 ${t.bold(t.fg("accent", `${matchCount} ${countNoun}`))} ${t.fg("dim", `de ${this.data.commits.length}`)}`;
+    } else if (wt && (wt.modifiedCount > 0 || wt.untrackedCount > 0)) {
       const totalChanges = wt.modifiedCount + wt.untrackedCount;
       const countNoun = totalChanges === 1 ? "file" : "files";
       leftSummary = ` ${t.bold(t.fg("accent", `${totalChanges} ${countNoun}`))} · ${t.fg("warning", `@${wt.modifiedCount}m`)} · ${t.fg("accent", `?${wt.untrackedCount}u`)}`;
