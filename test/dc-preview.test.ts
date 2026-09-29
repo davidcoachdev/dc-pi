@@ -27,6 +27,9 @@ test("parseToolArg and parseOrientationArg parse arguments accurately", () => {
   assert.equal(parseToolArg("task-manager"), "manager");
   assert.equal(parseToolArg("dc"), "dc-studio");
   assert.equal(parseToolArg("dc-studio"), "dc-studio");
+  assert.equal(parseToolArg("engram"), "engram");
+  assert.equal(parseToolArg("tui"), "engram");
+  assert.equal(parseToolArg("memoria"), "engram");
   assert.equal(parseToolArg("unknown"), undefined);
   assert.equal(parseToolArg(undefined), undefined);
 
@@ -44,6 +47,8 @@ test("buildFishToolCommand returns appropriate commands", () => {
   assert.equal(buildFishToolCommand("nvim", "h"), "nvim .");
   assert.equal(buildFishToolCommand("yazi", "v"), "yazi .");
   assert.equal(buildFishToolCommand("dc-studio", "h"), "dc");
+  assert.equal(buildFishToolCommand("engram", "h"), "engram tui");
+  assert.equal(buildFishToolCommand("engram", "v"), "engram tui");
   assert.ok(buildFishToolCommand("fzf", "h").includes("fzf --height=100%"));
   assert.ok(buildFishToolCommand("fzf", "v").includes("fzf --layout=reverse"));
 });

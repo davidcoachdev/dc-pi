@@ -147,6 +147,17 @@ export function createStatusCard(reqRender: () => void): Component {
           const ctx = getSidebarContext();
           if (ctx) void openEngramExplorer(ctx, projName);
         }
+      ),
+      new DcJustifiedRow(
+        `    💻 ${dim("TUI nativa")}`,
+        `${bloodBright("[engram tui ↗]")} `,
+        () => {
+          const ctx = getSidebarContext();
+          if (ctx) {
+            const p = getProjectInfo();
+            void openPreviewDirectionMenu(ctx, "engram", p.cwd);
+          }
+        }
       )
     );
 
