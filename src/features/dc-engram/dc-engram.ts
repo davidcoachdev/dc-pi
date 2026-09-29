@@ -91,14 +91,7 @@ export default function dcEngramExtension(pi: ExtensionAPI): void {
     },
   });
 
-  // Atajo canónico Alt+G / Alt+Shift+G
-  pi.registerShortcut("alt+g" as never, {
-    description: "Abrir visor de memorias Engram de DC Studio (Alt+G)",
-    handler: async (ctx: ExtensionContext) => {
-      await openEngramExplorer(ctx);
-    },
-  });
-
+  // Atajo canónico Alt+Shift+G
   pi.registerShortcut("alt+shift+g" as never, {
     description: "Abrir visor de memorias Engram de DC Studio (Alt+Shift+G)",
     handler: async (ctx: ExtensionContext) => {

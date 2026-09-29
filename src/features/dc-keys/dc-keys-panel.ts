@@ -24,7 +24,7 @@ export function getDefaultCategories(): ShortcutCategory[] {
     {
       title: "DC Studio",
       rows: [
-        { key: "Alt+G / Alt+Shift+G", action: "visor de memorias Engram (Engram Manager)" },
+        { key: "Alt+Shift+G", action: "visor de memorias Engram (Engram Manager)" },
         { key: "Alt+H", action: "visor de historial Git y grafo (Git Graph)" },
         { key: "Alt+F", action: "control de cambios y diff Git (Changes)" },
         { key: "Alt+M", action: "selector de modelos y reasoning (Models)" },
