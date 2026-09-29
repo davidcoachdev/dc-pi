@@ -143,7 +143,9 @@ export function launchPanel(
     }
 
     try {
-      const args = ["split-window", "-p", String(DC_PREVIEW_SPLIT_PERCENT), flag, "-c", dir, "fish", "-lc", fishCmd];
+      const args = mode === "engram"
+        ? ["split-window", "-p", String(DC_PREVIEW_SPLIT_PERCENT), flag, "-c", dir, "engram", "tui"]
+        : ["split-window", "-p", String(DC_PREVIEW_SPLIT_PERCENT), flag, "-c", dir, "fish", "-lc", fishCmd];
       exec("tmux", args);
       return {
         success: true,
@@ -200,7 +202,10 @@ export function launchPanel(
     }
 
     try {
-      exec("herdr", ["pane", "run", newPaneId, "fish", "-lc", fishCmd]);
+      const runArgs = mode === "engram"
+        ? ["pane", "run", newPaneId, "engram", "tui"]
+        : ["pane", "run", newPaneId, "fish", "-lc", fishCmd];
+      exec("herdr", runArgs);
       return {
         success: true,
         target: "herdr",
