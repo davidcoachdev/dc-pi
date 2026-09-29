@@ -16,7 +16,7 @@ import type {
   GitGraphRow,
 } from "../core/dc-git-graph-types.ts";
 import { parseGitGraph } from "../core/dc-git-graph-parser.ts";
-import { parseRawCommitDetail, formatDiffLine, renderDcCodeBox } from "../core/dc-git-diff-formatter.ts";
+import { parseRawCommitDetail, formatDiffLine, renderDcCodeBox, wrapMessageText, computeSlidingFileTabs } from "../core/dc-git-diff-formatter.ts";
 import {
   getGitCommitDetail,
   getGitCommitGraph,
@@ -71,6 +71,7 @@ export class DcGitGraphPanel implements Component {
   private readonly theme: Pick<Theme, "fg" | "bg" | "bold">;
   private readonly getGraphDataFn: (cwd: string) => GitGraphData;
   private readonly getCommitDetailFn: (cwd: string, hash: string) => string[];
+  private readonly maxRowsOption?: number | (() => number);
   private readonly requestRender: () => void;
 
   private data: GitGraphData = { rows: [], commits: [] };
@@ -96,12 +97,24 @@ export class DcGitGraphPanel implements Component {
         return parseGitGraph(raw, head, branch, wt);
       });
     this.getCommitDetailFn = options.getCommitDetail ?? getGitCommitDetail;
+    this.maxRowsOption = options.maxRows;
     this.requestRender = options.requestRender;
 
     this.refresh(options.initialSelectedHash);
   }
 
   invalidate(): void {}
+
+  public getMaxRows(): number {
+    if (typeof this.maxRowsOption === "function") {
+      return Math.max(16, this.maxRowsOption());
+    }
+    if (typeof this.maxRowsOption === "number") {
+      return Math.max(16, this.maxRowsOption);
+    }
+    const termRows = process.stdout?.rows ?? 40;
+    return Math.max(18, Math.min(48, Math.floor(termRows * 0.94) - 6));
+  }
 
   refresh(initialHash?: string): void {
     this.data = this.getGraphDataFn(this.cwd);
@@ -400,7 +413,8 @@ export class DcGitGraphPanel implements Component {
       return lines.map((l) => truncateToWidth(l, safeW, ""));
     }
 
-    const rowsCount = Math.max(14, Math.min(28, Math.max(this.data.rows.length, 14)));
+    const maxRowsBudget = this.getMaxRows();
+    const rowsCount = Math.max(16, Math.min(maxRowsBudget, Math.max(this.data.rows.length, 16)));
     this.lastRowsCount = rowsCount;
 
     // Adjust graphScrollOffset to ensure selected commit is visible
@@ -449,25 +463,53 @@ export class DcGitGraphPanel implements Component {
       : ` 👤 ${t.fg("dim", "—")}`;
     rightLines.push(pad(metaLine, rightW));
 
-    const subjLine = parsedDetail.subject
-      ? ` 📝 ${t.bold(t.fg("text", truncateToWidth(parsedDetail.subject, rightW - 6, "")))}`
-      : "";
-    rightLines.push(pad(subjLine, rightW));
+    // Wordwrap commit subject
+    if (parsedDetail.subject) {
+      const wrappedSubject = wrapMessageText(parsedDetail.subject, rightW - 6);
+      for (let s = 0; s < wrappedSubject.length; s++) {
+        const line = wrappedSubject[s]!;
+        const prefix = s === 0 ? " 📝 " : "    ";
+        rightLines.push(pad(`${prefix}${t.bold(t.fg("text", line))}`, rightW));
+      }
+    }
 
-    // 2. Changed Files bar (tabs de archivos: SOLO el nombre del archivo)
+    // Wordwrap commit body if present
+    if (parsedDetail.body.length > 0) {
+      for (const bodyLine of parsedDetail.body) {
+        const wrappedBody = wrapMessageText(bodyLine, rightW - 6);
+        for (const bLine of wrappedBody) {
+          rightLines.push(pad(`    ${t.fg("dim", bLine)}`, rightW));
+        }
+      }
+    }
+
+    // 2. Changed Files bar: Sliding horizontal window
     if (parsedDetail.files.length > 0) {
-      const fileBadges = parsedDetail.files
-        .slice(0, 4)
-        .map((f, idx) => {
-          const isAct = idx === this.activeFileIndex;
-          const label = ` 📄 ${f.shortName} `;
-          return isAct
+      const sliding = computeSlidingFileTabs(
+        parsedDetail.files,
+        this.activeFileIndex,
+        rightW - 8,
+      );
+
+      const leftIndicator =
+        sliding.hiddenLeft > 0
+          ? `${t.bold(t.fg("accent", `+${sliding.hiddenLeft}`))} ${t.fg("dim", "◀ ")}`
+          : "";
+      const rightIndicator =
+        sliding.hiddenRight > 0
+          ? ` ${t.fg("dim", "▶")} ${t.bold(t.fg("accent", `+${sliding.hiddenRight}`))}`
+          : "";
+
+      const fileBadges = sliding.slice
+        .map((item) => {
+          const label = ` 📄 ${item.file.shortName} `;
+          return item.isActive
             ? t.bg("selectedBg", t.bold(t.fg("accent", label)))
             : t.fg("dim", label);
         })
         .join(" ");
-      const extraCount = parsedDetail.files.length > 4 ? ` ${t.fg("dim", `+${parsedDetail.files.length - 4} más`)}` : "";
-      rightLines.push(pad(` 📂 ${fileBadges}${extraCount}`, rightW));
+
+      rightLines.push(pad(` 📂 ${leftIndicator}${fileBadges}${rightIndicator}`, rightW));
     } else {
       rightLines.push(pad(` 📂 ${t.fg("dim", "Sin archivos modificados o diff no disponible")}`, rightW));
     }

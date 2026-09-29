@@ -41,6 +41,7 @@ export interface DcGitGraphPanelOptions {
   theme: Pick<Theme, "fg" | "bg" | "bold">;
   getGraphData?: (cwd: string) => GitGraphData;
   getCommitDetail?: (cwd: string, hash: string) => string[];
+  maxRows?: number | (() => number);
   requestRender: () => void;
   initialSelectedHash?: string;
 }
