@@ -1,6 +1,15 @@
+import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+
 export interface ParsedChangedFile {
   file: string;
   changes: string;
+}
+
+export interface CommitFileDiff {
+  file: string;
+  shortName: string;
+  changes: string;
+  lines: string[];
 }
 
 export interface ParsedCommitDetail {
@@ -13,12 +22,13 @@ export interface ParsedCommitDetail {
   body: string[];
   filesSummary: string;
   changedFiles: ParsedChangedFile[];
+  files: CommitFileDiff[];
   diffLines: string[];
 }
 
 /**
  * Pure parser for `git show --stat -p` raw output.
- * Splits output into header metadata, changed files stats, and diff hunks.
+ * Splits output into header metadata, changed files stats, and diff hunks grouped by file.
  */
 export function parseRawCommitDetail(rawLines: string[]): ParsedCommitDetail {
   if (!rawLines || rawLines.length === 0) {
@@ -32,6 +42,7 @@ export function parseRawCommitDetail(rawLines: string[]): ParsedCommitDetail {
       body: [],
       filesSummary: "",
       changedFiles: [],
+      files: [],
       diffLines: [],
     };
   }
@@ -127,6 +138,49 @@ export function parseRawCommitDetail(rawLines: string[]): ParsedCommitDetail {
     }
   }
 
+  // Group diffLines by file
+  const files: CommitFileDiff[] = [];
+  let currentFileDiff: CommitFileDiff | null = null;
+
+  for (const line of diffLines) {
+    if (line.startsWith("diff --git ")) {
+      if (currentFileDiff) {
+        files.push(currentFileDiff);
+      }
+      const parts = line.split(" ");
+      const rawFile = parts[3]?.replace(/^b\//, "") || parts[2]?.replace(/^a\//, "") || "file";
+      const shortName = rawFile.split("/").pop() || rawFile;
+      const matchingStat = changedFiles.find((f) => f.file === rawFile || rawFile.endsWith(f.file));
+      currentFileDiff = {
+        file: rawFile,
+        shortName,
+        changes: matchingStat?.changes || "",
+        lines: [line],
+      };
+      continue;
+    }
+
+    if (currentFileDiff) {
+      currentFileDiff.lines.push(line);
+    }
+  }
+
+  if (currentFileDiff) {
+    files.push(currentFileDiff);
+  }
+
+  // If there are changedFiles from stats without explicit diff hunk (e.g. binary or renamed)
+  if (files.length === 0 && changedFiles.length > 0) {
+    for (const cf of changedFiles) {
+      files.push({
+        file: cf.file,
+        shortName: cf.file.split("/").pop() || cf.file,
+        changes: cf.changes,
+        lines: [`diff --git a/${cf.file} b/${cf.file}`, `(archivo modificado: ${cf.changes})`],
+      });
+    }
+  }
+
   return {
     hash,
     shortHash,
@@ -137,6 +191,7 @@ export function parseRawCommitDetail(rawLines: string[]): ParsedCommitDetail {
     body: cleanBody,
     filesSummary,
     changedFiles,
+    files,
     diffLines,
   };
 }
@@ -152,11 +207,6 @@ export function formatDiffLine(
   line: string,
   width: number,
 ): string {
-  const padRight = (str: string, len: number) => {
-    // Basic ANSI reset at end
-    return str + "\x1b[0m";
-  };
-
   if (line.startsWith("diff --git ")) {
     const parts = line.split(" ");
     const fileB = parts[3]?.replace(/^b\//, "") || parts[2] || line;
@@ -183,4 +233,69 @@ export function formatDiffLine(
 
   // Regular context line
   return `   \x1b[38;2;190;185;190m${line}\x1b[0m`;
+}
+
+/**
+ * Renderiza el bloque de diff dentro de la caja de código estilizada de DC Studio (dc-code):
+ * - Borde superior redondeado con nombre del archivo y flecha.
+ * - Gutter numerado para cada línea del diff.
+ * - Líneas de adición en verde y eliminación en rojo.
+ * - Borde inferior redondeado con botón de copia.
+ */
+export function renderDcCodeBox(options: {
+  title: string;
+  lines: string[];
+  width: number;
+  maxRows: number;
+  scrollOffset: number;
+}): string[] {
+  const { title, lines: rawLines, width, maxRows, scrollOffset } = options;
+  const innerW = Math.max(10, width - 4);
+
+  // Top border: ╭─ 📄 title ────── ▲ ─╮
+  const titlePart = ` 📄 ${title} `;
+  const titleLen = visibleWidth(titlePart);
+  const rightDashes = 3;
+  const arrowBadge = scrollOffset > 0 ? " ▲ " : " ─ ";
+  const arrowLen = visibleWidth(arrowBadge);
+  const fillLen = Math.max(0, width - 2 - 2 - titleLen - arrowLen - rightDashes);
+
+  const topBorder = `\x1b[38;2;140;60;80m╭─\x1b[1m\x1b[38;2;220;170;200m${titlePart}\x1b[0m\x1b[38;2;140;60;80m${"─".repeat(fillLen)}${arrowBadge}${"─".repeat(rightDashes)}╮\x1b[0m`;
+
+  const copyBadge = " 📋 ";
+  const copyLen = visibleWidth(copyBadge);
+  const bottomDashes = Math.max(0, width - 2 - copyLen - rightDashes);
+  const bottomBorder = `\x1b[38;2;140;60;80m╰${"─".repeat(bottomDashes)}\x1b[38;2;200;160;180m${copyBadge}\x1b[0m\x1b[38;2;140;60;80m${"─".repeat(rightDashes)}╯\x1b[0m`;
+
+  const result: string[] = [];
+  result.push(truncateToWidth(topBorder, width, ""));
+
+  const bodyBudget = Math.max(1, maxRows - 2);
+  const visibleLines = rawLines.slice(scrollOffset, scrollOffset + bodyBudget);
+
+  const totalLines = rawLines.length;
+  const gutterDigits = Math.max(1, String(totalLines).length);
+
+  for (let i = 0; i < bodyBudget; i++) {
+    if (i < visibleLines.length) {
+      const lineIdx = scrollOffset + i;
+      const raw = visibleLines[i]!;
+      const lineNum = String(lineIdx + 1).padStart(gutterDigits, " ");
+      const gutter = `\x1b[2m\x1b[38;2;100;90;100m${lineNum} │\x1b[22m\x1b[0m `;
+
+      const formatted = formatDiffLine(raw, innerW - gutterDigits - 3);
+      const rowContent = ` ${gutter}${formatted}`;
+      const v = visibleWidth(rowContent);
+      const padded = v < innerW ? rowContent + " ".repeat(innerW - v) : rowContent;
+
+      const side = `\x1b[38;2;140;60;80m│\x1b[0m`;
+      result.push(truncateToWidth(`${side} ${padded} ${side}`, width, ""));
+    } else {
+      const side = `\x1b[38;2;140;60;80m│\x1b[0m`;
+      result.push(truncateToWidth(`${side} ${" ".repeat(innerW)} ${side}`, width, ""));
+    }
+  }
+
+  result.push(truncateToWidth(bottomBorder, width, ""));
+  return result;
 }

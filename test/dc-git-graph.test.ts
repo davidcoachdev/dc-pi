@@ -431,3 +431,69 @@ test("DcGitGraphPanel renders enriched status header, glyphs (M, o, *), #shortHa
   // Bottom summary line must render
   assert.ok(lines.some((l) => l.includes("Diff:") || l.includes("files")), "Bottom summary line must render");
 });
+
+test("DcGitGraphPanel organizes diff body by file tabs and renders dc-code box with green/red shading", () => {
+  const multiFileRaw = [
+    "commit 84ea56e12345678",
+    "Author: Developer <dev@test.com>",
+    "Date:   Mon Sep 28 18:54:47 2026 -0500",
+    "",
+    "    feat: support file tabs and code block",
+    "---",
+    " src/fileA.ts | 4 ++--",
+    " src/fileB.ts | 2 +-",
+    " 2 files changed, 3 insertions(+), 3 deletions(-)",
+    "",
+    "diff --git a/src/fileA.ts b/src/fileA.ts",
+    "index 111..222 100644",
+    "--- a/src/fileA.ts",
+    "+++ b/src/fileA.ts",
+    "@@ -10,2 +10,2 @@",
+    "-oldLineA",
+    "+newLineA",
+    "diff --git a/src/fileB.ts b/src/fileB.ts",
+    "index 333..444 100644",
+    "--- a/src/fileB.ts",
+    "+++ b/src/fileB.ts",
+    "@@ -20,2 +20,2 @@",
+    "-oldLineB",
+    "+newLineB",
+  ];
+
+  const graphData = parseGitGraph("* COMMIT_REC:84ea56e\x1f84ea56e\x1f (HEAD -> main)\x1ffeat: commit\x1fDev\x1f2026-09-28");
+
+  const panel = new DcGitGraphPanel({
+    cwd: "/fake/repo",
+    theme: dummyTheme,
+    getGraphData: () => graphData,
+    getCommitDetail: () => multiFileRaw,
+    requestRender: () => {},
+  });
+
+  // Initial render: active file is 0 (fileA.ts)
+  assert.equal(panel.getActiveFileIndex(), 0);
+  let lines = panel.render(120);
+
+  // Must render header card
+  assert.ok(lines.some((l) => l.includes("📌 Commit #84ea56e")));
+  assert.ok(lines.some((l) => l.includes("👤 Developer")));
+
+  // Must render file tabs in body
+  assert.ok(lines.some((l) => l.includes("fileA.ts") && l.includes("fileB.ts")));
+
+  // Must render dc-code box with fileA title and rounded corners
+  assert.ok(lines.some((l) => l.includes("╭─") && l.includes("fileA.ts")));
+  assert.ok(lines.some((l) => l.includes("╰─") && l.includes("📋")));
+
+  // Switch to file tab 1 (fileB.ts) with ]
+  panel.handleInput("]");
+  assert.equal(panel.getActiveFileIndex(), 1);
+
+  lines = panel.render(120);
+  // Now dc-code box must display fileB.ts
+  assert.ok(lines.some((l) => l.includes("╭─") && l.includes("fileB.ts")));
+
+  // Switch back with [
+  panel.handleInput("[");
+  assert.equal(panel.getActiveFileIndex(), 0);
+});

@@ -16,7 +16,7 @@ import type {
   GitGraphRow,
 } from "../core/dc-git-graph-types.ts";
 import { parseGitGraph } from "../core/dc-git-graph-parser.ts";
-import { parseRawCommitDetail, formatDiffLine } from "../core/dc-git-diff-formatter.ts";
+import { parseRawCommitDetail, formatDiffLine, renderDcCodeBox } from "../core/dc-git-diff-formatter.ts";
 import {
   getGitCommitDetail,
   getGitCommitGraph,
@@ -78,6 +78,7 @@ export class DcGitGraphPanel implements Component {
   private currentDetail: string[] = [];
   private detailScrollOffset = 0;
   private graphScrollOffset = 0;
+  private activeFileIndex = 0;
   private lastLeftW = 30;
   private lastHeaderRows = 2;
   private lastRowsCount = 15;
@@ -144,15 +145,21 @@ export class DcGitGraphPanel implements Component {
     return this.detailScrollOffset;
   }
 
+  getActiveFileIndex(): number {
+    return this.activeFileIndex;
+  }
+
   private loadCommitDetail(): void {
     const commit = this.getSelectedCommit();
     if (!commit) {
       this.currentDetail = ["(sin commits en este repositorio)"];
       this.detailScrollOffset = 0;
+      this.activeFileIndex = 0;
       return;
     }
     this.currentDetail = this.getCommitDetailFn(this.cwd, commit.hash);
     this.detailScrollOffset = 0;
+    this.activeFileIndex = 0;
   }
 
   handleInput(data: string): boolean {
@@ -192,6 +199,26 @@ export class DcGitGraphPanel implements Component {
         this.requestRender();
       }
       return true;
+    }
+
+    // Alternar tabs de archivos modificados con [ o ] o t o T
+    if (data === "]" || data === "t") {
+      const parsedDetail = parseRawCommitDetail(this.currentDetail);
+      if (parsedDetail.files.length > 1) {
+        this.activeFileIndex = (this.activeFileIndex + 1) % parsedDetail.files.length;
+        this.detailScrollOffset = 0;
+        this.requestRender();
+        return true;
+      }
+    }
+    if (data === "[" || data === "T") {
+      const parsedDetail = parseRawCommitDetail(this.currentDetail);
+      if (parsedDetail.files.length > 1) {
+        this.activeFileIndex = (this.activeFileIndex - 1 + parsedDetail.files.length) % parsedDetail.files.length;
+        this.detailScrollOffset = 0;
+        this.requestRender();
+        return true;
+      }
     }
 
     // Scrolling right pane (diff / commit detail)
@@ -386,39 +413,46 @@ export class DcGitGraphPanel implements Component {
     rightLines.push(pad(subjLine, rightW));
 
     // 2. Changed Files bar (tabs de archivos que cambiaron con texto)
-    if (parsedDetail.changedFiles.length > 0) {
-      const fileBadges = parsedDetail.changedFiles
+    if (parsedDetail.files.length > 0) {
+      const fileBadges = parsedDetail.files
         .slice(0, 4)
-        .map((f) => {
-          const shortName = f.file.split("/").pop() || f.file;
-          return t.bg("selectedBg", ` 📄 ${shortName} ${t.fg("accent", f.changes)} `);
+        .map((f, idx) => {
+          const isAct = idx === this.activeFileIndex;
+          const label = ` 📄 ${f.shortName} ${f.changes ? "(" + f.changes + ")" : ""} `;
+          return isAct
+            ? t.bg("selectedBg", t.bold(t.fg("accent", label)))
+            : t.fg("dim", label);
         })
         .join(" ");
-      const extraCount = parsedDetail.changedFiles.length > 4 ? ` ${t.fg("dim", `+${parsedDetail.changedFiles.length - 4} más`)}` : "";
-      const statSummary = parsedDetail.filesSummary ? ` ${t.fg("dim", `(${parsedDetail.filesSummary})`)}` : "";
-      rightLines.push(pad(` 📂 ${fileBadges}${extraCount}${statSummary}`, rightW));
+      const extraCount = parsedDetail.files.length > 4 ? ` ${t.fg("dim", `+${parsedDetail.files.length - 4} más`)}` : "";
+      rightLines.push(pad(` 📂 ${fileBadges}${extraCount}`, rightW));
     } else {
       rightLines.push(pad(` 📂 ${t.fg("dim", "Sin archivos modificados o diff no disponible")}`, rightW));
     }
 
     rightLines.push(t.fg("border", "┄".repeat(Math.max(10, rightW - 2))));
 
-    // 3. Diff lines con indentación y sombreado verde y rojo
+    // 3. Diff renderizado dentro de la caja de código estilizada de DC Studio (dc-code)
     const headerLinesCount = rightLines.length;
-    const diffBudget = Math.max(4, rowsCount - headerLinesCount);
-    const diffLinesSource = parsedDetail.diffLines.length > 0 ? parsedDetail.diffLines : this.currentDetail;
-    const visibleDiff = diffLinesSource.slice(
-      this.detailScrollOffset,
-      this.detailScrollOffset + diffBudget,
-    );
+    const diffBudget = Math.max(6, rowsCount - headerLinesCount);
 
-    for (let d = 0; d < diffBudget; d++) {
-      if (d < visibleDiff.length) {
-        const raw = visibleDiff[d]!;
-        rightLines.push(truncateToWidth(formatDiffLine(raw, rightW), rightW, ""));
-      } else {
-        rightLines.push(" ".repeat(rightW));
-      }
+    const activeFile = parsedDetail.files[this.activeFileIndex] || parsedDetail.files[0];
+    const activeLines = activeFile
+      ? activeFile.lines
+      : parsedDetail.diffLines.length > 0
+      ? parsedDetail.diffLines
+      : this.currentDetail;
+
+    const codeBox = renderDcCodeBox({
+      title: activeFile?.shortName || selCommit?.shortHash || "diff",
+      lines: activeLines,
+      width: rightW,
+      maxRows: diffBudget,
+      scrollOffset: this.detailScrollOffset,
+    });
+
+    for (const cLine of codeBox) {
+      rightLines.push(cLine);
     }
 
     // Render the grid
@@ -478,10 +512,11 @@ export class DcGitGraphPanel implements Component {
 
     // Right summary: Diff scroll progress (2/3)
     let rightSummary = "";
-    if (parsedDetail.diffLines.length > 0) {
+    if (activeLines.length > 0) {
       const start = this.detailScrollOffset + 1;
-      const end = Math.min(this.detailScrollOffset + diffBudget, parsedDetail.diffLines.length);
-      rightSummary = ` 📄 Diff: ${start}-${end}/${parsedDetail.diffLines.length} (Rueda/PgUp/Dn scroll)`;
+      const end = Math.min(this.detailScrollOffset + Math.max(1, diffBudget - 2), activeLines.length);
+      const tabHint = parsedDetail.files.length > 1 ? " | [/] cambiar archivo" : "";
+      rightSummary = ` 📄 ${activeFile?.shortName || "Diff"}: líneas ${start}-${end}/${activeLines.length} (Rueda/PgUp/Dn scroll${tabHint})`;
     } else {
       rightSummary = ` 📄 ${t.fg("dim", "No hay patch diff para mostrar")}`;
     }
