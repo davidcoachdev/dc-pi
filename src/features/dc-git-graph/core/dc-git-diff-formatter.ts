@@ -277,6 +277,15 @@ export function formatStyledCommitSubject(subject: string, isSelected: boolean):
   }
 
   if (info.isMerge) {
+    const prMatch = subject.match(/^(Merge\s+.*?#\d+)(.*)$/i);
+    if (prMatch) {
+      const prPrefix = prMatch[1]!;
+      const rest = prMatch[2]!;
+      const styledTag = `\x1b[1m${info.colorAnsi}${prPrefix}\x1b[0m`;
+      const bodyText = isSelected ? `\x1b[1m${rest}\x1b[22m` : rest;
+      return `${styledTag}${bodyText}`;
+    }
+
     const rest = subject.slice(5);
     const mergeTag = `\x1b[1m${info.colorAnsi}Merge\x1b[0m`;
     const bodyText = isSelected ? `\x1b[1m${rest}\x1b[22m` : rest;
@@ -289,12 +298,10 @@ export function formatStyledCommitSubject(subject: string, isSelected: boolean):
   }
 
   const [, typeStr, scopeStr = "", colon = ":", rest = ""] = match;
-  const styledType = `\x1b[1m${info.colorAnsi}${typeStr}\x1b[0m`;
-  const styledScope = scopeStr ? `\x1b[38;2;200;180;200m${scopeStr}\x1b[0m` : "";
-  const styledColon = `\x1b[38;2;140;130;140m${colon}\x1b[0m`;
+  const styledPrefix = `\x1b[1m${info.colorAnsi}${typeStr}${scopeStr}${colon}\x1b[0m`;
   const styledRest = isSelected ? `\x1b[1m${rest}\x1b[22m` : rest;
 
-  return `${styledType}${styledScope}${styledColon}${styledRest}`;
+  return `${styledPrefix}${styledRest}`;
 }
 
 /**
