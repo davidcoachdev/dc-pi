@@ -24,6 +24,7 @@ export class DcCollapsible implements Component {
   public expanded: boolean;
   private childrenStack: DcVStack;
   private collapsedStack: DcVStack | undefined;
+  private lastWidth = 40;
 
   constructor(public options: DcCollapsibleOptions) {
     this.expanded = options.expanded ?? false;
@@ -34,6 +35,7 @@ export class DcCollapsible implements Component {
   }
 
   render(width: number): string[] {
+    this.lastWidth = width;
     const arrow = this.expanded ? "▲" : "▼";
     
     // Regla del lab:
@@ -73,10 +75,13 @@ export class DcCollapsible implements Component {
     if (event.button !== undefined && event.button !== "left") return undefined;
     
     if (event.y === 0) {
-      if (this.options.onTitleRightClick && event.x !== undefined && event.x >= 32 && event.x <= 45) {
+      const isRightClickZone = this.options.onTitleRightClick &&
+        event.x !== undefined &&
+        (event.x >= Math.max(20, this.lastWidth - 12) || (event.x >= 30 && event.x <= 48));
+      if (isRightClickZone) {
         if (event.type === "press") return { handled: true };
         if (event.type === "click") {
-          this.options.onTitleRightClick();
+          this.options.onTitleRightClick?.();
           return { handled: true };
         }
       }

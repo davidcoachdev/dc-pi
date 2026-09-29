@@ -1,5 +1,4 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
-import * as path from "node:path";
 import {
   Key,
   matchesKey,
@@ -9,157 +8,452 @@ import {
   type TuiMouseEvent,
   type TuiMouseEventResult,
 } from "@earendil-works/pi-tui";
-import { getProjectObservations, type EngramObservation } from "./dc-engram-db.ts";
+import { DcSearchInput } from "../../ui/dc-search-input.ts";
+import { justifyRow } from "../../ui/dc-row.ts";
+import { dcClipboard } from "../../integrations/dc-clipboard/dc-clipboard.ts";
+import { openProjectDashboard } from "./dc-engram-enroll-panel.ts";
+import { getProjectObservations, resolveEngramProjectName, type EngramObservation } from "./dc-engram-db.ts";
 
 export interface EngramPanelOptions {
   theme: Pick<Theme, "fg" | "bg" | "bold">;
   requestRender: () => void;
   projectName?: string;
+  maxRows?: number | (() => number);
 }
 
 export class EngramPanel implements Component {
   private theme: Pick<Theme, "fg" | "bg" | "bold">;
   private observations: EngramObservation[];
   private selectedIndex = 0;
-  private scrollY = 0;
+  private listScrollOffset = 0;
+  private detailScrollOffset = 0;
+  private searchInput: DcSearchInput;
   private requestRender: () => void;
-  private lastLeftW = 28;
+  private maxRowsOption?: number | (() => number);
+  private lastLeftW = 34;
+  private lastRowsCount = 14;
+  private readonly headerRows = 2;
   public projectName: string;
 
   constructor(options: EngramPanelOptions) {
     this.theme = options.theme;
     this.requestRender = options.requestRender;
-    this.projectName = options.projectName || path.basename(process.cwd());
-    this.observations = getProjectObservations(200, this.projectName);
+    this.maxRowsOption = options.maxRows;
+    this.projectName = resolveEngramProjectName(options.projectName);
+    this.observations = getProjectObservations(500, this.projectName);
+
+    this.searchInput = new DcSearchInput({
+      placeholder: "Buscar (#id, tipo, palabra clave)...",
+      width: 32,
+      theme: {
+        fg: (c, text) => this.theme.fg(c as any, text),
+        bold: (text) => this.theme.bold(text),
+      },
+      showEscHint: true,
+    });
   }
 
   invalidate(): void {
-    this.observations = getProjectObservations(200, this.projectName);
+    this.observations = getProjectObservations(500, this.projectName);
+  }
+
+  getObservations(): EngramObservation[] {
+    return this.observations;
+  }
+
+  getFilteredObservations(): EngramObservation[] {
+    const q = this.searchInput.getQuery().trim().toLowerCase();
+    if (!q) return this.observations;
+
+    return this.observations.filter((obs) => {
+      const idStr = `#${obs.id}`.toLowerCase();
+      if (idStr.includes(q) || String(obs.id).includes(q)) return true;
+      if (obs.title.toLowerCase().includes(q)) return true;
+      if (obs.type.toLowerCase().includes(q)) return true;
+      if (obs.content.toLowerCase().includes(q)) return true;
+      if (obs.scope.toLowerCase().includes(q)) return true;
+      return false;
+    });
+  }
+
+  getSelectedIndex(): number {
+    return this.selectedIndex;
+  }
+
+  setSelectedIndex(index: number): void {
+    const filtered = this.getFilteredObservations();
+    if (filtered.length === 0) return;
+    this.selectedIndex = Math.max(0, Math.min(filtered.length - 1, index));
+    this.detailScrollOffset = 0;
+    this.adjustListScroll();
+    this.requestRender();
+  }
+
+  public getMaxRows(): number {
+    if (typeof this.maxRowsOption === "function") {
+      return Math.max(12, this.maxRowsOption());
+    }
+    if (typeof this.maxRowsOption === "number") {
+      return Math.max(12, this.maxRowsOption);
+    }
+    const termRows = process.stdout?.rows ?? 35;
+    return Math.max(12, Math.floor(termRows * 0.85) - 6);
+  }
+
+  private adjustListScroll(): void {
+    const rowsBudget = this.lastRowsCount;
+    if (this.selectedIndex < this.listScrollOffset) {
+      this.listScrollOffset = this.selectedIndex;
+    } else if (this.selectedIndex >= this.listScrollOffset + rowsBudget) {
+      this.listScrollOffset = this.selectedIndex - rowsBudget + 1;
+    }
   }
 
   render(width: number): string[] {
-    const fg = this.theme.fg;
-    const bold = this.theme.bold;
+    const t = this.theme;
+    const safeW = Math.max(50, width);
 
-    const leftW = Math.max(26, Math.min(36, Math.floor(width * 0.35)));
+    // 1/3 (36%) izquierda para índice, 2/3 (64%) derecha para detalle
+    const leftW = Math.max(28, Math.min(42, Math.floor(safeW * 0.36)));
     this.lastLeftW = leftW;
-    const rightW = Math.max(10, width - leftW - 1);
-    const divider = fg("accent", "│");
+    const rightW = Math.max(20, safeW - leftW - 3);
 
-    const innerH = 15; // Target height
+    const pad = (str: string, len: number) => {
+      const v = visibleWidth(str);
+      return v >= len ? truncateToWidth(str, len, "") : str + " ".repeat(len - v);
+    };
 
-    // 1. Render Left List (Observations Index)
-    const leftLines: string[] = [];
-    if (this.observations.length === 0) {
-      leftLines.push(fg("dim", `  (Sin memorias para ${this.projectName || "este proyecto"})`));
-    } else {
-      for (let i = 0; i < this.observations.length; i++) {
-        const obs = this.observations[i]!;
-        const isSelected = i === this.selectedIndex;
-        const typeBadge = `[${obs.type}]`;
-        const titleSnippet = obs.title;
-        const lineStr = ` #${obs.id} ${typeBadge} ${titleSnippet}`;
-        const truncated = truncateToWidth(lineStr, leftW - 1, "…");
+    const filtered = this.getFilteredObservations();
+    const total = this.observations.length;
 
-        if (isSelected) {
-          leftLines.push(fg("accent", bold(`>${truncated.padEnd(leftW - 1)}`)));
+    // Asegurar selección dentro de rango tras filtros
+    if (this.selectedIndex >= filtered.length) {
+      this.selectedIndex = Math.max(0, filtered.length - 1);
+    }
+
+    // Cabecera Fila 0
+    const filterBadge = this.searchInput.isEmpty()
+      ? `${t.fg("accent", String(total))} obs`
+      : `${t.bold(t.fg("accent", String(filtered.length)))}${t.fg("dim", `/${total}`)}`;
+    const headerLeft = ` 🧠 ${t.bold(t.fg("accent", this.projectName))} ${t.fg("dim", "(")}${filterBadge}${t.fg("dim", ")")}`;
+
+    const titleText = ` 📌 ${t.bold(t.fg("accent", "Detalle de Memoria"))}`;
+    const searchWidth = Math.min(36, Math.max(16, rightW - visibleWidth(" 📌 Detalle de Memoria") - 2));
+    const searchRender = this.searchInput.render(searchWidth);
+    const headerRight = justifyRow(titleText, searchRender + " ", rightW);
+
+    const lines: string[] = [];
+    lines.push(`${pad(headerLeft, leftW)} ${t.fg("border", "│")} ${pad(headerRight, rightW)}`);
+    lines.push(`${t.fg("border", "─".repeat(leftW))}─┼─${t.fg("border", "─".repeat(rightW))}`);
+
+    // Si no hay observaciones en general o tras el filtro
+    if (filtered.length === 0) {
+      const emptyMsg = total === 0
+        ? `  ${t.fg("dim", "(sin memorias guardadas)")}`
+        : `  ${t.fg("warning", "(sin coincidencias de búsqueda)")}`;
+      const emptyDetail = total === 0
+        ? `  ${t.fg("dim", "Daemon :7437 activo · ~/.engram/engram.db")}`
+        : `  ${t.fg("dim", "Probá con otro término o presioná Esc para limpiar.")}`;
+
+      lines.push(`${pad(emptyMsg, leftW)} ${t.fg("border", "│")} ${pad(emptyDetail, rightW)}`);
+      for (let i = 0; i < 10; i++) {
+        lines.push(`${" ".repeat(leftW)} ${t.fg("border", "│")} ${" ".repeat(rightW)}`);
+      }
+      return lines.map((l) => truncateToWidth(l, safeW, ""));
+    }
+
+    // Altura del cuerpo visible
+    const availableRows = Math.max(10, this.getMaxRows() - this.headerRows);
+    this.lastRowsCount = availableRows;
+    this.adjustListScroll();
+
+    // 1. Preparar detalle derecho
+    const current = filtered[this.selectedIndex] || filtered[0]!;
+    const rightContent: string[] = [];
+
+    rightContent.push(` 📌 ${t.bold(t.fg("accent", `ID: #${current.id}`))}  ${t.fg("dim", "·")}  ${t.fg("accent", `[${current.type}]`)}  ${t.fg("dim", "·")}  Scope: ${t.fg("text", current.scope)}`);
+    rightContent.push(` 📅 ${t.fg("dim", current.created_at)}`);
+    rightContent.push(t.fg("border", "─".repeat(Math.max(1, rightW - 2))));
+    rightContent.push(` ${t.bold(t.fg("text", current.title))}`);
+    rightContent.push("");
+
+    const contentRaw = current.content || "(Sin contenido)";
+    const paragraphs = contentRaw.split("\n");
+    for (const p of paragraphs) {
+      const trimmed = p.trim();
+      if (!trimmed) {
+        rightContent.push("");
+        continue;
+      }
+
+      const isHeaderPrefix = /^(what|why|where|learned|goal|instructions|discoveries|accomplished|next steps|relevant files):/i.test(trimmed);
+      let lineToWrap = trimmed;
+
+      if (isHeaderPrefix) {
+        const colonIdx = trimmed.indexOf(":");
+        const prefix = trimmed.slice(0, colonIdx + 1);
+        const rest = trimmed.slice(colonIdx + 1).trim();
+        lineToWrap = `${t.bold(t.fg("accent", prefix))} ${rest}`;
+      }
+
+      let currentLine = "";
+      const words = lineToWrap.split(/\s+/);
+      for (const w of words) {
+        if (visibleWidth(currentLine + " " + w) > rightW - 3) {
+          rightContent.push(` ${currentLine}`);
+          currentLine = w;
         } else {
-          leftLines.push(fg("text", ` ${truncated.padEnd(leftW - 1)}`));
+          currentLine = currentLine ? `${currentLine} ${w}` : w;
         }
+      }
+      if (currentLine) {
+        rightContent.push(` ${currentLine}`);
       }
     }
 
-    // 2. Render Right Details (Selected Observation Content)
-    const rightLines: string[] = [];
-    const current = this.observations[this.selectedIndex];
-    if (!current) {
-      rightLines.push(fg("dim", "  Seleccioná una observación de la izquierda."));
-    } else {
-      rightLines.push(fg("accent", bold(` ID: #${current.id}  ·  Tipo: [${current.type}]`)));
-      rightLines.push(fg("muted", ` Fecha: ${current.created_at}  ·  Scope: ${current.scope}`));
-      rightLines.push(fg("accent", "─".repeat(Math.max(1, rightW - 2))));
-      rightLines.push(fg("text", bold(` ${current.title}`)));
-      rightLines.push("");
+    // Scroll vertical del detalle derecho
+    const maxDetailScroll = Math.max(0, rightContent.length - availableRows);
+    this.detailScrollOffset = Math.max(0, Math.min(this.detailScrollOffset, maxDetailScroll));
+    const visibleDetail = rightContent.slice(this.detailScrollOffset, this.detailScrollOffset + availableRows);
 
-      // Word wrap content body
-      const contentRaw = current.content || "(Sin contenido)";
-      const paragraphs = contentRaw.split("\n");
-      for (const p of paragraphs) {
-        if (p.trim() === "") {
-          rightLines.push("");
-          continue;
-        }
-        // Wrap long paragraphs to rightW - 2
-        let currentLine = "";
-        const words = p.split(/\s+/);
-        for (const w of words) {
-          if (visibleWidth(currentLine + " " + w) > rightW - 3) {
-            rightLines.push(` ${currentLine}`);
-            currentLine = w;
+    // 2. Columna izquierda con scroll vertical (Sliding Window)
+    const maxListScroll = Math.max(0, filtered.length - availableRows);
+    this.listScrollOffset = Math.max(0, Math.min(this.listScrollOffset, maxListScroll));
+    const visibleObservations = filtered.slice(this.listScrollOffset, this.listScrollOffset + availableRows);
+
+    // 3. Renderizar filas combinadas
+    for (let r = 0; r < availableRows; r++) {
+      // 3.1 Izquierda (Observación con scrollbar retro si la lista supera el viewport)
+      let leftCell = " ".repeat(leftW);
+      if (r < visibleObservations.length) {
+        const obsIndex = this.listScrollOffset + r;
+        const obs = visibleObservations[r]!;
+        const isSelected = obsIndex === this.selectedIndex;
+        const typeBadge = `[${obs.type}]`;
+        const lineStr = ` #${obs.id} ${typeBadge} ${obs.title}`;
+        
+        // Reservar 1 columna a la derecha para el scrollbar si hay overflow
+        const contentW = maxListScroll > 0 ? leftW - 2 : leftW - 1;
+        const truncated = truncateToWidth(lineStr, contentW, "…");
+        const paddedContent = pad(` ${truncated}`, contentW);
+
+        // Carácter de scrollbar vertical en la lista izquierda
+        let scrollbarChar = " ";
+        if (maxListScroll > 0) {
+          if (r === 0) {
+            scrollbarChar = this.listScrollOffset > 0 ? t.fg("accent", "▲") : t.fg("dim", "░");
+          } else if (r === availableRows - 1) {
+            scrollbarChar = this.listScrollOffset < maxListScroll ? t.fg("accent", "▼") : t.fg("dim", "░");
           } else {
-            currentLine = currentLine ? `${currentLine} ${w}` : w;
+            const trackH = availableRows - 2;
+            const thumbPos = Math.round((this.listScrollOffset / maxListScroll) * (trackH - 1));
+            scrollbarChar = (r - 1) === thumbPos ? t.fg("accent", "█") : t.fg("dim", "░");
           }
         }
-        if (currentLine) {
-          rightLines.push(` ${currentLine}`);
-        }
+
+        const fullLeft = `${paddedContent}${scrollbarChar}`;
+        leftCell = isSelected
+          ? t.bg("selectedBg", t.bold(t.fg("accent", fullLeft)))
+          : t.fg("text", fullLeft);
       }
+
+      // 3.2 Derecha (Detalle de contenido)
+      const detailLine = visibleDetail[r] ?? "";
+      const rightCell = pad(detailLine, rightW);
+
+      lines.push(`${leftCell} ${t.fg("border", "│")} ${rightCell}`);
     }
 
-    // 3. Combine both panels side by side row by row
-    const maxRows = Math.max(leftLines.length, rightLines.length, innerH);
-    const out: string[] = [];
-
-    for (let r = 0; r < maxRows; r++) {
-      const lText = leftLines[r] ?? "";
-      const rText = rightLines[r] ?? "";
-
-      const lPadded = lText + " ".repeat(Math.max(0, leftW - visibleWidth(lText)));
-      const rPadded = truncateToWidth(rText, rightW, "…");
-      const rPaddedFinal = rPadded + " ".repeat(Math.max(0, rightW - visibleWidth(rPadded)));
-
-      out.push(`${lPadded}${divider}${rPaddedFinal}`);
-    }
-
-    return out;
+    return lines.map((l) => truncateToWidth(l, safeW, ""));
   }
 
-  handleInput(data: string): void {
-    const total = this.observations.length;
-    if (total === 0) return;
+  handleInput(data: string): boolean {
+    const filtered = this.getFilteredObservations();
 
-    if (matchesKey(data, Key.up)) {
-      this.selectedIndex = Math.max(0, this.selectedIndex - 1);
-      this.requestRender();
-    } else if (matchesKey(data, Key.down)) {
-      this.selectedIndex = Math.min(total - 1, this.selectedIndex + 1);
-      this.requestRender();
-    } else if (matchesKey(data, Key.pageUp)) {
-      this.selectedIndex = Math.max(0, this.selectedIndex - 8);
-      this.requestRender();
-    } else if (matchesKey(data, Key.pageDown)) {
-      this.selectedIndex = Math.min(total - 1, this.selectedIndex + 8);
-      this.requestRender();
-    } else if (matchesKey(data, Key.home)) {
-      this.selectedIndex = 0;
-      this.requestRender();
-    } else if (matchesKey(data, Key.end)) {
-      this.selectedIndex = total - 1;
-      this.requestRender();
+    // Si la lista está vacía y no estamos buscando ni borrando, no consumir teclas de navegación
+    if (filtered.length === 0 && !matchesKey(data, Key.escape) && !matchesKey(data, Key.backspace) && !(data.length === 1 && data >= " " && data <= "~")) {
+      return false;
     }
+
+    // Navegación en la lista izquierda (Up / Down)
+    if (matchesKey(data, Key.up)) {
+      if (this.selectedIndex > 0) {
+        this.selectedIndex--;
+        this.detailScrollOffset = 0;
+        this.adjustListScroll();
+        this.requestRender();
+      }
+      return true;
+    }
+
+    if (matchesKey(data, Key.down)) {
+      if (this.selectedIndex < filtered.length - 1) {
+        this.selectedIndex++;
+        this.detailScrollOffset = 0;
+        this.adjustListScroll();
+        this.requestRender();
+      }
+      return true;
+    }
+
+    // PageUp / PageDown
+    if (matchesKey(data, Key.pageUp)) {
+      if (filtered.length > 0) {
+        this.selectedIndex = Math.max(0, this.selectedIndex - 8);
+        this.detailScrollOffset = 0;
+        this.adjustListScroll();
+        this.requestRender();
+      }
+      return true;
+    }
+
+    if (matchesKey(data, Key.pageDown)) {
+      if (filtered.length > 0) {
+        this.selectedIndex = Math.min(filtered.length - 1, this.selectedIndex + 8);
+        this.detailScrollOffset = 0;
+        this.adjustListScroll();
+        this.requestRender();
+      }
+      return true;
+    }
+
+    // Home / End
+    if (matchesKey(data, Key.home)) {
+      if (filtered.length > 0) {
+        this.selectedIndex = 0;
+        this.listScrollOffset = 0;
+        this.detailScrollOffset = 0;
+        this.requestRender();
+      }
+      return true;
+    }
+
+    if (matchesKey(data, Key.end)) {
+      if (filtered.length > 0) {
+        this.selectedIndex = filtered.length - 1;
+        this.adjustListScroll();
+        this.detailScrollOffset = 0;
+        this.requestRender();
+      }
+      return true;
+    }
+
+    // Scroll vertical del detalle derecho con Ctrl+Up / Ctrl+Down
+    const isScrollDown =
+      matchesKey(data, "ctrl+down") ||
+      matchesKey(data, Key.ctrl("down")) ||
+      data === "\x1b[1;5B";
+
+    const isScrollUp =
+      matchesKey(data, "ctrl+up") ||
+      matchesKey(data, Key.ctrl("up")) ||
+      data === "\x1b[1;5A";
+
+    if (isScrollDown) {
+      this.detailScrollOffset = Math.min(100, this.detailScrollOffset + 4);
+      this.requestRender();
+      return true;
+    }
+
+    if (isScrollUp) {
+      if (this.detailScrollOffset > 0) {
+        this.detailScrollOffset = Math.max(0, this.detailScrollOffset - 4);
+        this.requestRender();
+      }
+      return true;
+    }
+
+    // Copiar memoria activa al portapapeles: 'c' / 'C' (cuando la búsqueda está vacía)
+    if (this.searchInput.isEmpty() && (data === "c" || data === "C")) {
+      const cur = filtered[this.selectedIndex];
+      if (cur) {
+        const textToCopy = `#${cur.id} [${cur.type}] ${cur.title}\n\n${cur.content}`;
+        dcClipboard.copy(textToCopy);
+        this.requestRender();
+      }
+      return true;
+    }
+
+    // Abrir dashboard web en navegador: 'o' / 'O' (cuando la búsqueda está vacía)
+    if (this.searchInput.isEmpty() && (data === "o" || data === "O")) {
+      openProjectDashboard(this.projectName);
+      return true;
+    }
+
+    // Escape: si la búsqueda tiene texto, la limpia sin cerrar el modal
+    if (matchesKey(data, Key.escape)) {
+      if (!this.searchInput.isEmpty()) {
+        this.searchInput.clear();
+        this.selectedIndex = 0;
+        this.listScrollOffset = 0;
+        this.detailScrollOffset = 0;
+        this.requestRender();
+        return true;
+      }
+      return false; // permite cerrar la ventana modal si la búsqueda ya está vacía
+    }
+
+    // Backspace en búsqueda
+    if (matchesKey(data, Key.backspace)) {
+      if (this.searchInput.backspace()) {
+        this.selectedIndex = 0;
+        this.listScrollOffset = 0;
+        this.detailScrollOffset = 0;
+        this.requestRender();
+        return true;
+      }
+      return true;
+    }
+
+    // Caracteres imprimibles (búsqueda en tiempo real)
+    if (data.length === 1 && data >= " " && data <= "~") {
+      this.searchInput.append(data);
+      this.selectedIndex = 0;
+      this.listScrollOffset = 0;
+      this.detailScrollOffset = 0;
+      this.requestRender();
+      return true;
+    }
+
+    return false;
   }
 
   handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
-    if (event.type === "wheel") return undefined;
+    const filtered = this.getFilteredObservations();
+
+    // Rueda del mouse
+    if (event.type === "wheel") {
+      const delta = (event as any).wheelDelta ?? ((event as any).deltaY > 0 ? 1 : -1);
+      if (event.x !== undefined && event.x < this.lastLeftW && filtered.length > 0) {
+        // Scroll en la lista izquierda
+        const next = Math.max(0, Math.min(filtered.length - 1, this.selectedIndex + (delta > 0 ? 1 : -1)));
+        if (next !== this.selectedIndex) {
+          this.selectedIndex = next;
+          this.detailScrollOffset = 0;
+          this.adjustListScroll();
+          this.requestRender();
+          return { handled: true };
+        }
+      } else {
+        // Scroll en el detalle derecho
+        this.detailScrollOffset = Math.max(0, this.detailScrollOffset + (delta > 0 ? 3 : -3));
+        this.requestRender();
+        return { handled: true };
+      }
+      return undefined;
+    }
+
     if (event.button !== "left" || (event.type !== "press" && event.type !== "click")) {
       return undefined;
     }
 
-    // Click on left list (x < lastLeftW)
-    if (event.x < this.lastLeftW) {
-      const clickedRow = event.y;
-      if (clickedRow >= 0 && clickedRow < this.observations.length && clickedRow < 15) {
-        this.selectedIndex = clickedRow;
+    // Clic en la lista izquierda (después de la cabecera de 2 filas)
+    if (event.x !== undefined && event.x < this.lastLeftW && event.y !== undefined && event.y >= this.headerRows) {
+      const clickedRow = event.y - this.headerRows;
+      const clickedIndex = this.listScrollOffset + clickedRow;
+      if (clickedIndex >= 0 && clickedIndex < filtered.length) {
+        this.selectedIndex = clickedIndex;
+        this.detailScrollOffset = 0;
         this.requestRender();
         return { handled: true };
       }

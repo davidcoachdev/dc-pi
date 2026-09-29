@@ -62,7 +62,7 @@ export async function showTaskManagerSetup(cwd: string, ctx: ExtensionContext): 
 
 export async function openPreviewDirectionMenu(
   ctx: ExtensionContext,
-  mode: "nvim" | "fzf" | "yazi" | "dc-studio",
+  mode: "nvim" | "fzf" | "yazi" | "dc-studio" | "engram",
   cwd?: string,
   options?: DcPreviewLauncherOptions,
 ): Promise<void> {
@@ -95,7 +95,7 @@ export default function dcPreviewExtension(
 ): void {
   async function showDirectionMenu(
     ctx: ExtensionContext,
-    mode: "nvim" | "fzf" | "yazi" | "dc-studio",
+    mode: "nvim" | "fzf" | "yazi" | "dc-studio" | "engram",
   ): Promise<void> {
     await openPreviewDirectionMenu(ctx, mode, undefined, options);
   }
@@ -116,6 +116,7 @@ export default function dcPreviewExtension(
         { value: "fzf", label: DC_PREVIEW_TOOL_LABELS.fzf },
         { value: "yazi", label: DC_PREVIEW_TOOL_LABELS.yazi },
         { value: "dc-studio", label: DC_PREVIEW_TOOL_LABELS["dc-studio"] },
+        { value: "engram", label: DC_PREVIEW_TOOL_LABELS.engram },
       ],
     );
 
@@ -131,7 +132,7 @@ export default function dcPreviewExtension(
   // Comando único en inglés: /dc-preview
   pi.registerCommand("dc-preview", {
     description:
-      "Open tools (task-manager, nvim, fzf, yazi, dc-studio) in a 40% split pane (right/down) in Tmux or Herdr. Usage: /dc-preview [nvim|fzf|yazi|manager|dc] [h|v]",
+      "Open tools (task-manager, nvim, fzf, yazi, dc-studio, engram) in a 40% split pane (right/down) in Tmux or Herdr. Usage: /dc-preview [nvim|fzf|yazi|manager|dc|engram] [h|v]",
     handler: async (args: string | undefined, ctx: ExtensionContext) => {
       const parts = (args || "").trim().split(/\s+/).filter(Boolean);
       const tool = parseToolArg(parts[0]);

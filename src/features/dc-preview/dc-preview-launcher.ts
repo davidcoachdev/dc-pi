@@ -4,7 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { isHerdr, isTmux } from "../dc-title/dc-title-renamer.ts";
 
-export type DcPreviewToolMode = "manager" | "nvim" | "fzf" | "yazi" | "dc-studio";
+export type DcPreviewToolMode = "manager" | "nvim" | "fzf" | "yazi" | "dc-studio" | "engram";
 export type DcPreviewOrientation = "h" | "v";
 
 export const DC_PREVIEW_SPLIT_PERCENT = 40;
@@ -16,6 +16,7 @@ export const DC_PREVIEW_TOOL_LABELS: Record<DcPreviewToolMode, string> = {
   fzf: "🔍  fzf",
   yazi: "🦆  yazi",
   "dc-studio": "🧰  dc-studio",
+  engram: "🧠  engram (TUI)",
 };
 
 export const DC_PREVIEW_DIRECTION_LABELS: Record<DcPreviewOrientation, string> = {
@@ -55,6 +56,7 @@ export function parseToolArg(s: string | undefined): DcPreviewToolMode | undefin
   if (t === "fzf") return "fzf";
   if (t === "yazi") return "yazi";
   if (t === "dc" || t === "dc-studio" || t === "dcstudio") return "dc-studio";
+  if (t === "engram" || t === "tui" || t === "memoria" || t === "memory") return "engram";
   return undefined;
 }
 
@@ -83,12 +85,13 @@ export function resolveTaskManagerScript(customHome?: string): string | undefine
 }
 
 export function buildFishToolCommand(
-  mode: "nvim" | "fzf" | "yazi" | "dc-studio",
+  mode: "nvim" | "fzf" | "yazi" | "dc-studio" | "engram",
   orientation: DcPreviewOrientation,
 ): string {
   if (mode === "nvim") return "nvim .";
   if (mode === "yazi") return "yazi .";
   if (mode === "dc-studio") return "dc";
+  if (mode === "engram") return "engram tui";
   return orientation === "v" ? VIEWER_FZF_DOWN : VIEWER_FZF_RIGHT;
 }
 
@@ -107,7 +110,7 @@ export interface DcPreviewLaunchResult {
  * Abre un panel split (derecha o abajo al 40%) en Tmux o Herdr.
  */
 export function launchPanel(
-  mode: "nvim" | "fzf" | "yazi" | "dc-studio",
+  mode: "nvim" | "fzf" | "yazi" | "dc-studio" | "engram",
   orientation: DcPreviewOrientation,
   cwd: string,
   options?: DcPreviewLauncherOptions,
@@ -140,7 +143,9 @@ export function launchPanel(
     }
 
     try {
-      const args = ["split-window", "-p", String(DC_PREVIEW_SPLIT_PERCENT), flag, "-c", dir, "fish", "-lc", fishCmd];
+      const args = mode === "engram"
+        ? ["split-window", "-p", String(DC_PREVIEW_SPLIT_PERCENT), flag, "-c", dir, "engram", "tui"]
+        : ["split-window", "-p", String(DC_PREVIEW_SPLIT_PERCENT), flag, "-c", dir, "fish", "-lc", fishCmd];
       exec("tmux", args);
       return {
         success: true,
@@ -197,7 +202,10 @@ export function launchPanel(
     }
 
     try {
-      exec("herdr", ["pane", "run", newPaneId, "fish", "-lc", fishCmd]);
+      const runArgs = mode === "engram"
+        ? ["pane", "run", newPaneId, "engram", "tui"]
+        : ["pane", "run", newPaneId, "fish", "-lc", fishCmd];
+      exec("herdr", runArgs);
       return {
         success: true,
         target: "herdr",
