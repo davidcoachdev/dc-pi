@@ -48,28 +48,42 @@ export function createStatusCard(reqRender: () => void): Component {
   const projectRows = [
     new DcJustifiedRow(
       ` 📁 ${bloodBright(bold("Project"))}`,
-      `${bloodWhite(proj.displayCwd)} `,
+      () => {
+        const p = getProjectInfo();
+        return `${bloodWhite(p.displayCwd)} `;
+      },
       () => {
         const ctx = getSidebarContext();
         if (ctx) {
-          void openPreviewDirectionMenu(ctx, "yazi", proj.cwd);
+          const p = getProjectInfo();
+          void openPreviewDirectionMenu(ctx, "yazi", p.cwd);
         }
       },
     ),
     new DcJustifiedRow(
       ` 🗂️ ${bloodSoft("Branch")}`,
-      `${bloodWhite(`» ${proj.branch}`)} `,
+      () => {
+        const p = getProjectInfo();
+        return `${bloodWhite(`» ${p.branch}`)} `;
+      },
       () => {
         const ctx = getSidebarContext();
         if (ctx) {
-          void openGitGraphViewer(ctx, proj.cwd);
+          const p = getProjectInfo();
+          void openGitGraphViewer(ctx, p.cwd);
         }
       },
     ),
     ...rddRows,
     new DcJustifiedRow(
       ` 📂 ${bloodBright(bold("Changes"))}`, 
-      `${changesDisplay} ${bloodBright("[↗]")} `,
+      () => {
+        const p = getProjectInfo();
+        const display = p.changesCount > 0 
+          ? bloodBright(bold(p.changesText)) 
+          : dim("sin cambios");
+        return `${display} ${bloodBright("[↗]")} `;
+      },
       () => {
         const ctx = getSidebarContext();
         if (ctx) {
