@@ -142,7 +142,7 @@ export function createStatusCard(reqRender: () => void): Component {
     rows.push(
       new DcJustifiedRow(
         `    ⚙️ ${dim("Gestor /dc-engram")}`,
-        `${bloodBright("[Alt+G ↗]")} `,
+        `${bloodBright("[Alt+Shift+G ↗]")} `,
         () => {
           const ctx = getSidebarContext();
           if (ctx) void openEngramExplorer(ctx, projName);
