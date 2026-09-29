@@ -476,7 +476,7 @@ export class DcGitGraphPanel implements Component {
 
     // 3. Diff renderizado dentro de la caja de código estilizada de DC Studio (dc-code)
     const headerLinesCount = rightLines.length;
-    const diffBudget = Math.max(6, rowsCount - headerLinesCount);
+    const diffBudget = Math.max(6, rowsCount - headerLinesCount - 2);
 
     const activeFile = parsedDetail.files[this.activeFileIndex] || parsedDetail.files[0];
     const activeLines = activeFile
@@ -489,7 +489,7 @@ export class DcGitGraphPanel implements Component {
       title: activeFile?.shortName || selCommit?.shortHash || "diff",
       lines: activeLines,
       width: rightW,
-      maxRows: diffBudget,
+      maxRows: diffBudget + 2,
       scrollOffset: this.detailScrollOffset,
     });
 
@@ -497,8 +497,11 @@ export class DcGitGraphPanel implements Component {
       rightLines.push(cLine);
     }
 
+    const totalRows = Math.max(rowsCount, rightLines.length);
+    this.lastRowsCount = totalRows;
+
     // Render the grid
-    for (let i = 0; i < rowsCount; i++) {
+    for (let i = 0; i < totalRows; i++) {
       // 1. Left cell: Graph commit tree (1/3)
       let leftCell = " ".repeat(leftW);
       if (i < visibleRows.length) {

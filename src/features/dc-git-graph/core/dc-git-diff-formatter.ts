@@ -237,10 +237,10 @@ export function formatDiffLine(
 
 /**
  * Renderiza el bloque de diff dentro de la caja de código estilizada de DC Studio (dc-code):
- * - Borde superior redondeado con nombre del archivo y flecha.
+ * - Borde superior redondeado con nombre del archivo y flecha (cerrado a width exacto).
  * - Gutter numerado para cada línea del diff.
- * - Líneas de adición en verde y eliminación en rojo.
- * - Borde inferior redondeado con botón de copia.
+ * - Líneas de adición en verde y eliminación en rojo, truncadas para no empujar el borde derecho.
+ * - Borde inferior redondeado con botón de copia (cerrado a width exacto).
  */
 export function renderDcCodeBox(options: {
   title: string;
@@ -258,17 +258,17 @@ export function renderDcCodeBox(options: {
   const rightDashes = 3;
   const arrowBadge = scrollOffset > 0 ? " ▲ " : " ─ ";
   const arrowLen = visibleWidth(arrowBadge);
-  const fillLen = Math.max(0, width - 2 - 2 - titleLen - arrowLen - rightDashes);
+  const fillLen = Math.max(0, width - 2 - titleLen - arrowLen - rightDashes - 1);
 
   const topBorder = `\x1b[38;2;140;60;80m╭─\x1b[1m\x1b[38;2;220;170;200m${titlePart}\x1b[0m\x1b[38;2;140;60;80m${"─".repeat(fillLen)}${arrowBadge}${"─".repeat(rightDashes)}╮\x1b[0m`;
 
   const copyBadge = " 📋 ";
   const copyLen = visibleWidth(copyBadge);
-  const bottomDashes = Math.max(0, width - 2 - copyLen - rightDashes);
+  const bottomDashes = Math.max(0, width - 1 - copyLen - rightDashes - 1);
   const bottomBorder = `\x1b[38;2;140;60;80m╰${"─".repeat(bottomDashes)}\x1b[38;2;200;160;180m${copyBadge}\x1b[0m\x1b[38;2;140;60;80m${"─".repeat(rightDashes)}╯\x1b[0m`;
 
   const result: string[] = [];
-  result.push(truncateToWidth(topBorder, width, ""));
+  result.push(topBorder);
 
   const bodyBudget = Math.max(1, maxRows - 2);
   const maxScroll = Math.max(0, rawLines.length - bodyBudget);
@@ -278,21 +278,24 @@ export function renderDcCodeBox(options: {
   const totalLines = rawLines.length;
   const gutterDigits = Math.max(1, String(totalLines).length);
 
+  const side = `\x1b[38;2;140;60;80m│\x1b[0m`;
+
   for (let i = 0; i < visibleLines.length; i++) {
     const lineIdx = clampedOffset + i;
     const raw = visibleLines[i]!;
     const lineNum = String(lineIdx + 1).padStart(gutterDigits, " ");
     const gutter = `\x1b[2m\x1b[38;2;100;90;100m${lineNum} │\x1b[22m\x1b[0m `;
+    const gutterW = visibleWidth(gutter);
+    const codeW = Math.max(1, innerW - gutterW);
 
-    const formatted = formatDiffLine(raw, innerW - gutterDigits - 3);
-    const rowContent = ` ${gutter}${formatted}`;
-    const v = visibleWidth(rowContent);
-    const padded = v < innerW ? rowContent + " ".repeat(innerW - v) : rowContent;
+    const formatted = formatDiffLine(raw, codeW);
+    const clipped = truncateToWidth(formatted, codeW, "");
+    const clippedW = visibleWidth(clipped);
+    const padded = clipped + " ".repeat(Math.max(0, codeW - clippedW));
 
-    const side = `\x1b[38;2;140;60;80m│\x1b[0m`;
-    result.push(truncateToWidth(`${side} ${padded} ${side}`, width, ""));
+    result.push(`${side} ${gutter}${padded} ${side}`);
   }
 
-  result.push(truncateToWidth(bottomBorder, width, ""));
+  result.push(bottomBorder);
   return result;
 }
