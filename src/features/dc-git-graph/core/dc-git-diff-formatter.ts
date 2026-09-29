@@ -271,29 +271,26 @@ export function renderDcCodeBox(options: {
   result.push(truncateToWidth(topBorder, width, ""));
 
   const bodyBudget = Math.max(1, maxRows - 2);
-  const visibleLines = rawLines.slice(scrollOffset, scrollOffset + bodyBudget);
+  const maxScroll = Math.max(0, rawLines.length - bodyBudget);
+  const clampedOffset = Math.max(0, Math.min(maxScroll, scrollOffset));
+  const visibleLines = rawLines.slice(clampedOffset, clampedOffset + bodyBudget);
 
   const totalLines = rawLines.length;
   const gutterDigits = Math.max(1, String(totalLines).length);
 
-  for (let i = 0; i < bodyBudget; i++) {
-    if (i < visibleLines.length) {
-      const lineIdx = scrollOffset + i;
-      const raw = visibleLines[i]!;
-      const lineNum = String(lineIdx + 1).padStart(gutterDigits, " ");
-      const gutter = `\x1b[2m\x1b[38;2;100;90;100m${lineNum} │\x1b[22m\x1b[0m `;
+  for (let i = 0; i < visibleLines.length; i++) {
+    const lineIdx = clampedOffset + i;
+    const raw = visibleLines[i]!;
+    const lineNum = String(lineIdx + 1).padStart(gutterDigits, " ");
+    const gutter = `\x1b[2m\x1b[38;2;100;90;100m${lineNum} │\x1b[22m\x1b[0m `;
 
-      const formatted = formatDiffLine(raw, innerW - gutterDigits - 3);
-      const rowContent = ` ${gutter}${formatted}`;
-      const v = visibleWidth(rowContent);
-      const padded = v < innerW ? rowContent + " ".repeat(innerW - v) : rowContent;
+    const formatted = formatDiffLine(raw, innerW - gutterDigits - 3);
+    const rowContent = ` ${gutter}${formatted}`;
+    const v = visibleWidth(rowContent);
+    const padded = v < innerW ? rowContent + " ".repeat(innerW - v) : rowContent;
 
-      const side = `\x1b[38;2;140;60;80m│\x1b[0m`;
-      result.push(truncateToWidth(`${side} ${padded} ${side}`, width, ""));
-    } else {
-      const side = `\x1b[38;2;140;60;80m│\x1b[0m`;
-      result.push(truncateToWidth(`${side} ${" ".repeat(innerW)} ${side}`, width, ""));
-    }
+    const side = `\x1b[38;2;140;60;80m│\x1b[0m`;
+    result.push(truncateToWidth(`${side} ${padded} ${side}`, width, ""));
   }
 
   result.push(truncateToWidth(bottomBorder, width, ""));

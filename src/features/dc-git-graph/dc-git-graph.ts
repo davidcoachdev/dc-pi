@@ -8,7 +8,7 @@ import { DcGitGraphPanel } from "./views/dc-git-graph-panel.ts";
 export async function openGitGraphViewer(ctx: ExtensionContext, cwd?: string): Promise<void> {
   const targetCwd = cwd ?? ctx.cwd ?? process.cwd();
 
-  const footerLeft = "  ↑/↓ / Clic elegir commit   Rueda/PgUp/Dn scroll detalle   r refrescar   esc cerrar";
+  const footerLeft = "  ↑/↓ commits   Ctrl+←/→ cambiar archivo   Ctrl+↑/↓ scroll diff   esc cerrar";
 
   await openDcModal<void>(ctx, {
     title: "Dc Studio - Git Graph & Historial",

@@ -201,8 +201,26 @@ export class DcGitGraphPanel implements Component {
       return true;
     }
 
-    // Alternar tabs de archivos modificados con [ o ] o t o T
-    if (data === "]" || data === "t") {
+    // Alternar tabs de archivos modificados: Ctrl+Right o Ctrl+Left (o ] / [ o t / T)
+    const isNextFile =
+      matchesKey(data, "ctrl+right") ||
+      matchesKey(data, Key.ctrl("right")) ||
+      data === "\x1b[1;5C" ||
+      data === "\x1b[5C" ||
+      data === "\x1bOc" ||
+      data === "]" ||
+      data === "t";
+
+    const isPrevFile =
+      matchesKey(data, "ctrl+left") ||
+      matchesKey(data, Key.ctrl("left")) ||
+      data === "\x1b[1;5D" ||
+      data === "\x1b[5D" ||
+      data === "\x1bOd" ||
+      data === "[" ||
+      data === "T";
+
+    if (isNextFile) {
       const parsedDetail = parseRawCommitDetail(this.currentDetail);
       if (parsedDetail.files.length > 1) {
         this.activeFileIndex = (this.activeFileIndex + 1) % parsedDetail.files.length;
@@ -211,7 +229,7 @@ export class DcGitGraphPanel implements Component {
         return true;
       }
     }
-    if (data === "[" || data === "T") {
+    if (isPrevFile) {
       const parsedDetail = parseRawCommitDetail(this.currentDetail);
       if (parsedDetail.files.length > 1) {
         this.activeFileIndex = (this.activeFileIndex - 1 + parsedDetail.files.length) % parsedDetail.files.length;
@@ -221,18 +239,38 @@ export class DcGitGraphPanel implements Component {
       }
     }
 
-    // Scrolling right pane (diff / commit detail)
-    if (matchesKey(data, Key.pageDown)) {
-      if (this.detailScrollOffset + 10 < this.currentDetail.length) {
-        this.detailScrollOffset += 10;
+    // Scrolling right pane (diff): Ctrl+Down o Ctrl+Up (o PageDown / PageUp)
+    const isScrollDown =
+      matchesKey(data, "ctrl+down") ||
+      matchesKey(data, Key.ctrl("down")) ||
+      data === "\x1b[1;5B" ||
+      data === "\x1b[5B" ||
+      data === "\x1bOb" ||
+      matchesKey(data, Key.pageDown);
+
+    const isScrollUp =
+      matchesKey(data, "ctrl+up") ||
+      matchesKey(data, Key.ctrl("up")) ||
+      data === "\x1b[1;5A" ||
+      data === "\x1b[5A" ||
+      data === "\x1bOa" ||
+      matchesKey(data, Key.pageUp);
+
+    if (isScrollDown) {
+      const parsedDetail = parseRawCommitDetail(this.currentDetail);
+      const activeFile = parsedDetail.files[this.activeFileIndex] || parsedDetail.files[0];
+      const activeLines = activeFile ? activeFile.lines : (parsedDetail.diffLines.length > 0 ? parsedDetail.diffLines : this.currentDetail);
+      const maxScroll = Math.max(0, activeLines.length - 6);
+      if (this.detailScrollOffset < maxScroll) {
+        this.detailScrollOffset = Math.min(maxScroll, this.detailScrollOffset + 5);
         this.requestRender();
       }
       return true;
     }
 
-    if (matchesKey(data, Key.pageUp)) {
+    if (isScrollUp) {
       if (this.detailScrollOffset > 0) {
-        this.detailScrollOffset = Math.max(0, this.detailScrollOffset - 10);
+        this.detailScrollOffset = Math.max(0, this.detailScrollOffset - 5);
         this.requestRender();
       }
       return true;
@@ -271,8 +309,12 @@ export class DcGitGraphPanel implements Component {
 
       // Wheel on right column (commit detail diff - 2/3)
       if (x > this.lastLeftW) {
-        if (delta > 0 && this.detailScrollOffset + 3 < this.currentDetail.length) {
-          this.detailScrollOffset += 3;
+        const parsedDetail = parseRawCommitDetail(this.currentDetail);
+        const activeFile = parsedDetail.files[this.activeFileIndex] || parsedDetail.files[0];
+        const activeLines = activeFile ? activeFile.lines : (parsedDetail.diffLines.length > 0 ? parsedDetail.diffLines : this.currentDetail);
+        const maxScroll = Math.max(0, activeLines.length - 6);
+        if (delta > 0 && this.detailScrollOffset < maxScroll) {
+          this.detailScrollOffset = Math.min(maxScroll, this.detailScrollOffset + 3);
           this.requestRender();
         } else if (delta < 0 && this.detailScrollOffset > 0) {
           this.detailScrollOffset = Math.max(0, this.detailScrollOffset - 3);

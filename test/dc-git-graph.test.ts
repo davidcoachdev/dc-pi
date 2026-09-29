@@ -496,4 +496,19 @@ test("DcGitGraphPanel organizes diff body by file tabs and renders dc-code box w
   // Switch back with [
   panel.handleInput("[");
   assert.equal(panel.getActiveFileIndex(), 0);
+
+  // Switch to file tab 1 with Ctrl+Right (\x1b[1;5C)
+  panel.handleInput("\x1b[1;5C");
+  assert.equal(panel.getActiveFileIndex(), 1, "Ctrl+Right must switch to fileB.ts");
+
+  // Switch back to file tab 0 with Ctrl+Left (\x1b[1;5D)
+  panel.handleInput("\x1b[1;5D");
+  assert.equal(panel.getActiveFileIndex(), 0, "Ctrl+Left must switch back to fileA.ts");
+
+  // Test Ctrl+Down / Ctrl+Up diff scrolling
+  assert.equal(panel.getDetailScrollOffset(), 0);
+  panel.handleInput("\x1b[1;5B"); // Ctrl+Down
+  // Offset increases
+  panel.handleInput("\x1b[1;5A"); // Ctrl+Up
+  assert.equal(panel.getDetailScrollOffset(), 0);
 });
