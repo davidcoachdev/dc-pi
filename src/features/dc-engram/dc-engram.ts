@@ -17,11 +17,8 @@ export async function openEngramExplorer(ctx: ExtensionContext, project?: string
   await openDcModal(ctx, {
     title: `Dc Studio - Engram Visualizador [${projectName}]`,
     glyph: "⛩ ",
-    width: "88%",
-    maxHeight: () => {
-      const rows = (ctx as any)?.ui?.terminal?.rows ?? process.stdout?.rows ?? 35;
-      return Math.max(16, Math.floor(rows * 0.85));
-    },
+    width: "90%",
+    maxHeight: "85%",
     scrollable: false,
     showScrollbar: false,
     footer: (theme) => ({
@@ -32,6 +29,7 @@ export async function openEngramExplorer(ctx: ExtensionContext, project?: string
       return new EngramPanel({
         theme,
         projectName,
+        maxRows: () => Math.max(10, Math.floor(((tui as any)?.terminal?.rows ?? process.stdout?.rows ?? 35) * 0.85) - 6),
         requestRender: () => tui.requestRender(),
       });
     },

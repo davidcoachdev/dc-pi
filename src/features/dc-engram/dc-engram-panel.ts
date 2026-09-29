@@ -15,6 +15,7 @@ export interface EngramPanelOptions {
   theme: Pick<Theme, "fg" | "bg" | "bold">;
   requestRender: () => void;
   projectName?: string;
+  maxRows?: () => number;
 }
 
 export class EngramPanel implements Component {
@@ -24,6 +25,7 @@ export class EngramPanel implements Component {
   private leftScrollY = 0;
   private rightScrollY = 0;
   private requestRender: () => void;
+  private maxRows?: () => number;
   private lastLeftW = 32;
   private lastInnerH = 15;
   public projectName: string;
@@ -31,6 +33,7 @@ export class EngramPanel implements Component {
   constructor(options: EngramPanelOptions) {
     this.theme = options.theme;
     this.requestRender = options.requestRender;
+    this.maxRows = options.maxRows;
     this.projectName = resolveEngramProjectName(options.projectName);
     this.observations = getProjectObservations(500, this.projectName);
   }
@@ -72,7 +75,9 @@ export class EngramPanel implements Component {
     const rightW = Math.max(15, width - leftW - 1);
     const divider = fg("accent", "│");
 
-    const innerH = Math.max(12, Math.min(24, Math.floor(((process.stdout.rows ?? 30) * 0.7))));
+    const innerH = typeof this.maxRows === "function"
+      ? Math.max(8, this.maxRows())
+      : Math.max(12, Math.min(28, Math.floor(((process.stdout.rows ?? 30) * 0.7))));
     this.lastInnerH = innerH;
 
     const total = this.observations.length;
