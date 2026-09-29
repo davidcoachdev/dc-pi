@@ -8,7 +8,7 @@ import { DcCollapsible } from "../../../ui/dc-collapsible.ts";
 import { renderProgressBar } from "../../../ui/dc-progress-bar.ts";
 import { DcJustifiedRow } from "../views/dc-sidebar-body.ts";
 import { getProjectInfo } from "../providers/dc-project-provider.ts";
-import { getProjectObservations, isProjectEnrolled } from "../../dc-engram/dc-engram-db.ts";
+import { getProjectObservations, isProjectEnrolled, resolveEngramProjectName } from "../../dc-engram/dc-engram-db.ts";
 import { getCachedAccountQuotas } from "../providers/dc-quota-provider.ts";
 import { readProfilesInfo, switchActiveProfile } from "../providers/dc-profile-provider.ts";
 import { getMcpServersInfo } from "../providers/dc-mcp-provider.ts";
@@ -94,32 +94,79 @@ export function createStatusCard(reqRender: () => void): Component {
   ];
 
   // --- Bloque 2: Engram (Desplegable interactivo con Local y Cloud) ---
-  const currentCwd = proj.displayCwd.startsWith("~")
-    ? path.join(os.homedir(), proj.displayCwd.slice(1))
-    : proj.displayCwd;
-  const projectName = path.basename(currentCwd) || path.basename(process.cwd());
-  const engramObs = getProjectObservations(5, projectName);
-  const latestId = engramObs[0]?.id ? `#${engramObs[0].id}` : "#0";
-  const isEnrolled = isProjectEnrolled(projectName);
+  const currentProjectName = resolveEngramProjectName(undefined, proj.cwd);
+
+  const createEngramRows = (projName: string) => {
+    const engramObs = getProjectObservations(5, projName);
+    const latestId = engramObs[0]?.id ? `#${engramObs[0].id}` : "#0";
+
+    const rows: DcJustifiedRow[] = [
+      new DcJustifiedRow(`     ${bloodSoft("Health:")} ${bloodBright("ok")}`, `${dim("daemon activo")} `),
+      new DcJustifiedRow(
+        `     ${bloodSoft("Memoria:")}`,
+        `${bloodWhite(`${engramObs.length} obs`)} ${dim("·")} ${bloodSoft(`${latestId} última`)} `,
+        () => {
+          const ctx = getSidebarContext();
+          if (ctx) void openEngramExplorer(ctx, projName);
+        }
+      ),
+    ];
+
+    if (engramObs.length === 0) {
+      rows.push(
+        new DcJustifiedRow(
+          `     ${dim("•")} ${dim("(sin memorias)")}`,
+          `${dim("[abrir ↗]")} `,
+          () => {
+            const ctx = getSidebarContext();
+            if (ctx) void openEngramExplorer(ctx, projName);
+          }
+        )
+      );
+    } else {
+      for (const obs of engramObs.slice(0, 2)) {
+        const tShort = obs.title.length > 18 ? obs.title.slice(0, 17) + "…" : obs.title;
+        rows.push(
+          new DcJustifiedRow(
+            `     ${dim("•")} ${bloodWhite(tShort)}`,
+            `${dim(`[${obs.type}]`)} `,
+            () => {
+              const ctx = getSidebarContext();
+              if (ctx) void openEngramExplorer(ctx, projName);
+            }
+          )
+        );
+      }
+    }
+
+    rows.push(
+      new DcJustifiedRow(
+        `    ⚙️ ${dim("Gestor /dc-engram")}`,
+        `${dim("[abrir ↗]")} `,
+        () => {
+          const ctx = getSidebarContext();
+          if (ctx) void openEngramExplorer(ctx, projName);
+        }
+      )
+    );
+
+    return { rows, count: engramObs.length, latestId };
+  };
+
+  const initialEngramData = createEngramRows(currentProjectName);
+  const isEnrolled = isProjectEnrolled(currentProjectName);
 
   // 2.1 Sub-desplegable Local
-  const localObsRows: DcJustifiedRow[] = [
-    new DcJustifiedRow(`     ${bloodSoft("Health:")} ${bloodBright("ok")}`, `${dim("daemon activo")} `),
-    new DcJustifiedRow(`     ${bloodSoft("Memoria:")}`, `${bloodWhite(`${engramObs.length} obs`)} ${dim("·")} ${bloodSoft(`${latestId} última`)} `),
-  ];
-  for (const obs of engramObs.slice(0, 2)) {
-    const tShort = obs.title.length > 18 ? obs.title.slice(0, 17) + "…" : obs.title;
-    localObsRows.push(
-      new DcJustifiedRow(`     ${dim("•")} ${bloodWhite(tShort)}`, `${dim(`[${obs.type}]`)} `)
-    );
-  }
-
   const localCollapsible = new DcCollapsible({
     title: `   🖧  ${bloodWhite(bold("Local"))}`,
     collapsedInfo: dim("(127.0.0.1:7437)"),
-    titleRight: bloodSoft(engramObs.length ? `${engramObs.length} obs` : "0 obs"),
+    titleRight: (expanded) => (expanded ? dim("[↗]") : bloodSoft(initialEngramData.count ? `${initialEngramData.count} obs` : "0 obs")),
+    onTitleRightClick: () => {
+      const ctx = getSidebarContext();
+      if (ctx) void openEngramExplorer(ctx, resolveEngramProjectName(undefined, getProjectInfo().cwd));
+    },
     expanded: true,
-    children: localObsRows,
+    children: initialEngramData.rows,
     requestRender: reqRender,
   });
 
@@ -139,7 +186,8 @@ export function createStatusCard(reqRender: () => void): Component {
         isEnrolled ? `${bloodBright("on")} ` : `${bloodBright(bold("[⚡ Enrolar]"))} ${bloodBright("off")} `,
         () => {
           const ctx = getSidebarContext();
-          if (ctx) void openEngramEnrollModal(ctx, projectName);
+          const targetProj = resolveEngramProjectName(undefined, getProjectInfo().cwd);
+          if (ctx) void openEngramEnrollModal(ctx, targetProj);
         }
       ),
       new DcJustifiedRow(
@@ -147,22 +195,42 @@ export function createStatusCard(reqRender: () => void): Component {
         `${bloodBright("[↗ sync]")} `,
         () => {
           const ctx = getSidebarContext();
-          if (ctx) void openEngramEnrollModal(ctx, projectName);
+          const targetProj = resolveEngramProjectName(undefined, getProjectInfo().cwd);
+          if (ctx) void openEngramEnrollModal(ctx, targetProj);
         }
       ),
     ],
     requestRender: reqRender,
   });
 
-  // Cabecera Principal de Engram
+  // Cabecera Principal de Engram Reactiva
+  class LiveEngramCollapsible extends DcCollapsible {
+    render(width: number) {
+      const liveProject = resolveEngramProjectName(undefined, getProjectInfo().cwd);
+      const freshData = createEngramRows(liveProject);
+      const freshEnrolled = isProjectEnrolled(liveProject);
+
+      (localCollapsible as any).childrenStack.children = freshData.rows;
+      localCollapsible.options.titleRight = (expanded) =>
+        expanded ? dim("[↗]") : bloodSoft(freshData.count ? `${freshData.count} obs` : "0 obs");
+
+      const badge = freshEnrolled ? bloodSoft("🌐 ok") : dim("🌐 off");
+      this.options.titleRight = (expanded) => (expanded ? dim("[↗]") : `${badge} ${dim("[↗]")}`);
+      this.options.collapsedInfo = `${bloodWhite(bold(liveProject))} ${bloodBright(`✓ ${freshData.latestId}`)}`;
+
+      return super.render(width);
+    }
+  }
+
   const engramRightBadge = isEnrolled ? bloodSoft("🌐 ok") : dim("🌐 off");
-  const engramCollapsible = new DcCollapsible({
+  const engramCollapsible = new LiveEngramCollapsible({
     title: `🧠 ${bloodBright(bold("Engram:"))}`,
-    collapsedInfo: `${bloodWhite(bold(projectName))} ${bloodBright(`✓ ${latestId}`)}`,
+    collapsedInfo: `${bloodWhite(bold(currentProjectName))} ${bloodBright(`✓ ${initialEngramData.latestId}`)}`,
     titleRight: (expanded) => (expanded ? dim("[↗]") : `${engramRightBadge} ${dim("[↗]")}`),
     onTitleRightClick: () => {
       const ctx = getSidebarContext();
-      if (ctx) void openEngramExplorer(ctx, projectName);
+      const targetProj = resolveEngramProjectName(undefined, getProjectInfo().cwd);
+      if (ctx) void openEngramExplorer(ctx, targetProj);
     },
     expanded: true,
     children: [

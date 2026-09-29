@@ -319,3 +319,46 @@ test("Branch row in Status card has onClick handler that opens Git graph modal",
 
   assert.equal(customCalls, 1, "Clicking Branch row must trigger Git graph modal");
 });
+
+test("Status sidebar Engram section wires click handlers to open Engram explorer", async () => {
+  let customCalls = 0;
+
+  const mockCtx = {
+    hasUI: true,
+    mode: "tui",
+    cwd: process.cwd(),
+    sessionManager: { getCwd: () => process.cwd() },
+    ui: {
+      custom: async () => {
+        customCalls++;
+        return undefined;
+      },
+      notify: () => {},
+    },
+  } as unknown as ExtensionContext;
+
+  (globalThis as any)[Symbol.for("dc.sidebar.ctx")] = mockCtx;
+
+  const card = createStatusCard(() => {});
+  const cardContent = (card as any).options.content;
+  // Index 0: Project, 1: Branch, 2: Changes, 3: Separator, 4: engramCollapsible
+  const engramCollapsible = cardContent.children.find((c: any) => c?.options?.title?.includes("Engram:"));
+  assert.ok(engramCollapsible, "Engram collapsible must exist in Status card");
+
+  // Verificar onTitleRightClick
+  assert.equal(typeof engramCollapsible.options.onTitleRightClick, "function");
+  await engramCollapsible.options.onTitleRightClick();
+  assert.equal(customCalls, 1, "Clicking Engram titleRight must trigger Engram explorer modal");
+
+  // Verificar filas internas de Local
+  const localCollapsible = engramCollapsible.options.children[0];
+  assert.ok(localCollapsible, "Local collapsible must exist under Engram");
+  const localRows = (localCollapsible as any).childrenStack?.children || localCollapsible.options.children;
+
+  const gestorRow = localRows.find((r: any) => typeof r.left === "string" && r.left.includes("Gestor /dc-engram"));
+  assert.ok(gestorRow, "Gestor /dc-engram row must exist in Local Engram section");
+  assert.equal(typeof gestorRow.onClick, "function", "Gestor row must have onClick handler");
+
+  await gestorRow.onClick();
+  assert.equal(customCalls, 2, "Clicking Gestor /dc-engram row must trigger Engram explorer modal");
+});

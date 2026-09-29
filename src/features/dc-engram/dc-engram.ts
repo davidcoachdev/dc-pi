@@ -1,10 +1,8 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import * as path from "node:path";
 import { openDcModal } from "../../ui/dc-modal.ts";
 import { EngramPanel } from "./dc-engram-panel.ts";
 import { EngramEnrollPanel, openProjectDashboard, openUrl } from "./dc-engram-enroll-panel.ts";
-import { getProjectObservations } from "./dc-engram-db.ts";
-import { dcNotifier } from "../../integrations/dc-notify/dc-notifier.ts";
+import { getProjectObservations, resolveEngramProjectName } from "./dc-engram-db.ts";
 
 export { openProjectDashboard, openUrl };
 
@@ -13,21 +11,21 @@ export { openProjectDashboard, openUrl };
  */
 export async function openEngramExplorer(ctx: ExtensionContext, project?: string): Promise<void> {
   const currentDir = ctx.sessionManager?.getCwd?.() || process.cwd();
-  const projectName = project || path.basename(currentDir);
+  const projectName = resolveEngramProjectName(project, currentDir);
   const obs = getProjectObservations(500, projectName);
-
-  if (obs.length === 0) {
-    dcNotifier.notify(ctx, "DC Engram", `No se encontraron registros para el proyecto "${projectName}".`, "warning");
-    return;
-  }
 
   await openDcModal(ctx, {
     title: `Dc Studio - Engram Visualizador [${projectName}]`,
     glyph: "⛩ ",
-    width: 84,
-    maxHeight: 22,
+    width: "88%",
+    maxHeight: () => {
+      const rows = (ctx as any)?.ui?.terminal?.rows ?? process.stdout?.rows ?? 35;
+      return Math.max(16, Math.floor(rows * 0.85));
+    },
+    scrollable: false,
+    showScrollbar: false,
     footer: (theme) => ({
-      left: ` ${theme.fg("accent", "↑↓")} ${theme.fg("muted", "navegar")}  ·  ${theme.fg("accent", "Esc")} ${theme.fg("muted", "cerrar")}`,
+      left: ` ${theme.fg("accent", "↑↓")} ${theme.fg("muted", "seleccionar")}  ·  ${theme.fg("accent", "Ctrl+↑↓ / Rueda")} ${theme.fg("muted", "detalle")}  ·  ${theme.fg("accent", "Esc")} ${theme.fg("muted", "cerrar")}`,
       right: theme.fg("accent", `${obs.length} registros (${projectName})`),
     }),
     content: (_done, theme, tui) => {
@@ -45,7 +43,7 @@ export async function openEngramExplorer(ctx: ExtensionContext, project?: string
  */
 export async function openEngramEnrollModal(ctx: ExtensionContext, project?: string): Promise<void> {
   const currentDir = ctx.sessionManager?.getCwd?.() || process.cwd();
-  const projectName = project || path.basename(currentDir);
+  const projectName = resolveEngramProjectName(project, currentDir);
   let panelRef: EngramEnrollPanel | undefined;
 
   await openDcModal(ctx, {
