@@ -454,13 +454,13 @@ export class DcGitGraphPanel implements Component {
       : "";
     rightLines.push(pad(subjLine, rightW));
 
-    // 2. Changed Files bar (tabs de archivos que cambiaron con texto)
+    // 2. Changed Files bar (tabs de archivos: SOLO el nombre del archivo)
     if (parsedDetail.files.length > 0) {
       const fileBadges = parsedDetail.files
         .slice(0, 4)
         .map((f, idx) => {
           const isAct = idx === this.activeFileIndex;
-          const label = ` 📄 ${f.shortName} ${f.changes ? "(" + f.changes + ")" : ""} `;
+          const label = ` 📄 ${f.shortName} `;
           return isAct
             ? t.bg("selectedBg", t.bold(t.fg("accent", label)))
             : t.fg("dim", label);
@@ -476,7 +476,7 @@ export class DcGitGraphPanel implements Component {
 
     // 3. Diff renderizado dentro de la caja de código estilizada de DC Studio (dc-code)
     const headerLinesCount = rightLines.length;
-    const diffBudget = Math.max(6, rowsCount - headerLinesCount - 2);
+    const diffBudget = Math.max(6, rowsCount - headerLinesCount - 3);
 
     const activeFile = parsedDetail.files[this.activeFileIndex] || parsedDetail.files[0];
     const activeLines = activeFile
@@ -541,9 +541,31 @@ export class DcGitGraphPanel implements Component {
       lines.push(`${pad(leftCell, leftW)} ${t.fg("border", "│")} ${pad(rightCell, rightW)}`);
     }
 
-    return lines.map((l) => truncateToWidth(l, safeW, ""));
+    // Bottom Separator
+    const bottomSep = `${t.fg("border", "─".repeat(leftW))}─┼─${t.fg("border", "─".repeat(rightW))}`;
+    lines.push(bottomSep);
 
-    return lines.map((l) => truncateToWidth(l, safeW, ""));
+    // Left summary: Working tree / clean state (1/3)
+    let leftSummary = "";
+    if (wt && (wt.modifiedCount > 0 || wt.untrackedCount > 0)) {
+      const totalChanges = wt.modifiedCount + wt.untrackedCount;
+      const countNoun = totalChanges === 1 ? "file" : "files";
+      leftSummary = ` ${t.bold(t.fg("accent", `${totalChanges} ${countNoun}`))} · ${t.fg("warning", `@${wt.modifiedCount}m`)} · ${t.fg("accent", `?${wt.untrackedCount}u`)}`;
+    } else {
+      leftSummary = ` ${t.fg("success", "✔ clean")} · ${t.fg("dim", `HEAD: ${this.data.headCommitHash?.slice(0, 7) || "clean"}`)}`;
+    }
+
+    // Right summary: [📄 archivo: líneas start-end + ins - del] con colores del footer
+    let rightSummary = "";
+    if (activeFile && activeLines.length > 0) {
+      const start = this.detailScrollOffset + 1;
+      const end = Math.min(this.detailScrollOffset + Math.max(1, diffBudget), activeLines.length);
+      rightSummary = ` ${t.fg("accent", "📄")} ${t.bold(t.fg("text", activeFile.shortName + ":"))} ${t.fg("dim", `líneas ${start}-${end}`)} ${t.bold(t.fg("success", `+ ${activeFile.additions}`))} ${t.bold(t.fg("error", `- ${activeFile.deletions}`))}`;
+    } else {
+      rightSummary = ` 📄 ${t.fg("dim", "Sin diff para mostrar")}`;
+    }
+
+    lines.push(`${pad(leftSummary, leftW)} ${t.fg("border", "│")} ${pad(rightSummary, rightW)}`);
 
     return lines.map((l) => truncateToWidth(l, safeW, ""));
   }

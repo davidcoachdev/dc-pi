@@ -9,6 +9,8 @@ export interface CommitFileDiff {
   file: string;
   shortName: string;
   changes: string;
+  additions: number;
+  deletions: number;
   lines: string[];
 }
 
@@ -138,14 +140,29 @@ export function parseRawCommitDetail(rawLines: string[]): ParsedCommitDetail {
     }
   }
 
+  // Helper to compute additions and deletions count
+  const finalizeFileDiff = (f: { file: string; shortName: string; changes: string; lines: string[] }): CommitFileDiff => {
+    let additions = 0;
+    let deletions = 0;
+    for (const l of f.lines) {
+      if (l.startsWith("+") && !l.startsWith("+++")) additions++;
+      else if (l.startsWith("-") && !l.startsWith("---")) deletions++;
+    }
+    return {
+      ...f,
+      additions,
+      deletions,
+    };
+  };
+
   // Group diffLines by file
   const files: CommitFileDiff[] = [];
-  let currentFileDiff: CommitFileDiff | null = null;
+  let currentFileDiff: { file: string; shortName: string; changes: string; lines: string[] } | null = null;
 
   for (const line of diffLines) {
     if (line.startsWith("diff --git ")) {
       if (currentFileDiff) {
-        files.push(currentFileDiff);
+        files.push(finalizeFileDiff(currentFileDiff));
       }
       const parts = line.split(" ");
       const rawFile = parts[3]?.replace(/^b\//, "") || parts[2]?.replace(/^a\//, "") || "file";
@@ -166,18 +183,18 @@ export function parseRawCommitDetail(rawLines: string[]): ParsedCommitDetail {
   }
 
   if (currentFileDiff) {
-    files.push(currentFileDiff);
+    files.push(finalizeFileDiff(currentFileDiff));
   }
 
   // If there are changedFiles from stats without explicit diff hunk (e.g. binary or renamed)
   if (files.length === 0 && changedFiles.length > 0) {
     for (const cf of changedFiles) {
-      files.push({
+      files.push(finalizeFileDiff({
         file: cf.file,
         shortName: cf.file.split("/").pop() || cf.file,
         changes: cf.changes,
         lines: [`diff --git a/${cf.file} b/${cf.file}`, `(archivo modificado: ${cf.changes})`],
-      });
+      }));
     }
   }
 
