@@ -18,6 +18,7 @@ import type {
 import { parseGitGraph } from "../core/dc-git-graph-parser.ts";
 import { parseRawCommitDetail, formatDiffLine, renderDcCodeBox, wrapMessageText, computeSlidingFileTabs, formatStyledCommitSubject } from "../core/dc-git-diff-formatter.ts";
 import { DcSearchInput } from "../../../ui/dc-search-input.ts";
+import { justifyRow } from "../../../ui/dc-row.ts";
 import {
   getGitCommitDetail,
   getGitCommitGraph,
@@ -534,9 +535,11 @@ export class DcGitGraphPanel implements Component {
     }
     const headerLeft = ` 🗂️  ${branchBadge}`;
 
-    // Header right: Search input (or title + search input) in upper right (2/3)
-    const searchRender = this.searchInput.render(rightW - 2);
-    const headerRight = ` ${searchRender}`;
+    // Header right: Title on left ("📝 Commit detail & diff"), Search input on right (pegado a la derecha)
+    const titleText = ` 📝 ${t.bold(t.fg("accent", "Commit detail & diff"))}`;
+    const searchWidth = Math.min(36, Math.max(16, rightW - visibleWidth(" 📝 Commit detail & diff") - 3));
+    const searchRender = this.searchInput.render(searchWidth);
+    const headerRight = justifyRow(titleText, searchRender + " ", rightW);
 
     const lines: string[] = [];
     lines.push(`${pad(headerLeft, leftW)} ${t.fg("border", "│")} ${pad(headerRight, rightW)}`);
