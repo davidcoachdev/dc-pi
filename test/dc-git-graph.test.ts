@@ -11,6 +11,11 @@ import {
   type GitGraphData,
 } from "../src/features/dc-git-graph/index.ts";
 import {
+  getCommitTypeInfo,
+  formatStyledCommitSubject,
+  COMMIT_TYPE_COLORS,
+} from "../src/features/dc-git-graph/core/dc-git-diff-formatter.ts";
+import {
   getGitCommitDetail,
   getGitCommitGraph,
   getGitHeadHash,
@@ -645,4 +650,37 @@ test("DcGitGraphPanel scrolls file tabs horizontally in a sliding window to keep
   lines = panel.render(100);
   assert.ok(lines.some((l) => l.includes("file8.ts")));
   assert.ok(lines.some((l) => l.includes("◀")));
+});
+
+test("getCommitTypeInfo and formatStyledCommitSubject assign semantic colors to commit types", () => {
+  // feat
+  const featInfo = getCommitTypeInfo("feat(ui): add new button");
+  assert.equal(featInfo.type, "feat");
+  assert.equal(featInfo.scope, "ui");
+  assert.equal(featInfo.colorAnsi, COMMIT_TYPE_COLORS.feat);
+
+  // fix
+  const fixInfo = getCommitTypeInfo("fix(api): handle timeout");
+  assert.equal(fixInfo.type, "fix");
+  assert.equal(fixInfo.colorAnsi, COMMIT_TYPE_COLORS.fix);
+
+  // merge
+  const mergeInfo = getCommitTypeInfo("Merge pull request #10 from dev");
+  assert.equal(mergeInfo.type, "merge");
+  assert.equal(mergeInfo.colorAnsi, COMMIT_TYPE_COLORS.merge);
+
+  // style
+  const styleInfo = getCommitTypeInfo("style: format code borders");
+  assert.equal(styleInfo.type, "style");
+  assert.equal(styleInfo.colorAnsi, COMMIT_TYPE_COLORS.style);
+
+  // formatted string checks
+  const styledFeat = formatStyledCommitSubject("feat(ui): add new button", false);
+  assert.ok(styledFeat.includes(COMMIT_TYPE_COLORS.feat));
+  assert.ok(styledFeat.includes("feat"));
+  assert.ok(styledFeat.includes("(ui)"));
+
+  const styledMerge = formatStyledCommitSubject("Merge pull request #10", false);
+  assert.ok(styledMerge.includes(COMMIT_TYPE_COLORS.merge));
+  assert.ok(styledMerge.includes("Merge"));
 });

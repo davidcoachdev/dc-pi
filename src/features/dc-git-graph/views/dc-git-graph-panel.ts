@@ -16,7 +16,7 @@ import type {
   GitGraphRow,
 } from "../core/dc-git-graph-types.ts";
 import { parseGitGraph } from "../core/dc-git-graph-parser.ts";
-import { parseRawCommitDetail, formatDiffLine, renderDcCodeBox, wrapMessageText, computeSlidingFileTabs } from "../core/dc-git-diff-formatter.ts";
+import { parseRawCommitDetail, formatDiffLine, renderDcCodeBox, wrapMessageText, computeSlidingFileTabs, formatStyledCommitSubject } from "../core/dc-git-diff-formatter.ts";
 import {
   getGitCommitDetail,
   getGitCommitGraph,
@@ -28,15 +28,17 @@ import {
 function formatCommitGraphPrefix(
   rawPrefix: string,
   kind: GitGraphCommitKind,
+  colorAnsi: string | undefined,
   t: Pick<Theme, "fg" | "bg" | "bold">,
 ): string {
-  let styledNode = t.fg("text", "●");
+  const nodeColor = colorAnsi || "\x1b[38;2;200;195;200m";
+  let styledNode = `${nodeColor}●\x1b[0m`;
   if (kind === "head") {
-    styledNode = t.bold(t.fg("accent", "●"));
+    styledNode = `\x1b[1m${nodeColor}●\x1b[0m`;
   } else if (kind === "merge") {
-    styledNode = t.bold(t.fg("warning", "M"));
+    styledNode = `\x1b[1m\x1b[38;2;250;150;90mM\x1b[0m`;
   } else if (kind === "remote-tip") {
-    styledNode = t.bold(t.fg("accent", "o"));
+    styledNode = `\x1b[1m${nodeColor}o\x1b[0m`;
   }
 
   if (!rawPrefix) return styledNode + " ";
@@ -463,13 +465,14 @@ export class DcGitGraphPanel implements Component {
       : ` 👤 ${t.fg("dim", "—")}`;
     rightLines.push(pad(metaLine, rightW));
 
-    // Wordwrap commit subject
+    // Wordwrap commit subject with semantic color
     if (parsedDetail.subject) {
       const wrappedSubject = wrapMessageText(parsedDetail.subject, rightW - 6);
       for (let s = 0; s < wrappedSubject.length; s++) {
         const line = wrappedSubject[s]!;
         const prefix = s === 0 ? " 📝 " : "    ";
-        rightLines.push(pad(`${prefix}${t.bold(t.fg("text", line))}`, rightW));
+        const styled = s === 0 ? formatStyledCommitSubject(line, true) : t.bold(t.fg("text", line));
+        rightLines.push(pad(`${prefix}${styled}`, rightW));
       }
     }
 
@@ -569,9 +572,9 @@ export class DcGitGraphPanel implements Component {
           const c = row.commit;
           const isSelected = selCommit?.hash === c.hash;
           const pointer = isSelected ? t.fg("accent", "▶ ") : "  ";
-          const graphSymbol = formatCommitGraphPrefix(c.graphPrefix, c.commitKind, t);
+          const graphSymbol = formatCommitGraphPrefix(c.graphPrefix, c.commitKind, c.typeColorAnsi, t);
           const hashStr = t.fg("dim", `#${c.shortHash}`);
-          const subjStr = isSelected ? t.bold(c.subject) : c.subject;
+          const subjStr = formatStyledCommitSubject(c.subject, isSelected);
 
           leftCell = `${pointer}${graphSymbol}${hashStr} ${subjStr}`;
         }

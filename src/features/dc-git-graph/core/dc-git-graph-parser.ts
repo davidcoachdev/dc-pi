@@ -1,4 +1,5 @@
 import type { GitGraphCommit, GitGraphCommitKind, GitGraphData, GitGraphRow, GitGraphWorkingTreeStatus } from "./dc-git-graph-types.ts";
+import { getCommitTypeInfo } from "./dc-git-diff-formatter.ts";
 
 export const COMMIT_REC_MARKER = "COMMIT_REC:";
 
@@ -68,6 +69,8 @@ export function parseGitGraph(
       commitKind = "remote-tip";
     }
 
+    const typeInfo = getCommitTypeInfo(subject);
+
     const commit: GitGraphCommit = {
       hash,
       shortHash,
@@ -81,6 +84,8 @@ export function parseGitGraph(
       isRemoteTip,
       commitKind,
       graphPrefix,
+      typeTag: typeInfo.type,
+      typeColorAnsi: typeInfo.colorAnsi,
     };
 
     commits.push(commit);
