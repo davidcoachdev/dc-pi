@@ -254,9 +254,11 @@ export function formatDiffLine(
 
 /**
  * Renderiza el bloque de diff dentro de la caja de código estilizada de DC Studio (dc-code):
+ * - Wordwrap inteligente respetando límites de caracteres y palabras.
+ * - Indentación limpia en líneas de continuación sin perder código.
+ * - Sombreado verde (+ adiciones) y rojo (- eliminaciones) continuo.
+ * - Gutter con números de línea solo en la primera línea de cada instrucción.
  * - Borde superior redondeado con nombre del archivo y flecha (cerrado a width exacto).
- * - Gutter numerado para cada línea del diff.
- * - Líneas de adición en verde y eliminación en rojo, truncadas para no empujar el borde derecho.
  * - Borde inferior redondeado con botón de copia (cerrado a width exacto).
  */
 export function renderDcCodeBox(options: {
@@ -284,31 +286,130 @@ export function renderDcCodeBox(options: {
   const bottomDashes = Math.max(0, width - 1 - copyLen - rightDashes - 1);
   const bottomBorder = `\x1b[38;2;140;60;80m╰${"─".repeat(bottomDashes)}\x1b[38;2;200;160;180m${copyBadge}\x1b[0m\x1b[38;2;140;60;80m${"─".repeat(rightDashes)}╯\x1b[0m`;
 
+  const totalRaw = rawLines.length;
+  const gutterDigits = Math.max(1, String(totalRaw).length);
+  const gutterW = gutterDigits + 3; // " 1 │ "
+  const codeW = Math.max(10, innerW - gutterW);
+
+  const addBg = "\x1b[48;2;16;45;21m\x1b[38;2;135;235;145m";
+  const delBg = "\x1b[48;2;55;20;25m\x1b[38;2;255;140;150m";
+  const chunkBg = "\x1b[48;2;30;22;35m\x1b[38;2;215;160;195m";
+  const dim = "\x1b[38;2;120;110;120m";
+  const reset = "\x1b[0m";
+
+  // Pre-wrap rawLines into display lines with wordwrap
+  const displayLines: Array<{ lineNum?: number; text: string }> = [];
+
+  for (let r = 0; r < rawLines.length; r++) {
+    const raw = rawLines[r]!;
+    const isAdd = raw.startsWith("+") && !raw.startsWith("+++");
+    const isDel = raw.startsWith("-") && !raw.startsWith("---");
+    const isChunk = raw.startsWith("@@");
+    const isFileHeader = raw.startsWith("diff --git ");
+    const isSubHeader =
+      raw.startsWith("index ") ||
+      raw.startsWith("--- ") ||
+      raw.startsWith("+++ ");
+
+    if (isFileHeader) {
+      const parts = raw.split(" ");
+      const fileB = parts[3]?.replace(/^b\//, "") || parts[2] || raw;
+      displayLines.push({
+        lineNum: r + 1,
+        text: `\x1b[1m\x1b[38;2;220;170;200m── 📄 ${fileB} ──${reset}`,
+      });
+      continue;
+    }
+
+    if (isSubHeader) {
+      displayLines.push({
+        lineNum: r + 1,
+        text: `${dim}   ${raw}${reset}`,
+      });
+      continue;
+    }
+
+    if (isChunk) {
+      displayLines.push({
+        lineNum: r + 1,
+        text: `${chunkBg} ${raw} ${reset}`,
+      });
+      continue;
+    }
+
+    // Normal diff code lines: wordwrap with indentation
+    const prefix = isAdd ? "+ " : isDel ? "- " : "  ";
+    const payload = isAdd || isDel ? raw.slice(1) : raw;
+    const color = isAdd ? addBg : isDel ? delBg : "\x1b[38;2;190;185;190m";
+
+    const maxContentW = Math.max(10, codeW - 2);
+    let remaining = payload;
+    let isFirst = true;
+
+    while (remaining.length > 0) {
+      if (remaining.length <= maxContentW) {
+        const lineContent = isFirst ? `${prefix}${remaining}` : `    ${remaining}`;
+        displayLines.push({
+          lineNum: isFirst ? r + 1 : undefined,
+          text: `${color}${lineContent}${reset}`,
+        });
+        break;
+      }
+
+      let breakIdx = -1;
+      for (let i = maxContentW; i > Math.floor(maxContentW * 0.4); i--) {
+        const ch = remaining[i];
+        if (ch === " " || ch === "\t" || ch === "," || ch === ";" || ch === "(" || ch === ")") {
+          breakIdx = i + 1;
+          break;
+        }
+      }
+
+      if (breakIdx <= 0) breakIdx = maxContentW;
+      const part = remaining.slice(0, breakIdx);
+      remaining = remaining.slice(breakIdx);
+      if (remaining.startsWith(" ")) remaining = remaining.slice(1);
+
+      const lineContent = isFirst ? `${prefix}${part}` : `    ${part}`;
+      displayLines.push({
+        lineNum: isFirst ? r + 1 : undefined,
+        text: `${color}${lineContent}${reset}`,
+      });
+      isFirst = false;
+    }
+
+    if (payload.length === 0) {
+      displayLines.push({
+        lineNum: r + 1,
+        text: `${color}${prefix}${reset}`,
+      });
+    }
+  }
+
   const result: string[] = [];
   result.push(topBorder);
 
   const bodyBudget = Math.max(1, maxRows - 2);
-  const maxScroll = Math.max(0, rawLines.length - bodyBudget);
+  const maxScroll = Math.max(0, displayLines.length - bodyBudget);
   const clampedOffset = Math.max(0, Math.min(maxScroll, scrollOffset));
-  const visibleLines = rawLines.slice(clampedOffset, clampedOffset + bodyBudget);
-
-  const totalLines = rawLines.length;
-  const gutterDigits = Math.max(1, String(totalLines).length);
+  const visibleLines = displayLines.slice(clampedOffset, clampedOffset + bodyBudget);
 
   const side = `\x1b[38;2;140;60;80m│\x1b[0m`;
 
   for (let i = 0; i < visibleLines.length; i++) {
-    const lineIdx = clampedOffset + i;
-    const raw = visibleLines[i]!;
-    const lineNum = String(lineIdx + 1).padStart(gutterDigits, " ");
-    const gutter = `\x1b[2m\x1b[38;2;100;90;100m${lineNum} │\x1b[22m\x1b[0m `;
-    const gutterW = visibleWidth(gutter);
-    const codeW = Math.max(1, innerW - gutterW);
+    const item = visibleLines[i]!;
+    let gutter = "";
+    if (item.lineNum !== undefined) {
+      gutter = `\x1b[2m\x1b[38;2;100;90;100m${String(item.lineNum).padStart(gutterDigits, " ")} │\x1b[22m\x1b[0m `;
+    } else {
+      gutter = `\x1b[2m\x1b[38;2;80;70;80m${" ".repeat(gutterDigits)} ·\x1b[22m\x1b[0m `;
+    }
 
-    const formatted = formatDiffLine(raw, codeW);
-    const clipped = truncateToWidth(formatted, codeW, "");
+    const gW = visibleWidth(gutter);
+    const availableW = Math.max(1, innerW - gW);
+    const clipped = truncateToWidth(item.text, availableW, "");
     const clippedW = visibleWidth(clipped);
-    const padded = clipped + " ".repeat(Math.max(0, codeW - clippedW));
+    const padded = clipped + " ".repeat(Math.max(0, availableW - clippedW));
 
     result.push(`${side} ${gutter}${padded} ${side}`);
   }
