@@ -155,21 +155,59 @@ export function installToolBoxPatch(): boolean {
     const topRow = `${leftPad}${bgAnsi}${topBorder.replace(/\x1b\[0m/g, `\x1b[0m${bgAnsi}`)}\x1b[49m${rightPad}`;
     const bottomRow = `${leftPad}${bgAnsi}${bottomBorder.replace(/\x1b\[0m/g, `\x1b[0m${bgAnsi}`)}\x1b[49m${rightPad}`;
 
-    const hasBoxPadding =
-      filteredRawLines.length >= 4 &&
-      filteredRawLines[0] === "" &&
-      filteredRawLines[1].replace(/\x1b\[[0-9;]*m/g, "").trim() === "" &&
-      filteredRawLines[filteredRawLines.length - 1].replace(/\x1b\[[0-9;]*m/g, "").trim() === "";
+    // Normalizar líneas y desanidar cajas de quiet-tools / extensiones previas si las hay
+    let linesToProcess = filteredRawLines.map((l) => l ?? "");
+    let trimStart = 0;
+    while (trimStart < linesToProcess.length && linesToProcess[trimStart]!.replace(/\x1b\[[0-9;]*m/g, "").trim() === "") {
+      trimStart++;
+    }
+    let trimEnd = linesToProcess.length;
+    while (trimEnd > trimStart && linesToProcess[trimEnd - 1]!.replace(/\x1b\[[0-9;]*m/g, "").trim() === "") {
+      trimEnd--;
+    }
+    linesToProcess = linesToProcess.slice(trimStart, trimEnd);
 
-    const startIdx = hasBoxPadding ? 2 : (filteredRawLines[0] === "" ? 1 : 0);
-    const endIdx = hasBoxPadding ? filteredRawLines.length - 1 : filteredRawLines.length;
+    const firstPlain = linesToProcess[0]?.replace(/\x1b\[[0-9;]*m/g, "").trim() ?? "";
+    const lastPlain = linesToProcess[linesToProcess.length - 1]?.replace(/\x1b\[[0-9;]*m/g, "").trim() ?? "";
+    const isEnclosedCard =
+      (firstPlain.startsWith("╭") || firstPlain.startsWith("┌")) &&
+      (lastPlain.endsWith("╯") || lastPlain.endsWith("┘"));
+
+    if (isEnclosedCard) {
+      const unwrapped: string[] = [];
+      for (let i = 0; i < linesToProcess.length; i++) {
+        const l = linesToProcess[i]!;
+        const p = l.replace(/\x1b\[[0-9;]*m/g, "").trim();
+        if (i === 0 && (p.startsWith("╭") || p.startsWith("┌"))) {
+          const match = p.match(/^[╭┌]─*\s*(?:[✿❀⛩]|[^─]+?)?\s*(.*?)\s*─*[╮┐]$/);
+          const titleContent = match ? match[1]?.trim() : "";
+          if (titleContent) {
+            unwrapped.push(titleContent);
+          }
+          continue;
+        }
+        if (i === linesToProcess.length - 1 && (p.endsWith("╯") || p.endsWith("┘"))) {
+          // Omitir el borde inferior anidado para evitar la doble línea
+          continue;
+        }
+        let cleaned = l.replace(/\x1b\[[0-9;]*m/g, "");
+        cleaned = cleaned.replace(/^\s*[│|]\s?/, "").replace(/\s?[│|]\s*$/, "");
+        if (cleaned.trim() !== "" || i < linesToProcess.length - 2) {
+          unwrapped.push(cleaned);
+        }
+      }
+      while (unwrapped.length > 0 && unwrapped[unwrapped.length - 1]!.trim() === "") {
+        unwrapped.pop();
+      }
+      linesToProcess = unwrapped;
+    }
 
     const bodyLines: string[] = [];
     const plainBodyLines: string[] = [];
     const targetW = cardW - 4;
 
-    for (let i = startIdx; i < endIdx; i++) {
-      const line = filteredRawLines[i];
+    for (let i = 0; i < linesToProcess.length; i++) {
+      const line = linesToProcess[i];
       if (line === undefined) continue;
       if (line.includes("\x1b_G") || line.includes("\x1b]1337;")) {
         bodyLines.push(line);
