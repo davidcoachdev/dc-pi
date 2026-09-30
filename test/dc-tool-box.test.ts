@@ -66,6 +66,34 @@ test("installToolBoxPatch wraps ToolExecutionComponent.prototype.render", () => 
   assert.ok(lines.some((l: string) => l.includes("╰") && l.includes("📋")));
 });
 
+test("installToolBoxPatch strips nested quiet-tools card frames avoiding double lines", () => {
+  const installed = installToolBoxPatch();
+  assert.equal(installed, true);
+
+  const mockInstance: any = Object.create(ToolExecutionComponent.prototype);
+  mockInstance.toolName = "bash";
+  mockInstance.expanded = false;
+  mockInstance.result = { isError: false };
+  mockInstance.children = [];
+  mockInstance[Symbol.for("dc.tool-execution.orig-render")] = () => [
+    "",
+    "╭─ ✿ $ git branch --show-current ──────────────────────────────────────────╮",
+    "│ master                                                                   │",
+    "│                                                                          │",
+    "╰──────────────────────────────────────────────────────────────────────────╯",
+  ];
+
+  const lines = mockInstance.render(70);
+  assert.ok(lines.length >= 3);
+  // Contains outer DC top border and outer DC bottom border
+  assert.ok(lines.some((l: string) => l.includes("╭─") && l.includes("bash")));
+  assert.ok(lines.some((l: string) => l.includes("╰") && l.includes("📋")));
+
+  // Must NOT contain the nested bottom border (the inner ╰───────╯ from quiet-tools)
+  const bottomBorderCount = lines.filter((l: string) => l.includes("╰") || l.includes("└")).length;
+  assert.equal(bottomBorderCount, 1, "Expected exactly 1 bottom border, but found multiple");
+});
+
 test("dcToolBoxExtension registers only single command /dc-tool-box", async () => {
   const commands = new Map<string, { description?: string; handler: Function }>();
 
