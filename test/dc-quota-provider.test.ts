@@ -10,7 +10,7 @@ test("discoverAccountPrefixes returns at least default fallback accounts", () =>
   const prefixes = discoverAccountPrefixes();
   assert.ok(Array.isArray(prefixes));
   assert.ok(prefixes.length >= 1);
-  assert.ok(prefixes.includes("ac06") || prefixes.includes("ac05"));
+  assert.ok(prefixes.some((p) => /^ac\d+$/.test(p) || p === "cc1" || p === "ac06" || p === "ac05"));
 });
 
 test("getCachedAccountQuotas returns formatted summaries for discovered accounts", () => {

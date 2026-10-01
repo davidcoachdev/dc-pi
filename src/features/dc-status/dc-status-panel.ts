@@ -46,7 +46,7 @@ export class DcStatusPanel implements Component {
       fullWidthBorder: true,
       paddingX: 2,
       tabs: [
-        { id: "info", label: "[1] Entorno" },
+        { id: "info", label: "[1] Información" },
         {
           id: "alerts",
           label: "[2] Alertas",
@@ -130,6 +130,9 @@ export class DcStatusPanel implements Component {
       addRow("Herramientas (Tools):", t.fg("text", `${this.status.customToolsCount} registradas`));
       addRow("Skills / Agentes:", t.fg("text", `${this.status.skillsCount} skills · ${this.status.sddPhasesCount} fases SDD`));
       addRow("Versión de Pi:", t.fg("accent", `v${this.status.version}`));
+      if (this.status.gentlePiVersion) {
+        addRow("Versión gentle-pi:", t.fg("accent", `v${this.status.gentlePiVersion}`));
+      }
 
       lines.push("");
       lines.push(t.fg("border", "─".repeat(safeW)));

@@ -13,7 +13,7 @@ export async function openStatusViewer(ctx: ExtensionContext, pi: ExtensionAPI):
   let panelRef: DcStatusPanel | undefined;
 
   await openDcModal<void>(ctx, {
-    title: "Dc Studio - Estado",
+    title: "Dc Studio - Información",
     glyph: "⛩ ",
     frame: "double",
     width: "55%",
@@ -35,7 +35,7 @@ export async function openStatusViewer(ctx: ExtensionContext, pi: ExtensionAPI):
         status,
         onCopyAlerts: async () => {
           if (status.alerts.length === 0) {
-            dcNotifier.notify(ctx, "Estado", "No hay alertas que copiar", "info");
+            dcNotifier.notify(ctx, "Información", "No hay alertas que copiar", "info");
             return;
           }
           const text = status.alerts.map((a) => `- ${a}`).join("\n");
@@ -45,7 +45,7 @@ export async function openStatusViewer(ctx: ExtensionContext, pi: ExtensionAPI):
           } catch {
             /* ignore */
           }
-          dcNotifier.notify(ctx, "Estado", "Alertas copiadas al portapapeles y al editor", "info");
+          dcNotifier.notify(ctx, "Información", "Alertas copiadas al portapapeles y al editor", "info");
           done();
         },
         requestRender: () => tui.requestRender(),
@@ -60,14 +60,14 @@ export async function openStatusViewer(ctx: ExtensionContext, pi: ExtensionAPI):
 export default function dcStatusExtension(pi: ExtensionAPI): void {
   async function showStatus(ctx: ExtensionContext): Promise<void> {
     if (!ctx.hasUI) {
-      dcNotifier.notify(ctx, "DC Estado", "dc-status necesita TUI (no hay UI en este modo).", "error");
+      dcNotifier.notify(ctx, "DC Información", "dc-status necesita TUI (no hay UI en este modo).", "error");
       return;
     }
     await openStatusViewer(ctx, pi);
   }
 
   pi.registerCommand("dc-status", {
-    description: "Auditor y estado del entorno (Git, modelo, herramientas, alertas)",
+    description: "Auditor e información del entorno (Git, modelo, herramientas, alertas)",
     handler: async (_args, ctx) => {
       await showStatus(ctx);
     },
@@ -75,7 +75,7 @@ export default function dcStatusExtension(pi: ExtensionAPI): void {
 
   try {
     pi.registerShortcut("alt+e" as never, {
-      description: "Estado del entorno (DC Studio)",
+      description: "Información del entorno (DC Studio)",
       handler: async (ctx) => {
         await showStatus(ctx);
       },
