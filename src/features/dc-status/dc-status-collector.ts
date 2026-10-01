@@ -1,4 +1,7 @@
 import { execFile } from "node:child_process";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import { VERSION } from "@earendil-works/pi-coding-agent";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
@@ -17,6 +20,30 @@ export interface EnvStatus {
   sddPhasesCount: number;
   alerts: string[];
   version: string;
+  gentlePiVersion?: string;
+}
+
+export function getGentlePiVersion(): string | undefined {
+  const candidatePaths = [
+    path.join(os.homedir(), ".pi", "agent", "git", "github.com", "Gentleman-Programming", "gentle-pi", "package.json"),
+    path.join(os.homedir(), ".pi", "agent", "npm", "node_modules", "gentle-pi", "package.json"),
+  ];
+
+  for (const pkgPath of candidatePaths) {
+    try {
+      if (fs.existsSync(pkgPath)) {
+        const raw = fs.readFileSync(pkgPath, "utf8");
+        const parsed = JSON.parse(raw);
+        if (parsed && typeof parsed.version === "string") {
+          return parsed.version;
+        }
+      }
+    } catch {
+      /* ignore */
+    }
+  }
+
+  return undefined;
 }
 
 export function parseGitBranchOutput(stdout: string): { branch: string; status: string } {
@@ -123,5 +150,6 @@ export async function collectEnvStatus(
     sddPhasesCount,
     alerts,
     version: VERSION ?? "0.85.1",
+    gentlePiVersion: getGentlePiVersion(),
   };
 }

@@ -35,6 +35,7 @@ test("DcStatusPanel renders environment info and toggles alerts tab", () => {
     sddPhasesCount: 4,
     alerts: ["Alerta de prueba 1", "Alerta de prueba 2"],
     version: "0.85.1",
+    gentlePiVersion: "3.7.0",
   };
 
   let copied = false;
@@ -49,6 +50,9 @@ test("DcStatusPanel renders environment info and toggles alerts tab", () => {
   assert.ok(lines1.some((l) => l.includes("Directorio (CWD)")));
   assert.ok(lines1.some((l) => l.includes("main")));
   assert.ok(lines1.some((l) => l.includes("gemini-3-flash")));
+  assert.ok(lines1.some((l) => l.includes("Versión gentle-pi")));
+  assert.ok(lines1.some((l) => l.includes("v3.7.0")));
+  assert.ok(lines1.some((l) => l.includes("[1] Información")));
 
   // Switch to alerts tab with '2'
   assert.equal(panel.getCurrentTab(), "info");
