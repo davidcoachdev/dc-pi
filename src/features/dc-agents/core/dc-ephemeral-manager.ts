@@ -371,7 +371,7 @@ export function isolateSpecializedToolsForOrchestrator(pi: any): { removedCount:
       return { removedCount: 0, activeCount: 0 };
     }
 
-    // Recolectar todas las tools especializadas de DC Studio (prefijo dc_ excepto dc_ephemeral_agent_run)
+    // Recolectar todas las tools especializadas de DC Studio y bricks para subagentes
     const specializedTools = new Set<string>();
     for (const tools of Object.values(DC_TOOL_PRESETS)) {
       for (const t of tools) {
@@ -380,6 +380,16 @@ export function isolateSpecializedToolsForOrchestrator(pi: any): { removedCount:
         }
       }
     }
+    for (const tools of Object.values(DC_TOOL_BRICKS)) {
+      for (const t of tools) {
+        if (t.startsWith("dc_") && t !== "dc_ephemeral_agent_run") {
+          specializedTools.add(t);
+        }
+      }
+    }
+
+    // Aislar explícitamente herramientas redundantes o pesadas (ej: codegraph genérico de Gentle AI)
+    specializedTools.add("codegraph");
 
     // Filtrar fuera del orquestador principal las herramientas especializadas
     const parentTools = currentActive.filter((t) => !specializedTools.has(t));

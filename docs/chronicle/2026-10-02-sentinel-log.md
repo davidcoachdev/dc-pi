@@ -315,3 +315,13 @@ To report this crash: run `pi -r` to resume the session, then run /bug. The cras
   - [bash Error]: ""
   - [bash Error]: ""
   - [bash Error]: ""
+### Turno: turn-8-1790979499024 (2026-10-02T22:18:19.024Z)
+- **Prompt Usuario:** "si"
+- **Herramientas Ejecutadas:** `bash`, `bash`, `bash`, `bash`, `bash`, `bash`, `mem_save`, `bash`, `bash`, `bash`
+### Turno: turn-1-1790979882273 (2026-10-02T22:24:42.273Z)
+- **Prompt Usuario:** "oye revisa ete tools tienes disponibles"
+- **Pre-Flight Recall Activo:** `Decision: Maintain atomic tools and reject forced action facade`, `Delete rejected status migration branch`, `Fix double line in tool execution boxes due to quiet-tools nesting`
+### Turno: turn-2-1790980168069 (2026-10-02T22:29:28.069Z)
+- **Prompt Usuario:** "ok si etsa disponidles todoas las cosa vi qye hay codegraph y dc-codegraph y hay dc_context7 y esto si estan disponibles para lo subagentes y si ya tenemos el dc-codegraph para que segimos con el codegraph revisemos eso"
+- **Pre-Flight Recall Activo:** `Pestaña Changelog y Notificación de Update en Ventana de Información`, `Restricción estricta de subagentes a modelos Gemini`
+- **Herramientas Ejecutadas:** `grep`, `grep`, `read`, `read`, `ls`, `ls`, `read`, `ls`, `ls`, `read`, `read`, `grep`, `read`, `read`, `grep`, `read`
