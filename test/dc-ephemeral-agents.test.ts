@@ -48,7 +48,12 @@ import {
 
 import { DcTaxisPanel } from "../src/features/dc-agents/views/dc-taxis-panel.ts";
 import { registerDcEphemeralTools } from "../src/features/dc-agents/tools/dc-ephemeral-tools.ts";
-import { DC_TOOL_PRESETS } from "../src/features/dc-agents/core/dc-ephemeral-types.ts";
+import {
+  DC_TOOL_PRESETS,
+  DC_TOOL_BRICKS,
+  DC_BEHAVIOR_BRICKS,
+  DC_AGENT_ARCHETYPES,
+} from "../src/features/dc-agents/core/dc-ephemeral-types.ts";
 
 function createTempDir(prefix: string): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), `dc-test-${prefix}-`));
@@ -790,4 +795,42 @@ test("dc-taxis-panel: Enter or Space on taxi unit opens live telemetry detail, E
   // El render debe volver a la lista general de la flota
   const listLines = panel.render(80);
   assert.ok(listLines.some((l) => l.includes("Flota de Taxis")));
+});
+
+test("dc-ephemeral-types: Tool Bricks, Behavior Bricks, and Canonical Archetypes Catalog contracts", () => {
+  // 1. Tool Bricks
+  assert.ok(Array.isArray(DC_TOOL_BRICKS["fs-read"]));
+  assert.ok(DC_TOOL_BRICKS["fs-read"].includes("read"));
+  assert.ok(DC_TOOL_BRICKS["fs-read"].includes("grep"));
+  assert.ok(DC_TOOL_BRICKS["fs-read"].includes("find"));
+
+  assert.ok(DC_TOOL_BRICKS["fs-write"].includes("edit"));
+  assert.ok(DC_TOOL_BRICKS["fs-write"].includes("write"));
+  assert.ok(DC_TOOL_BRICKS["terminal"].includes("bash"));
+  assert.ok(DC_TOOL_BRICKS["code-intel"].includes("dc_codegraph_status"));
+
+  // 2. Behavior Bricks
+  assert.ok(DC_BEHAVIOR_BRICKS["strict-tdd"].includes("RED"));
+  assert.ok(DC_BEHAVIOR_BRICKS["strict-tdd"].includes("GREEN"));
+  assert.ok(DC_BEHAVIOR_BRICKS["read-only-analyst"].includes("solo lectura"));
+  assert.ok(DC_BEHAVIOR_BRICKS["artifact-contract"].includes("Contrato de Artefacto"));
+  assert.ok(DC_BEHAVIOR_BRICKS["non-empty-response"].includes("texto visible"));
+
+  // 3. Catálogo de Arquetipos Canónicos
+  const archetypes = ["odd-scout", "odd-worker", "odd-verifier", "dc-researcher", "dc-media", "dc-browser-inspector", "dc-service-ops", "dc-smoke"] as const;
+  for (const name of archetypes) {
+    const arch = DC_AGENT_ARCHETYPES[name];
+    assert.ok(arch, `Archetype ${name} must exist`);
+    assert.equal(arch.name, name);
+    assert.ok(arch.toolBricks.length > 0, `${name} must have toolBricks`);
+    assert.ok(arch.behaviorBricks.length > 0, `${name} must have behaviorBricks`);
+    assert.ok(arch.recommendedModel?.includes("gemini"), `${name} must recommend Gemini model`);
+  }
+
+  // 4. Presets retrocompatibles worker y verifier
+  assert.ok(DC_TOOL_PRESETS.worker.includes("edit"));
+  assert.ok(DC_TOOL_PRESETS.worker.includes("bash"));
+  assert.ok(DC_TOOL_PRESETS.verifier.includes("read"));
+  assert.ok(DC_TOOL_PRESETS.verifier.includes("bash"));
+  assert.ok(!DC_TOOL_PRESETS.verifier.includes("edit")); // verifier no puede escribir
 });
