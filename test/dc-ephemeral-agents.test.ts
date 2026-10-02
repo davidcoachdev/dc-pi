@@ -42,6 +42,7 @@ import {
   prepareEphemeralAgent,
   cleanupEphemeralAgent,
   dcCleanOrphanedEphemeralAgents,
+  isolateSpecializedToolsForOrchestrator,
 } from "../src/features/dc-agents/core/dc-ephemeral-manager.ts";
 
 import { DcTaxisPanel } from "../src/features/dc-agents/views/dc-taxis-panel.ts";
@@ -493,6 +494,79 @@ test("dc-ephemeral-tools: registerDcEphemeralTools registers tool in ExtensionAP
   assert.ok(registered[0].parameters.properties.task);
   assert.ok(registered[0].parameters.properties.toolPreset);
   assert.ok(registered[0].parameters.properties.effort);
+});
+
+test("dc-ephemeral-tools: dc_ephemeral_agent_run executes subagent atomically and cleans up in finally", async () => {
+  const registered: any[] = [];
+  const fakePi = {
+    registerTool(toolDef: any) {
+      registered.push(toolDef);
+    },
+  } as any;
+
+  registerDcEphemeralTools(fakePi);
+  const tool = registered[0];
+
+  let executeToolCalled = false;
+  let executedAgentName = "";
+  const fakeCtx = {
+    sessionManager: { getSessionId: () => "sess-atomic-test" },
+    model: { provider: "cpam", id: "ac05/gemini-3.8-flash-high" },
+    executeTool: async (name: string, args: any) => {
+      executeToolCalled = true;
+      executedAgentName = args.agent;
+      assert.equal(name, "subagent_run");
+      assert.equal(args.task, "Auditoría de prueba");
+      return { content: [{ type: "text", text: "Auditoría completada sin fallos." }] };
+    },
+  } as any;
+
+  const result = await tool.execute(
+    "call-1",
+    { task: "Auditoría de prueba", toolPreset: "youtube", role: "auditor" },
+    undefined,
+    undefined,
+    fakeCtx,
+  );
+
+  assert.equal(executeToolCalled, true);
+  assert.ok(executedAgentName.startsWith("dc-ephem-"));
+  assert.equal(result.content[0].text, "Auditoría completada sin fallos.");
+
+  // Comprobar que el archivo temporal .md ya fue eliminado en el bloque finally
+  const agentPath = path.join(os.homedir(), ".pi", "agent", "agents", `${executedAgentName}.md`);
+  assert.equal(fs.existsSync(agentPath), false);
+});
+
+test("dc-ephemeral-manager: isolateSpecializedToolsForOrchestrator removes heavy tools from active set while keeping dc_ephemeral_agent_run", () => {
+  let appliedActiveTools: string[] = [];
+  const fakePi = {
+    getActiveTools: () => [
+      "read",
+      "bash",
+      "edit",
+      "write",
+      "todo",
+      "dc_youtube_search",
+      "dc_youtube_video_get",
+      "dc_browser_status",
+      "dc_api_rest",
+      "dc_services_list",
+    ],
+    setActiveTools: (tools: string[]) => {
+      appliedActiveTools = tools;
+    },
+  };
+
+  const report = isolateSpecializedToolsForOrchestrator(fakePi);
+
+  assert.equal(report.removedCount > 0, true);
+  assert.equal(appliedActiveTools.includes("read"), true);
+  assert.equal(appliedActiveTools.includes("bash"), true);
+  assert.equal(appliedActiveTools.includes("dc_ephemeral_agent_run"), true);
+  assert.equal(appliedActiveTools.includes("dc_youtube_search"), false);
+  assert.equal(appliedActiveTools.includes("dc_browser_status"), false);
+  assert.equal(appliedActiveTools.includes("dc_api_rest"), false);
 });
 
 test("dc-taxis-panel: renders all 3 tabs cleanly without crashing", () => {

@@ -13,6 +13,7 @@ import {
 } from "../core/dc-ephemeral-manager.ts";
 import type { DcEphemeralToolPreset, DcReasoningEffort } from "../core/dc-ephemeral-types.ts";
 import { appendTaxiLog } from "../core/dc-taxi-logger.ts";
+import { heartbeatTaxi } from "../core/dc-taxi-dispatcher.ts";
 
 export function registerDcEphemeralTools(pi: ExtensionAPI): void {
   pi.registerTool({
@@ -108,43 +109,82 @@ export function registerDcEphemeralTools(pi: ExtensionAPI): void {
           mode: plan.mode,
         });
 
-        // 2. Respuesta estructurada para el orquestador
-        return {
-          content: [
-            {
-              type: "text",
-              text: [
-                `🚕 **Subagente Efímero Despachado:** \`${plan.agentName}\``,
-                `- **Unidad Taxi Arrendada:** \`${plan.leasedAccount}\` (Estado: OCUPADO)`,
-                `- **Modelo Activo:** \`${plan.fullModelRef}\``,
-                `- **Esfuerzo Adaptativo:** \`${plan.effectiveEffort}\``,
-                `- **Toolset Aislado:** ${plan.tools.map((t) => `\`${t}\``).join(", ")}`,
-                `- **Modo:** \`${plan.mode}\``,
-                "",
-                `*La definición transitoria está activa en \`${plan.agentFilePath}\`. Al finalizar el viaje, el Taxi volverá automáticamente a LIBRE y el archivo será eliminado.*`,
-              ].join("\n"),
-            },
-          ],
-          details: {
-            agentName: plan.agentName,
-            leasedAccount: plan.leasedAccount,
-            model: plan.fullModelRef,
-            effort: plan.effectiveEffort,
-            tools: plan.tools,
-            mode: plan.mode,
-          },
-        };
-      } catch (err: any) {
-        if (plan) {
+        // 2. Ejecutar atómicamente el subagente vía ctx.executeTool si está disponible
+        let subagentResult: any;
+        let heartbeatTimer: NodeJS.Timeout | undefined;
+        let taskStatus: "completed" | "failed" | "cancelled" | "timeout" = "completed";
+        let executionError: string | undefined;
+
+        try {
+          // Activar pulso de vida (heartbeat) cada 45 segundos para que la tarea nunca sea reapeada por TTL
+          heartbeatTimer = setInterval(() => {
+            if (plan) heartbeatTaxi(plan.leasedAccount);
+          }, 45000);
+          heartbeatTimer.unref?.();
+
+          if (typeof (ctx as any)?.executeTool === "function") {
+            subagentResult = await (ctx as any).executeTool(
+              "subagent_run",
+              {
+                agent: plan.agentName,
+                task: params.task,
+                mode: plan.mode,
+                label: params.role || params.task.slice(0, 30),
+              },
+              { signal: _signal, onUpdate: _onUpdate },
+            );
+
+            if (subagentResult?.isError) {
+              taskStatus = "failed";
+              executionError = subagentResult?.content?.[0]?.text || "Error en ejecución de subagente";
+            }
+          } else {
+            // Fallback si el host no expone executeTool
+            subagentResult = {
+              content: [
+                {
+                  type: "text",
+                  text: [
+                    `🚕 **Subagente Efímero Preparado:** \`${plan.agentName}\``,
+                    `- **Unidad Taxi Arrendada:** \`${plan.leasedAccount}\` (Estado: OCUPADO)`,
+                    `- **Modelo Activo:** \`${plan.fullModelRef}\``,
+                    `- **Esfuerzo Adaptativo:** \`${plan.effectiveEffort}\``,
+                    `- **Toolset Aislado:** ${plan.tools.map((t) => `\`${t}\``).join(", ")}`,
+                    `- **Modo:** \`${plan.mode}\``,
+                    "",
+                    `*La definición transitoria está activa en \`${plan.agentFilePath}\`. Ejecútalo con subagent_run.*`,
+                  ].join("\n"),
+                },
+              ],
+              details: {
+                agentName: plan.agentName,
+                leasedAccount: plan.leasedAccount,
+                model: plan.fullModelRef,
+                effort: plan.effectiveEffort,
+                tools: plan.tools,
+                mode: plan.mode,
+              },
+            };
+          }
+        } catch (execErr: any) {
+          taskStatus = "failed";
+          executionError = execErr?.message || String(execErr);
+          throw execErr;
+        } finally {
+          if (heartbeatTimer) clearInterval(heartbeatTimer);
+
+          // Limpieza garantizada: libera el taxi, borra el markdown y anota el viaje en el histórico
           cleanupEphemeralAgent(plan, {
             sessionId,
             startedAt,
             endedAt: Date.now(),
-            status: "failed",
-            error: err.message,
+            status: taskStatus,
+            error: executionError,
           });
         }
 
+        return subagentResult;
+      } catch (err: any) {
         appendTaxiLog("ERROR", "EPHEMERAL_AGENT_DISPATCH_FAILED", {
           error: err.message,
           sessionId,

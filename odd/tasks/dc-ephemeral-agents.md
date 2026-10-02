@@ -9,3 +9,5 @@
 - [x] Task 7: Pruebas unitarias de leasing, zombis, histórico, effort y validación de suite (`test/dc-ephemeral-agents.test.ts` y `npm test`)
 - [x] Task 8: Métricas por taxi individual y ranking de subagentes más usados con tasa de fallo (`dc-ephemeral-types.ts` y `dc-taxi-history.ts`)
 - [x] Task 9: Modal de detalle de taxi con [Enter/Clic], telemetría en vivo y vista de subagentes en `DcTaxisPanel` (`dc-taxis-panel.ts`)
+- [x] Task 10: Ejecución atómica de subagentes efímeros vía `ctx.executeTool("subagent_run")` con cleanup garantizado en `finally` y heartbeat continuo (`dc-ephemeral-tools.ts`)
+- [x] Task 11: Aislamiento del System Prompt del padre mediante `pi.setActiveTools` para eliminar 8.000 tokens de overhead (`src/features/dc-agents/dc-agents.ts`)

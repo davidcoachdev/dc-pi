@@ -245,3 +245,48 @@ export function cleanupEphemeralAgent(
     status: executionResult.status,
   });
 }
+
+/**
+ * Aísla las herramientas especializadas de DC Studio del System Prompt del orquestador principal.
+ * Mantiene todas las herramientas registradas en Pi para que los subagentes puedan invocarlas
+ * con `--tools`, pero deja activo en el padre únicamente su set esencial y `dc_ephemeral_agent_run`.
+ * Esto elimina entre 7.000 y 10.000 tokens de overhead en cada turno del orquestador.
+ */
+export function isolateSpecializedToolsForOrchestrator(pi: any): { removedCount: number; activeCount: number } {
+  try {
+    if (typeof pi?.getActiveTools !== "function" || typeof pi?.setActiveTools !== "function") {
+      return { removedCount: 0, activeCount: 0 };
+    }
+
+    const currentActive: string[] = pi.getActiveTools();
+    if (!Array.isArray(currentActive) || currentActive.length === 0) {
+      return { removedCount: 0, activeCount: 0 };
+    }
+
+    // Recolectar todas las tools especializadas de DC Studio (prefijo dc_ excepto dc_ephemeral_agent_run)
+    const specializedTools = new Set<string>();
+    for (const tools of Object.values(DC_TOOL_PRESETS)) {
+      for (const t of tools) {
+        if (t.startsWith("dc_") && t !== "dc_ephemeral_agent_run") {
+          specializedTools.add(t);
+        }
+      }
+    }
+
+    // Filtrar fuera del orquestador principal las herramientas especializadas
+    const parentTools = currentActive.filter((t) => !specializedTools.has(t));
+    if (!parentTools.includes("dc_ephemeral_agent_run")) {
+      parentTools.push("dc_ephemeral_agent_run");
+    }
+
+    const removedCount = currentActive.length - (parentTools.length - 1);
+    pi.setActiveTools(parentTools);
+
+    return {
+      removedCount: Math.max(0, removedCount),
+      activeCount: parentTools.length,
+    };
+  } catch {
+    return { removedCount: 0, activeCount: 0 };
+  }
+}

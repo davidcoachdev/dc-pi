@@ -2,7 +2,10 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { openDcModal } from "../../ui/dc-modal.ts";
 import { dcNotifier } from "../../integrations/dc-notify/dc-notifier.ts";
 import { syncDcAgents, syncDcSkills, type DcAgentsSyncResult } from "./core/dc-agents-sync.ts";
-import { dcCleanOrphanedEphemeralAgents } from "./core/dc-ephemeral-manager.ts";
+import {
+  dcCleanOrphanedEphemeralAgents,
+  isolateSpecializedToolsForOrchestrator,
+} from "./core/dc-ephemeral-manager.ts";
 import {
   acquireOrchestratorTaxi,
   releaseOrchestratorTaxi,
@@ -140,7 +143,11 @@ export default function dcAgentsExtension(pi: ExtensionAPI): void {
         }
       }
 
-      // 3. Sincronización de agentes y skills estáticos
+      // 3. Aislamiento de Herramientas Especializadas: aliviar el System Prompt del padre
+      // dejando las 35 tools en el catálogo para ser usadas exclusivamente por subagentes efímeros
+      isolateSpecializedToolsForOrchestrator(pi);
+
+      // 4. Sincronización de agentes y skills estáticos
       const agentsReport: DcAgentsSyncResult = syncDcAgents();
       const skillsReport: DcAgentsSyncResult = syncDcSkills();
 
