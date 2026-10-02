@@ -14,6 +14,7 @@ export interface DcTaxiPassenger {
   sessionId: string;
   pid: number;
   taskId?: string;
+  agentName?: string;
   model?: string;
   taskLabel?: string;
   startedAt: number;
@@ -47,6 +48,7 @@ export interface DcTaxiTripRecord {
   model: string;
   effort?: string;
   taskId?: string;
+  agentName?: string;
   sessionId: string;
   taskLabel?: string;
   startedAt: number;
@@ -56,6 +58,37 @@ export interface DcTaxiTripRecord {
   costEstimated?: number;
   status: DcTripStatus;
   error?: string;
+}
+
+export interface DcTaxiUnitMetrics {
+  account: string;
+  totalTrips: number;
+  completedTrips: number;
+  failedTrips: number;
+  cancelledTrips: number;
+  timeoutTrips: number;
+  totalTokens: number;
+  totalInputTokens: number;
+  totalOutputTokens: number;
+  totalReasoningTokens: number;
+  totalDurationMs: number;
+  avgDurationMs: number;
+  successRate: number;
+  lastError?: string;
+  lastUsedAt?: number;
+}
+
+export interface DcAgentUsageMetrics {
+  agentName: string;
+  totalTrips: number;
+  completedTrips: number;
+  failedTrips: number;
+  failureRate: number;
+  successRate: number;
+  totalTokens: number;
+  totalDurationMs: number;
+  lastUsedAt?: number;
+  lastError?: string;
 }
 
 export type DcEphemeralToolPreset =

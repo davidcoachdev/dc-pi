@@ -24,11 +24,18 @@ import {
 import {
   loadTaxiTripHistory,
   getTaxiHistoryMetrics,
+  getUnitTaxiMetrics,
+  getAgentUsageRanking,
   type DcTaxiHistoryMetrics,
 } from "../core/dc-taxi-history.ts";
 import { readRecentTaxiLogs } from "../core/dc-taxi-logger.ts";
 import { fetchAllTaxisQuotas, type DcTaxiQuotaInfo } from "../core/dc-taxi-quota.ts";
-import type { DcTaxiUnit, DcTaxiTripRecord } from "../core/dc-ephemeral-types.ts";
+import type {
+  DcTaxiUnit,
+  DcTaxiTripRecord,
+  DcTaxiUnitMetrics,
+  DcAgentUsageMetrics,
+} from "../core/dc-ephemeral-types.ts";
 import { applyModalBg } from "../../dc-plan/core/dc-plan-types.ts";
 import { DcSearchInput } from "../../../ui/dc-search-input.ts";
 
@@ -60,10 +67,14 @@ export class DcTaxisPanel implements Component {
   private spinnerIdx = 0;
   private animTimer?: NodeJS.Timeout;
 
+  // Vista de detalle de un taxi seleccionado (abierto con Enter/Clic)
+  private selectedDetailUnit: DcTaxiUnit | null = null;
+
   // Datos de la flota, cuotas y métricas
   private fleetUnits: DcTaxiUnit[] = [];
   private fleetSummary = { total: 0, libres: 0, ocupados: 0, recargando: 0 };
   private trips: DcTaxiTripRecord[] = [];
+  private agentRankings: DcAgentUsageMetrics[] = [];
   private metrics: DcTaxiHistoryMetrics = {
     totalTrips: 0,
     completedTrips: 0,
@@ -141,6 +152,7 @@ export class DcTaxisPanel implements Component {
     };
     this.trips = loadTaxiTripHistory(100);
     this.metrics = getTaxiHistoryMetrics();
+    this.agentRankings = getAgentUsageRanking();
     this.logs = readRecentTaxiLogs(60);
     this.requestRender();
 
@@ -177,6 +189,16 @@ export class DcTaxisPanel implements Component {
   }
 
   public handleInput(data: string): boolean {
+    // Si la vista de detalle de un taxi está activa:
+    if (this.selectedDetailUnit) {
+      if (matchesKey(data, Key.escape) || matchesKey(data, Key.enter) || data === " " || data === "q" || data === "Q") {
+        this.selectedDetailUnit = null;
+        this.requestRender();
+        return true;
+      }
+      return true;
+    }
+
     // Escape: si hay texto en el buscador, limpia el input y consume el evento (return true)
     // para evitar que DcWindow cierre la modal inmediatamente.
     if (matchesKey(data, Key.escape)) {
@@ -252,6 +274,16 @@ export class DcTaxisPanel implements Component {
       return true;
     }
 
+    // Enter o Espacio para abrir detalle de la unidad seleccionada en la pestaña de Flota
+    if (this.activeTab === "fleet" && (matchesKey(data, Key.enter) || data === " ")) {
+      const units = this.getFilteredUnits();
+      if (units.length > 0 && this.selectedIndex < units.length) {
+        this.selectedDetailUnit = units[this.selectedIndex] || null;
+        this.requestRender();
+        return true;
+      }
+    }
+
     // Caracteres imprimibles buscan en la lista
     if (data.length === 1 && data >= " " && data <= "~") {
       this.searchInput.append(data);
@@ -287,6 +319,12 @@ export class DcTaxisPanel implements Component {
   }
 
   public handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
+    if (this.selectedDetailUnit && event.type === "click") {
+      this.selectedDetailUnit = null;
+      this.requestRender();
+      return { handled: true };
+    }
+
     if (event.type === "wheel") {
       const delta = (event as any).wheelDelta ?? ((event as any).button === 4 ? -1 : 1);
       const len = this.getFilteredItemsCount();
@@ -314,7 +352,13 @@ export class DcTaxisPanel implements Component {
       const row = event.y - 4;
       const len = this.getFilteredItemsCount();
       if (row >= 0 && row < len) {
-        this.selectedIndex = row;
+        if (this.activeTab === "fleet" && this.selectedIndex === row) {
+          // Segundo clic en la misma fila: abrir detalle de la unidad
+          const units = this.getFilteredUnits();
+          this.selectedDetailUnit = units[row] || null;
+        } else {
+          this.selectedIndex = row;
+        }
         this.requestRender();
         return { handled: true };
       }
@@ -385,6 +429,12 @@ export class DcTaxisPanel implements Component {
     lines.push(leftTabs + " ".repeat(spaceBetween) + searchBox);
     lines.push(th.fg("muted", "─".repeat(safeW)));
 
+    // ── Si hay una unidad seleccionada para ver su detalle en vivo ──
+    if (this.selectedDetailUnit) {
+      this.renderUnitDetail(lines, safeW);
+      return lines.map((l) => applyModalBg(l));
+    }
+
     // ── Contenido según pestaña activa ──
     if (this.activeTab === "fleet") {
       this.renderFleetTab(lines, safeW);
@@ -395,6 +445,86 @@ export class DcTaxisPanel implements Component {
     }
 
     return lines.map((l) => applyModalBg(l));
+  }
+
+  /**
+   * Vista de telemetría completa de una unidad específica de Taxi (abierta con Enter/Clic).
+   */
+  private renderUnitDetail(lines: string[], width: number): void {
+    const th = this.theme;
+    const unit = this.selectedDetailUnit;
+    if (!unit) return;
+
+    const metrics = getUnitTaxiMetrics(unit.account);
+    const q = this.quotasMap.get(unit.account);
+
+    lines.push(` ${th.bold(th.fg("accent", `🚕 DETALLE DE UNIDAD [${unit.account.toUpperCase()}] · TELEMETRÍA EN VIVO`))}`);
+    lines.push(th.fg("muted", "─".repeat(Math.max(10, width - 2))));
+
+    // 1. Estado y Pasajero Actual
+    let statusText = th.fg("success", "🟢 LIBRE (Disponible en parada)");
+    if (unit.status === "ocupado") {
+      statusText = th.fg("error", "🔴 OCUPADO (Viaje en curso)");
+    } else if (unit.status === "recargando") {
+      statusText = th.fg("warning", "⚡ RECARGANDO (Cuota de 5h < 5%, esperando >= 60%)");
+    }
+    lines.push(`  Estado Actual:    ${th.bold(statusText)}`);
+
+    if (unit.passenger) {
+      const p = unit.passenger;
+      const elapsedSec = Math.floor((Date.now() - p.startedAt) / 1000);
+      const elapsedMin = (elapsedSec / 60).toFixed(1);
+      const pType = p.type === "orchestrator" ? "Orquestador (Sesión Principal)" : (p.type === "ephemeral_subagent" ? "Subagente Efímero (Fresh Context)" : "Subagente Estático");
+
+      lines.push(`  Tipo Pasajero:    ${th.bold(pType)}`);
+      lines.push(`  Modelo Activo:    ${th.fg("accent", p.model || "gemini-3.8-flash-high")}`);
+      lines.push(`  PID / Proceso:    ${th.bold(String(p.pid))} (Activo en sistema operativo)`);
+      lines.push(`  Sesión ID:        ${th.fg("dim", p.sessionId)}`);
+      lines.push(`  Tarea / Misión:   ${th.bold(p.taskLabel || "Tarea interactiva")}`);
+      lines.push(`  Tiempo en Curso:  ${th.bold(th.fg("accent", `${elapsedSec}s (~${elapsedMin}m)`))}`);
+    } else {
+      lines.push(`  Pasajero:         ${th.fg("dim", "Sin pasajero a bordo · Lista para despacho")}`);
+    }
+
+    lines.push(th.fg("muted", "┄".repeat(Math.max(10, width - 4))));
+
+    // 2. Telemetría de Cuotas del Bridge (:8325)
+    lines.push(` ${th.bold(th.fg("dim", "VENTANAS DE CUOTA Y LÍMITES (CLIProxy :8325):"))}`);
+    if (q && q.gemini5hPct !== null) {
+      const p5 = q.gemini5hPct;
+      const bar5 = "█".repeat(Math.round(p5 / 10)) + "░".repeat(10 - Math.round(p5 / 10));
+      const col5 = p5 < 5 ? "error" : (p5 < 60 ? "warning" : "success");
+      const resetTime = q.resetTimeIso ? ` │ Reset: ${new Date(q.resetTimeIso).toLocaleTimeString()}` : "";
+      lines.push(`  Gemini (5 Horas):  [${th.fg(col5, bar5)}]  ${th.bold(th.fg(col5, `${p5.toFixed(1)}% restante`))}${resetTime}`);
+    } else {
+      lines.push(`  Gemini (5 Horas):  ${th.fg("dim", "Consultando o sin límite reportado")}`);
+    }
+
+    if (q && q.geminiWeeklyPct !== null) {
+      const pw = q.geminiWeeklyPct;
+      const barw = "█".repeat(Math.round(pw / 10)) + "░".repeat(10 - Math.round(pw / 10));
+      const colw = pw < 20 ? "warning" : "success";
+      lines.push(`  Gemini (Semanal):  [${th.fg(colw, barw)}]  ${th.bold(th.fg(colw, `${pw.toFixed(1)}% restante`))}`);
+    }
+
+    lines.push(th.fg("muted", "┄".repeat(Math.max(10, width - 4))));
+
+    // 3. Estadísticas Históricas Acumuladas de esta Unidad
+    lines.push(` ${th.bold(th.fg("dim", `RENDIMIENTO HISTÓRICO DE LA UNIDAD [${unit.account.toUpperCase()}]:`))}`);
+    const avgSec = Math.round(metrics.avgDurationMs / 1000);
+    const totalMin = (metrics.totalDurationMs / 60000).toFixed(1);
+
+    lines.push(`  Viajes Realizados:  ${th.bold(String(metrics.totalTrips))}  (✓ ${metrics.completedTrips} exitosos  ·  ✖ ${metrics.failedTrips} fallidos  ·  ⊘ ${metrics.cancelledTrips} cancelados)`);
+    lines.push(`  Tasa de Éxito:      ${th.bold(metrics.successRate >= 90 ? th.fg("success", `${metrics.successRate}%`) : th.fg("warning", `${metrics.successRate}%`))}`);
+    lines.push(`  Tokens Totales:     ${th.bold(metrics.totalTokens.toLocaleString("es-ES"))}  (In: ${metrics.totalInputTokens.toLocaleString("es-ES")}  ·  Out: ${metrics.totalOutputTokens.toLocaleString("es-ES")}  ·  Reasoning: ${metrics.totalReasoningTokens.toLocaleString("es-ES")})`);
+    lines.push(`  Tiempo Acumulado:   ${th.bold(`${totalMin}m`)}  (Promedio por viaje: ${avgSec}s)`);
+
+    if (metrics.lastError) {
+      lines.push(`  Último Fallo:       ${th.fg("error", metrics.lastError.slice(0, Math.max(20, width - 25)))}`);
+    }
+
+    lines.push("");
+    lines.push(th.bold(th.fg("accent", "  [Esc / Enter] Volver a la lista de Taxis")));
   }
 
   private renderFleetTab(lines: string[], width: number): void {
@@ -514,6 +644,29 @@ export class DcTaxisPanel implements Component {
         lines.push(truncated);
       }
     });
+
+    // ── Ranking de Demanda y Tasa de Fallo por Subagente ──
+    if (this.agentRankings.length > 0) {
+      lines.push("");
+      lines.push(th.bold(th.fg("dim", " 🤖 DEMANDA Y TASA DE FALLO POR SUBAGENTE:")));
+      const rankHeader = " SUBAGENTE / TAREA           VIAJES   ÉXITO%   FALLOS   TOKENS     SALUD";
+      lines.push(th.fg("dim", rankHeader));
+
+      this.agentRankings.slice(0, 6).forEach((ar) => {
+        const nameStr = ar.agentName.slice(0, 26).padEnd(28);
+        const tripsStr = String(ar.totalTrips).padEnd(8);
+        const rateStr = `${ar.successRate}%`.padEnd(8);
+        const failCol = ar.failedTrips > 0 ? th.fg("error", String(ar.failedTrips).padEnd(8)) : th.fg("dim", "0       ");
+        const tokStr = `${ar.totalTokens.toLocaleString("es-ES")}`.padEnd(10);
+        const statusStr = ar.failedTrips > 0 ? th.fg("error", "✖ Fallando") : th.fg("success", "✓ Estable");
+
+        const line = ` ${nameStr} ${tripsStr} ${rateStr} ${failCol} ${tokStr} ${statusStr}`;
+        lines.push(truncateToWidth(line, Math.max(10, width - 4)));
+        if (ar.lastError) {
+          lines.push(th.fg("error", `   ↳ Error reciente: ${ar.lastError.slice(0, Math.max(10, width - 22))}`));
+        }
+      });
+    }
 
 
   }

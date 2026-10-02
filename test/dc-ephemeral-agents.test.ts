@@ -29,6 +29,8 @@ import {
   recordTaxiTrip,
   loadTaxiTripHistory,
   getTaxiHistoryMetrics,
+  getUnitTaxiMetrics,
+  getAgentUsageRanking,
 } from "../src/features/dc-agents/core/dc-taxi-history.ts";
 
 import {
@@ -396,6 +398,25 @@ test("dc-taxi-history: records trips, bounds history and computes aggregate metr
     assert.equal(metrics.totalTokens, 630);
     assert.equal(metrics.totalDurationMs, 9000);
     assert.equal(metrics.successRate, 50);
+
+    // Métricas por unidad ac01
+    const ac01Metrics = getUnitTaxiMetrics("ac01", historyPath);
+    assert.equal(ac01Metrics.totalTrips, 1);
+    assert.equal(ac01Metrics.completedTrips, 1);
+    assert.equal(ac01Metrics.totalTokens, 350);
+    assert.equal(ac01Metrics.successRate, 100);
+
+    // Métricas por unidad ac02
+    const ac02Metrics = getUnitTaxiMetrics("ac02", historyPath);
+    assert.equal(ac02Metrics.totalTrips, 1);
+    assert.equal(ac02Metrics.failedTrips, 1);
+    assert.equal(ac02Metrics.totalTokens, 280);
+    assert.equal(ac02Metrics.successRate, 0);
+
+    // Ranking de subagentes
+    const ranking = getAgentUsageRanking(historyPath);
+    assert.ok(ranking.length > 0);
+    assert.equal(ranking[0].totalTrips, 2);
   } finally {
     fs.rmSync(tempDir, { recursive: true, force: true });
   }
@@ -591,4 +612,39 @@ test("dc-taxis-panel: integration with DcWindow handles Escape without premature
   // Presionar Escape de nuevo con buscador vacío: ahora sí se cierra
   dispatchToWindow("\x1b");
   assert.equal(windowClosed, true);
+});
+
+test("dc-taxis-panel: Enter or Space on taxi unit opens live telemetry detail, Esc returns to list", () => {
+  const fakeTheme = {
+    bold: (s: string) => `*${s}*`,
+    fg: (_c: string, s: string) => s,
+    bg: (_c: string, s: string) => s,
+  } as any;
+
+  let windowClosed = false;
+  const panel = new DcTaxisPanel({
+    theme: fakeTheme,
+    onDone: () => {
+      windowClosed = true;
+    },
+    requestRender: () => {},
+  });
+
+  // Presionar Enter en la primera unidad de la flota
+  const enterConsumed = panel.handleInput("\r");
+  assert.equal(enterConsumed, true);
+
+  // Renderizar la vista actual: debe contener el detalle de telemetría de la unidad
+  const detailLines = panel.render(80);
+  assert.ok(detailLines.some((l) => l.includes("TELEMETRÍA EN VIVO")));
+  assert.ok(detailLines.some((l) => l.includes("Volver a la lista")));
+
+  // Presionar Escape: debe volver a la lista de taxis sin cerrar la ventana principal
+  const escConsumed = panel.handleInput("\x1b");
+  assert.equal(escConsumed, true);
+  assert.equal(windowClosed, false);
+
+  // El render debe volver a la lista general de la flota
+  const listLines = panel.render(80);
+  assert.ok(listLines.some((l) => l.includes("Flota de Taxis")));
 });
