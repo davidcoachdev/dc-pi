@@ -34,6 +34,10 @@
     },
     "dc-smoke-subagent": {
       "effort": "low"
+    },
+    "dc-sentinel": {
+      "model": "cpam/ac08/gemini-3.8-flash-high",
+      "effort": "high"
     }
   }
 }
