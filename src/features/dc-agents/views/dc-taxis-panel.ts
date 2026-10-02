@@ -441,8 +441,7 @@ export class DcTaxisPanel implements Component {
       }
     });
 
-    lines.push("");
-    lines.push(th.fg("dim", " [1-3] Pestañas  [↑/↓] Navegar  [r] Recargar flota  [Esc] Salir"));
+
   }
 
   private renderHistoryTab(lines: string[], width: number): void {
@@ -495,8 +494,7 @@ export class DcTaxisPanel implements Component {
       }
     });
 
-    lines.push("");
-    lines.push(th.fg("dim", " [1-3] Pestañas  [↑/↓] Navegar  [r] Recargar historial  [Esc] Salir"));
+
   }
 
   private renderLogsTab(lines: string[], width: number): void {
@@ -532,7 +530,6 @@ export class DcTaxisPanel implements Component {
       }
     });
 
-    lines.push("");
-    lines.push(th.fg("dim", " [1-3] Pestañas  [↑/↓] Navegar  [r] Recargar logs  [Esc] Salir"));
+
   }
 }
