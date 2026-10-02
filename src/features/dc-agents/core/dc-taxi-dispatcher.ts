@@ -44,6 +44,167 @@ export function isProcessAlive(pid: number): boolean {
   }
 }
 
+export interface ActivePiProcessInfo {
+  pid: number;
+  cwd: string;
+  modelId?: string;
+  sessionId?: string;
+}
+
+/**
+ * Escanea activamente el sistema operativo (/proc en Linux) en busca de procesos de Pi interactivos.
+ * Detecta qué modelo y sesión está usando cada terminal abierta, incluso si arrancó en otra ventana.
+ */
+export function discoverActivePiProcesses(): ActivePiProcessInfo[] {
+  if (process.platform !== "linux") return [];
+
+  const found: ActivePiProcessInfo[] = [];
+  const procDir = "/proc";
+
+  try {
+    const entries = fs.readdirSync(procDir);
+    for (const entry of entries) {
+      if (!/^\d+$/.test(entry)) continue;
+      const pid = parseInt(entry, 10);
+      if (isNaN(pid) || pid <= 0) continue;
+
+      try {
+        const cmdlinePath = path.join(procDir, entry, "cmdline");
+        if (!fs.existsSync(cmdlinePath)) continue;
+
+        const cmdRaw = fs.readFileSync(cmdlinePath, "utf8");
+        const cmd = cmdRaw.replace(/\0/g, " ");
+
+        // Debe ser un proceso pi pero no un subproceso RPC
+        const isPi =
+          (cmd.includes("bin/pi") || cmd.trim().startsWith("pi ") || cmd.trim() === "pi") &&
+          !cmd.includes("--mode rpc");
+
+        if (!isPi) continue;
+
+        const cwdPath = path.join(procDir, entry, "cwd");
+        let cwd = "";
+        try {
+          cwd = fs.readlinkSync(cwdPath);
+        } catch {
+          continue;
+        }
+
+        // Leer la sesión más reciente para ese CWD
+        const safeName = "--" + cwd.replace(/^\//, "").replace(/\/$/, "").replace(/\//g, "-") + "--";
+        const sessionDir = path.join(os.homedir(), ".pi", "agent", "sessions", safeName);
+
+        let modelId: string | undefined;
+        let sessionId: string | undefined;
+
+        if (fs.existsSync(sessionDir)) {
+          try {
+            const files = fs.readdirSync(sessionDir)
+              .filter((f) => f.endsWith(".jsonl"))
+              .map((f) => ({ name: f, time: fs.statSync(path.join(sessionDir, f)).mtimeMs }))
+              .sort((a, b) => b.time - a.time);
+
+            if (files.length > 0) {
+              const latestFile = files[0].name;
+              const fullJsonlPath = path.join(sessionDir, latestFile);
+              sessionId = latestFile.split("_").pop()?.replace(".jsonl", "");
+
+              const content = fs.readFileSync(fullJsonlPath, "utf8");
+              const lines = content.split("\n");
+              for (let i = lines.length - 1; i >= 0; i--) {
+                const line = lines[i].trim();
+                if (!line) continue;
+                try {
+                  const parsed = JSON.parse(line);
+                  const msg = parsed?.message;
+                  if (msg && typeof msg === "object") {
+                    const m = msg.model;
+                    const p = msg.provider;
+                    if (m) {
+                      modelId = p ? `${p}/${m}` : String(m);
+                      break;
+                    }
+                  }
+                } catch {
+                  /* continue scanning back */
+                }
+              }
+            }
+          } catch {
+            /* ignore directory read error */
+          }
+        }
+
+        found.push({ pid, cwd, modelId, sessionId });
+      } catch {
+        /* skip process */
+      }
+    }
+  } catch {
+    /* ignore readdir /proc error */
+  }
+
+  return found;
+}
+
+/**
+ * Sincroniza la flota con todos los procesos de Pi vivos en el sistema operativo.
+ */
+export function syncActivePiSessionsFromOs(state: DcTaxiFleetState): number {
+  const activeProcesses = discoverActivePiProcesses();
+  let synced = 0;
+
+  for (const proc of activeProcesses) {
+    let alreadyHasTaxi = false;
+    for (const unit of Object.values(state.fleet)) {
+      if (unit.passenger && unit.passenger.pid === proc.pid) {
+        unit.passenger.heartbeatAt = Date.now();
+        alreadyHasTaxi = true;
+        break;
+      }
+    }
+
+    if (alreadyHasTaxi) continue;
+
+    let account = "";
+    if (proc.modelId && proc.modelId.includes("/")) {
+      const parts = proc.modelId.split("/");
+      for (const p of parts) {
+        if (p.toLowerCase().startsWith("ac")) {
+          account = p.toLowerCase();
+          break;
+        }
+      }
+    }
+
+    if (!account || !state.fleet[account] || state.fleet[account].status === "ocupado") {
+      for (const [ac, unit] of Object.entries(state.fleet)) {
+        if (unit.status === "libre") {
+          account = ac;
+          break;
+        }
+      }
+    }
+
+    if (account && state.fleet[account]) {
+      const unit = state.fleet[account];
+      unit.status = "ocupado";
+      unit.passenger = {
+        type: "orchestrator",
+        sessionId: proc.sessionId || `pid-${proc.pid}`,
+        pid: proc.pid,
+        model: proc.modelId || `cpam/${account}/gemini-3.8-flash-high`,
+        taskLabel: `Sesión Activa (${path.basename(proc.cwd || "terminal")})`,
+        startedAt: Date.now(),
+        heartbeatAt: Date.now(),
+      };
+      synced++;
+    }
+  }
+
+  return synced;
+}
+
 /**
  * Inicializa la flota por defecto descubriendo dinámicamente las cuentas de CPAM.
  */
@@ -506,6 +667,14 @@ export function getFleetStatusSummary(
 } {
   const state = loadFleetState(fleetPath, allowedAccounts);
   reapAbandonedTaxis(state);
+
+  // Escaneo activo de procesos vivos del OS si estamos en entorno real
+  if (!allowedAccounts || allowedAccounts.length === 0) {
+    const newlySynced = syncActivePiSessionsFromOs(state);
+    if (newlySynced > 0) {
+      saveFleetState(state, fleetPath);
+    }
+  }
 
   const units = Object.values(state.fleet);
   const total = units.length;
