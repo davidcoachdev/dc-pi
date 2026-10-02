@@ -56,6 +56,25 @@ export function installToolBoxPatch(): boolean {
     const origUpdate = proto[ORIG_UPDATE_RESULT];
     proto.updateResult = function (result: any, isPartial = false) {
       try {
+        // Blindaje defensivo contra resultados malformados o anidados (ej. NestedToolOutcome)
+        // que provocan uncaughtException en getTextOutput(result.content.filter) de Pi nativo
+        if (result && typeof result === "object") {
+          if (!Array.isArray(result.content)) {
+            if (result.result && Array.isArray(result.result.content)) {
+              result.content = result.result.content;
+              if (result.details === undefined && result.result.details !== undefined) {
+                result.details = result.result.details;
+              }
+            } else if (typeof result.content === "string") {
+              result.content = [{ type: "text", text: result.content }];
+            } else if (typeof result.text === "string") {
+              result.content = [{ type: "text", text: result.text }];
+            } else {
+              result.content = [{ type: "text", text: "" }];
+            }
+          }
+        }
+
         if (!isPartial && result?.isError) {
           const text = (result.content as Array<{ text?: string }> | undefined)
             ?.map((c) => c.text ?? "")
@@ -67,7 +86,12 @@ export function installToolBoxPatch(): boolean {
       } catch {
         /* noop */
       }
-      return origUpdate.call(this, result, isPartial);
+      try {
+        return origUpdate.call(this, result, isPartial);
+      } catch (origErr) {
+        // Evitar que fallos en getTextOutput o renderers de Pi maten el proceso
+        return undefined;
+      }
     };
   }
 
