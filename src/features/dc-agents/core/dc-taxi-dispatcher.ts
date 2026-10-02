@@ -202,52 +202,156 @@ export function syncOrchestratorTaxi(
   fleetPath: string = FLEET_STATE_PATH,
   pid: number = process.pid,
 ): void {
-  if (!modelId || !modelId.includes("/")) return;
+  acquireOrchestratorTaxi(sessionId, modelId, fleetPath, pid);
+}
+
+/**
+ * Adquiere un taxi para la sesión principal del orquestador.
+ * Si la cuenta configurada por defecto está ocupada por otra sesión activa viva,
+ * busca el primer taxi LIBRE y devuelve la nueva cuenta/modelo asignados para que
+ * esta terminal tenga su propio carril independiente.
+ */
+export function acquireOrchestratorTaxi(
+  sessionId: string,
+  modelId?: string,
+  fleetPath: string = FLEET_STATE_PATH,
+  pid: number = process.pid,
+  allowedAccounts?: string[],
+): { account: string; modelId: string; changed: boolean } | null {
+  if (!modelId || !modelId.includes("/")) return null;
 
   const parts = modelId.split("/");
-  // Buscar prefijo ac*
-  let account = "";
-  for (const part of parts) {
-    const lower = part.toLowerCase();
+  let currentAccount = "";
+  let accountIndex = -1;
+
+  for (let i = 0; i < parts.length; i++) {
+    const lower = parts[i].toLowerCase();
     if (lower.startsWith("ac")) {
-      account = lower;
+      currentAccount = lower;
+      accountIndex = i;
       break;
     }
   }
 
-  if (!account) return;
+  if (!currentAccount) return null;
 
-  const state = loadFleetState(fleetPath);
+  const state = loadFleetState(fleetPath, allowedAccounts);
   reapAbandonedTaxis(state);
 
-  // Liberar cualquier taxi previo de esta misma sesión con passenger.type === "orchestrator"
+  // Liberar cualquier taxi previo de esta misma sesión y PID que ya no use
   for (const unit of Object.values(state.fleet)) {
-    if (unit.passenger && unit.passenger.sessionId === sessionId && unit.passenger.type === "orchestrator" && unit.account !== account) {
+    if (
+      unit.passenger &&
+      unit.passenger.type === "orchestrator" &&
+      (unit.passenger.sessionId === sessionId || unit.passenger.pid === pid) &&
+      unit.account !== currentAccount
+    ) {
       unit.status = "libre";
       unit.passenger = null;
     }
   }
 
-  const targetUnit = state.fleet[account];
-  if (targetUnit) {
-    targetUnit.status = "ocupado";
-    targetUnit.passenger = {
+  const preferredUnit = state.fleet[currentAccount];
+
+  // Caso 1: La cuenta preferida está libre o ya pertenece a este mismo proceso
+  const isMine =
+    preferredUnit?.passenger?.pid === pid ||
+    preferredUnit?.passenger?.sessionId === sessionId;
+  const isFree = preferredUnit?.status === "libre";
+
+  if (preferredUnit && (isFree || isMine)) {
+    preferredUnit.status = "ocupado";
+    preferredUnit.passenger = {
       type: "orchestrator",
       sessionId,
       pid,
       model: modelId,
       taskLabel: "Sesión Principal (Orquestador)",
-      startedAt: Date.now(),
+      startedAt: preferredUnit.passenger?.startedAt || Date.now(),
       heartbeatAt: Date.now(),
     };
     saveFleetState(state, fleetPath);
 
-    appendTaxiLog("INFO", "TAXI_ORCHESTRATOR_SYNCED", {
-      account,
+    appendTaxiLog("INFO", "TAXI_ORCHESTRATOR_ACQUIRED", {
+      account: currentAccount,
       sessionId,
       pid,
       modelId,
+      changed: false,
     });
+
+    return { account: currentAccount, modelId, changed: false };
+  }
+
+  // Caso 2: La cuenta preferida está ocupada por OTRA sesión viva -> Tomar un taxi libre!
+  for (const [ac, unit] of Object.entries(state.fleet)) {
+    if (unit.status === "libre") {
+      unit.status = "ocupado";
+
+      // Reemplazar la cuenta en el modelId
+      const newParts = [...parts];
+      newParts[accountIndex] = ac;
+      const newModelId = newParts.join("/");
+
+      unit.passenger = {
+        type: "orchestrator",
+        sessionId,
+        pid,
+        model: newModelId,
+        taskLabel: "Sesión Principal (Orquestador)",
+        startedAt: Date.now(),
+        heartbeatAt: Date.now(),
+      };
+      saveFleetState(state, fleetPath);
+
+      appendTaxiLog("INFO", "TAXI_ORCHESTRATOR_AUTO_REASSIGNED", {
+        preferredAccount: currentAccount,
+        reassignedAccount: ac,
+        sessionId,
+        pid,
+        originalModelId: modelId,
+        newModelId,
+      });
+
+      return { account: ac, modelId: newModelId, changed: true };
+    }
+  }
+
+  // Caso 3: Flota llena
+  return null;
+}
+
+/**
+ * Libera cualquier taxi ocupado por este orquestador al salir o cerrar sesión.
+ */
+export function releaseOrchestratorTaxi(
+  sessionId?: string,
+  pid: number = process.pid,
+  fleetPath: string = FLEET_STATE_PATH,
+  allowedAccounts?: string[],
+): void {
+  const state = loadFleetState(fleetPath, allowedAccounts);
+  let changed = false;
+
+  for (const unit of Object.values(state.fleet)) {
+    if (
+      unit.passenger &&
+      unit.passenger.type === "orchestrator" &&
+      ((sessionId && unit.passenger.sessionId === sessionId) || unit.passenger.pid === pid)
+    ) {
+      unit.status = "libre";
+      unit.passenger = null;
+      changed = true;
+      appendTaxiLog("INFO", "TAXI_ORCHESTRATOR_RELEASED", {
+        account: unit.account,
+        sessionId,
+        pid,
+      });
+    }
+  }
+
+  if (changed) {
+    saveFleetState(state, fleetPath);
   }
 }
 

@@ -14,6 +14,8 @@ import {
   heartbeatTaxi,
   reapAbandonedTaxis,
   getFleetStatusSummary,
+  acquireOrchestratorTaxi,
+  releaseOrchestratorTaxi,
 } from "../src/features/dc-agents/core/dc-taxi-dispatcher.ts";
 
 import {
@@ -200,6 +202,58 @@ test("dc-taxi-dispatcher: reapAbandonedTaxis auto-recovers dead PID and expired 
     assert.equal(state.fleet["ac01"].status, "libre");
     assert.equal(state.fleet["ac02"].status, "libre");
     assert.equal(state.fleet["ac03"].status, "ocupado");
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("dc-taxi-dispatcher: acquireOrchestratorTaxi prevents collisions between multiple Pi terminals", () => {
+  const tempDir = createTempDir("multi-pi");
+  const fleetPath = path.join(tempDir, "dc-taxis.json");
+
+  try {
+    const customAccounts = ["ac01", "ac02", "ac03"];
+    saveFleetState(createInitialFleetState(customAccounts), fleetPath);
+
+    // Terminal 1 arranca con ac02
+    const res1 = acquireOrchestratorTaxi(
+      "sess-term-1",
+      "cpam/ac02/gemini-3.8-flash-high",
+      fleetPath,
+      process.pid,
+      customAccounts,
+    );
+
+    assert.ok(res1);
+    assert.equal(res1.account, "ac02");
+    assert.equal(res1.changed, false);
+    assert.equal(res1.modelId, "cpam/ac02/gemini-3.8-flash-high");
+
+    // Terminal 2 (en otro PID vivo) arranca TAMBIÉN pidiendo ac02 por default
+    // Como ac02 está ocupada por Terminal 1, debe auto-reasignar el primer taxi libre (ac01)
+    const res2 = acquireOrchestratorTaxi(
+      "sess-term-2",
+      "cpam/ac02/gemini-3.8-flash-high",
+      fleetPath,
+      process.pid + 1, // Simular otro proceso
+      customAccounts,
+    );
+
+    assert.ok(res2);
+    assert.equal(res2.account, "ac01");
+    assert.equal(res2.changed, true);
+    assert.equal(res2.modelId, "cpam/ac01/gemini-3.8-flash-high");
+
+    // Ambas terminales están registradas como ocupadas en taxis diferentes
+    const summary = getFleetStatusSummary(fleetPath, customAccounts);
+    assert.equal(summary.ocupados, 2);
+    assert.equal(summary.libres, 1);
+
+    // Terminal 1 se cierra y libera su taxi
+    releaseOrchestratorTaxi("sess-term-1", process.pid, fleetPath, customAccounts);
+    const summaryAfter = getFleetStatusSummary(fleetPath, customAccounts);
+    assert.equal(summaryAfter.ocupados, 1);
+    assert.equal(summaryAfter.libres, 2);
   } finally {
     fs.rmSync(tempDir, { recursive: true, force: true });
   }

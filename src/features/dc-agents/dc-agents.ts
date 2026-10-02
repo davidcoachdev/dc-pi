@@ -3,7 +3,11 @@ import { openDcModal } from "../../ui/dc-modal.ts";
 import { dcNotifier } from "../../integrations/dc-notify/dc-notifier.ts";
 import { syncDcAgents, syncDcSkills, type DcAgentsSyncResult } from "./core/dc-agents-sync.ts";
 import { dcCleanOrphanedEphemeralAgents } from "./core/dc-ephemeral-manager.ts";
-import { syncOrchestratorTaxi } from "./core/dc-taxi-dispatcher.ts";
+import {
+  acquireOrchestratorTaxi,
+  releaseOrchestratorTaxi,
+  syncOrchestratorTaxi,
+} from "./core/dc-taxi-dispatcher.ts";
 import { registerDcEphemeralTools } from "./tools/dc-ephemeral-tools.ts";
 import { DcAgentsPanel } from "./views/dc-agents-panel.ts";
 import { DcTaxisPanel } from "./views/dc-taxis-panel.ts";
@@ -15,6 +19,13 @@ export function openTaxisViewer(ctx: ExtensionContext): void {
   if (!ctx.hasUI || ctx.mode !== "tui") {
     ctx.ui?.notify?.("Taxis (Alt+Shift+T): visor solo disponible en modo TUI interactivo", "warning");
     return;
+  }
+
+  // Sincronizar el orquestador activo antes de abrir la modal
+  const currentModelId = ctx.model ? `${ctx.model.provider || "cpam"}/${ctx.model.id}` : undefined;
+  const sessionId = ctx.sessionManager?.getSessionId?.() || `ambient-${Date.now()}`;
+  if (currentModelId) {
+    syncOrchestratorTaxi(sessionId, currentModelId);
   }
 
   let panelRef: DcTaxisPanel | undefined;
@@ -93,15 +104,40 @@ export default function dcAgentsExtension(pi: ExtensionAPI): void {
   registerDcEphemeralTools(pi);
 
   // Al arrancar sesión, verifica y restaura subagentes y skills si faltan, y purga huérfanos
-  pi.on("session_start", (_event, ctx) => {
+  pi.on("session_start", async (_event, ctx) => {
     try {
       // 1. Sweeper de agentes efímeros huérfanos
       dcCleanOrphanedEphemeralAgents();
 
-      // 2. Sincronizar el orquestador activo con su taxi en la flota
+      // 2. Sistema de Taxis: Adquirir taxi libre para este orquestador
       const currentModelId = ctx.model ? `${ctx.model.provider || "cpam"}/${ctx.model.id}` : undefined;
       const sessionId = ctx.sessionManager?.getSessionId?.() || `ambient-${Date.now()}`;
-      syncOrchestratorTaxi(sessionId, currentModelId);
+      if (currentModelId) {
+        const taxiResult = acquireOrchestratorTaxi(sessionId, currentModelId);
+        if (taxiResult && taxiResult.changed && taxiResult.modelId) {
+          try {
+            const provider = ctx.model?.provider ? String(ctx.model.provider) : "cpam";
+            const targetId = taxiResult.modelId.replace(new RegExp(`^${provider}/`), "");
+            const available = await (ctx as any).modelRegistry?.getAvailable?.();
+            const foundModel = ctx.modelRegistry?.find?.(provider, targetId)
+              || (Array.isArray(available) ? available.find((m: any) => m.id === targetId || m.id === taxiResult.modelId) : undefined);
+
+            if (foundModel) {
+              await (pi as any).setModel(foundModel);
+              if (ctx.hasUI) {
+                dcNotifier.notify(
+                  ctx,
+                  "🚕 Flota de Taxis",
+                  `Taxi ${taxiResult.account.toUpperCase()} asignado a esta terminal (cuenta default ocupada)`,
+                  "info",
+                );
+              }
+            }
+          } catch {
+            /* ignore fallback */
+          }
+        }
+      }
 
       // 3. Sincronización de agentes y skills estáticos
       const agentsReport: DcAgentsSyncResult = syncDcAgents();
@@ -125,6 +161,25 @@ export default function dcAgentsExtension(pi: ExtensionAPI): void {
       }
     } catch {
       /* noop en startup */
+    }
+  });
+
+  // Al cerrar o apagar sesión, liberar el taxi del orquestador
+  pi.on("session_shutdown", (_event, ctx) => {
+    try {
+      const sessionId = ctx.sessionManager?.getSessionId?.() || `ambient-${Date.now()}`;
+      releaseOrchestratorTaxi(sessionId, process.pid);
+    } catch {
+      /* noop */
+    }
+  });
+
+  // Salida de proceso limpia (anti-zombi)
+  process.on("exit", () => {
+    try {
+      releaseOrchestratorTaxi(undefined, process.pid);
+    } catch {
+      /* noop */
     }
   });
 
