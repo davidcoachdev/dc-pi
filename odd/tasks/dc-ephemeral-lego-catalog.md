@@ -4,4 +4,4 @@
 - [x] Task 2: Contratos de Bloques de Lego (Tool Bricks, Behavior Bricks) y Catálogo de Arquetipos Canónicos en `dc-ephemeral-types.ts`
 - [x] Task 3: Motor de Ensamblaje de Legos (`assembleEphemeralPlan`) y generación de prompt quirúrgico en `dc-ephemeral-manager.ts`
 - [x] Task 4: Actualización de esquema de parámetros y retrocompatibilidad en `dc-ephemeral-tools.ts` (`archetype`, `toolBricks`, `behaviorBricks`)
-- [ ] Task 5: Pruebas unitarias de bricks, catálogo, policy y verificación completa de la suite (`test/dc-ephemeral-agents.test.ts` y `npm test`)
+- [x] Task 5: Pruebas unitarias de bricks, catálogo, policy y verificación completa de la suite (`test/dc-ephemeral-agents.test.ts` y `npm test`)
