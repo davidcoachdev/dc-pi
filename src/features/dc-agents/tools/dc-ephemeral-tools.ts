@@ -123,7 +123,7 @@ export function registerDcEphemeralTools(pi: ExtensionAPI): void {
           heartbeatTimer.unref?.();
 
           if (typeof (ctx as any)?.executeTool === "function") {
-            subagentResult = await (ctx as any).executeTool(
+            const rawOutcome = await (ctx as any).executeTool(
               "subagent_run",
               {
                 agent: plan.agentName,
@@ -133,6 +133,33 @@ export function registerDcEphemeralTools(pi: ExtensionAPI): void {
               },
               { signal: _signal, onUpdate: _onUpdate },
             );
+
+            // Pi retorna NestedToolOutcome: { toolCall, result: { content, details }, isError }
+            // Desenvolvemos para obtener el ToolResult canónico con .content en la raíz
+            let unwrapped: any = rawOutcome;
+            if (rawOutcome && typeof rawOutcome === "object" && "result" in rawOutcome && rawOutcome.result) {
+              unwrapped = { ...rawOutcome.result };
+              if (rawOutcome.isError) {
+                unwrapped.isError = true;
+              }
+            }
+
+            // Asegurar que unwrapped tenga siempre la forma canónica de ToolResult (content como Array)
+            if (!unwrapped || typeof unwrapped !== "object") {
+              unwrapped = {
+                content: [{ type: "text", text: String(unwrapped ?? "") }],
+              };
+            } else if (!Array.isArray(unwrapped.content)) {
+              if (typeof unwrapped.content === "string") {
+                unwrapped.content = [{ type: "text", text: unwrapped.content }];
+              } else if (typeof unwrapped.text === "string") {
+                unwrapped.content = [{ type: "text", text: unwrapped.text }];
+              } else {
+                unwrapped.content = [{ type: "text", text: "" }];
+              }
+            }
+
+            subagentResult = unwrapped;
 
             if (subagentResult?.isError) {
               taskStatus = "failed";

@@ -138,3 +138,41 @@ test("dcToolBoxExtension registers only single command /dc-tool-box", async () =
   // Reset to default
   setToolBoxIndent(2);
 });
+
+test("installToolBoxPatch wraps updateResult and normalizes missing or nested content", () => {
+  const installed = installToolBoxPatch();
+  assert.equal(installed, true);
+
+  const mockInstance: any = Object.create(ToolExecutionComponent.prototype);
+  mockInstance.updateDisplay = () => {};
+  mockInstance.maybeConvertImagesForKitty = () => {};
+
+  // 1. Caso crítico: result sin content (ej: de NestedToolOutcome no desenvuelto)
+  const nestedOutcome = {
+    toolCall: { id: "call-1", name: "subagent_run" },
+    result: {
+      content: [{ type: "text", text: "Done successfully" }],
+      details: { foo: "bar" },
+    },
+    isError: false,
+  };
+  mockInstance.updateResult(nestedOutcome, false);
+  assert.ok(mockInstance.result);
+  assert.ok(Array.isArray(mockInstance.result.content));
+  assert.equal(mockInstance.result.content[0].text, "Done successfully");
+  assert.deepEqual(mockInstance.result.details, { foo: "bar" });
+
+  // 2. Caso con content undefined y sin result anidado
+  const bareResult = { isError: false };
+  mockInstance.updateResult(bareResult, false);
+  assert.ok(Array.isArray(mockInstance.result.content));
+  assert.equal(mockInstance.result.content.length, 1);
+  assert.equal(mockInstance.result.content[0].type, "text");
+
+  // 3. Caso con content como string
+  const stringContentResult = { content: "direct text message" };
+  mockInstance.updateResult(stringContentResult, false);
+  assert.ok(Array.isArray(mockInstance.result.content));
+  assert.equal(mockInstance.result.content[0].text, "direct text message");
+});
+

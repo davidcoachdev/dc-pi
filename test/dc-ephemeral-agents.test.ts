@@ -538,6 +538,54 @@ test("dc-ephemeral-tools: dc_ephemeral_agent_run executes subagent atomically an
   assert.equal(fs.existsSync(agentPath), false);
 });
 
+test("dc-ephemeral-tools: dc_ephemeral_agent_run unwraps real Pi NestedToolOutcome structure cleanly", async () => {
+  const registered: any[] = [];
+  const fakePi = {
+    registerTool(toolDef: any) {
+      registered.push(toolDef);
+    },
+  } as any;
+
+  registerDcEphemeralTools(fakePi);
+  const tool = registered[0];
+
+  let executedAgentName = "";
+  const fakeCtx = {
+    sessionManager: { getSessionId: () => "sess-nested-test" },
+    model: { provider: "cpam", id: "ac01/gemini-3.8-flash-high" },
+    executeTool: async (_name: string, args: any) => {
+      executedAgentName = args.agent;
+      // Simular exactamente la estructura NestedToolOutcome que retorna Pi nativo
+      return {
+        toolCall: { type: "toolCall", id: "call-1/1", name: "subagent_run", arguments: args },
+        result: {
+          content: [{ type: "text", text: "Subagente efímero ejecutado exitosamente vía Pi runner." }],
+          details: { exitCode: 0, subagentId: args.agent },
+        },
+        isError: false,
+      };
+    },
+  } as any;
+
+  const result = await tool.execute(
+    "call-1",
+    { task: "Test nested unwrap", toolPreset: "scout", role: "scout-tester" },
+    undefined,
+    undefined,
+    fakeCtx,
+  );
+
+  // El resultado devuelto por dc_ephemeral_agent_run DEBE tener .content en la raíz
+  assert.ok(Array.isArray(result.content), "result.content debe ser un Array en la raíz");
+  assert.equal(result.content[0].text, "Subagente efímero ejecutado exitosamente vía Pi runner.");
+  assert.equal(result.details?.exitCode, 0);
+  assert.equal(result.isError, undefined);
+
+  // Verificar que el archivo temporal del agente fue eliminado
+  const agentPath = path.join(os.homedir(), ".pi", "agent", "agents", `${executedAgentName}.md`);
+  assert.equal(fs.existsSync(agentPath), false);
+});
+
 test("dc-ephemeral-manager: isolateSpecializedToolsForOrchestrator removes heavy tools from active set while keeping dc_ephemeral_agent_run", () => {
   let appliedActiveTools: string[] = [];
   const fakePi = {

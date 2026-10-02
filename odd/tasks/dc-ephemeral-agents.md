@@ -11,3 +11,4 @@
 - [x] Task 9: Modal de detalle de taxi con [Enter/Clic], telemetría en vivo y vista de subagentes en `DcTaxisPanel` (`dc-taxis-panel.ts`)
 - [x] Task 10: Ejecución atómica de subagentes efímeros vía `ctx.executeTool("subagent_run")` con cleanup garantizado en `finally` y heartbeat continuo (`dc-ephemeral-tools.ts`)
 - [x] Task 11: Aislamiento del System Prompt del padre mediante `pi.setActiveTools` para eliminar 8.000 tokens de overhead (`src/features/dc-agents/dc-agents.ts`)
+- [x] Task 12: Desempaquetar NestedToolOutcome en `dc_ephemeral_agent_run` y blindar `ToolExecutionComponent.updateResult` contra `content` undefined (`dc-ephemeral-tools.ts`, `dc-tool-box-patch.ts`)
