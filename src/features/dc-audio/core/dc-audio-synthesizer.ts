@@ -7,29 +7,61 @@ import type { AudioSynthesisOptions, AudioSynthesisResult } from "./dc-audio-typ
 
 const execFileAsync = promisify(execFile);
 
-export function isAudioTtsAvailable(): { available: boolean; engine?: "piper" | "espeak-ng" } {
+export interface AudioTtsCheckResult {
+  available: boolean;
+  engine?: "piper" | "espeak-ng";
+}
+
+let cachedAudioTtsResult: AudioTtsCheckResult | null = null;
+
+/**
+ * Comprueba si hay un motor TTS disponible (piper, espeak-ng, espeak).
+ * El resultado se memoiza en memoria para evitar ejecutar múltiples procesos síncronos por llamada.
+ */
+export function isAudioTtsAvailable(forceRefresh = false): AudioTtsCheckResult {
+  if (cachedAudioTtsResult !== null && !forceRefresh) {
+    return cachedAudioTtsResult;
+  }
+
   try {
     const piper = spawnSync("piper", ["--help"], { stdio: "ignore" });
-    if (piper.status === 0) return { available: true, engine: "piper" };
+    if (piper.status === 0) {
+      cachedAudioTtsResult = { available: true, engine: "piper" };
+      return cachedAudioTtsResult;
+    }
   } catch {
     /* check next */
   }
 
   try {
     const espeak = spawnSync("espeak-ng", ["--version"], { stdio: "ignore" });
-    if (espeak.status === 0) return { available: true, engine: "espeak-ng" };
+    if (espeak.status === 0) {
+      cachedAudioTtsResult = { available: true, engine: "espeak-ng" };
+      return cachedAudioTtsResult;
+    }
   } catch {
     /* check next */
   }
 
   try {
     const espeakOld = spawnSync("espeak", ["--version"], { stdio: "ignore" });
-    if (espeakOld.status === 0) return { available: true, engine: "espeak-ng" };
+    if (espeakOld.status === 0) {
+      cachedAudioTtsResult = { available: true, engine: "espeak-ng" };
+      return cachedAudioTtsResult;
+    }
   } catch {
     /* none */
   }
 
-  return { available: false };
+  cachedAudioTtsResult = { available: false };
+  return cachedAudioTtsResult;
+}
+
+/**
+ * Invalida la caché de disponibilidad de TTS (útil para pruebas unitarias).
+ */
+export function resetAudioTtsAvailabilityCache(): void {
+  cachedAudioTtsResult = null;
 }
 
 /**

@@ -5,6 +5,7 @@ import {
   cleanVttText,
   formatDuration,
   isYtDlpAvailable,
+  resetYtDlpAvailabilityCache,
 } from "../src/features/dc-youtube/core/dc-youtube-client.ts";
 import dcYoutubeExtension from "../src/features/dc-youtube/dc-youtube.ts";
 
@@ -42,8 +43,25 @@ hoy vamos a ver TypeScript
   assert.ok(cleaned.includes("Hola a todos bienvenidos al canal hoy vamos a ver TypeScript"));
 });
 
-test("dc-youtube: isYtDlpAvailable returns true in this environment", () => {
-  assert.equal(isYtDlpAvailable(), true);
+test("dc-youtube: isYtDlpAvailable returns true and memoizes the result", () => {
+  resetYtDlpAvailabilityCache();
+  
+  const startFirst = performance.now();
+  const first = isYtDlpAvailable();
+  const durFirst = performance.now() - startFirst;
+  assert.equal(first, true);
+
+  // Segunda llamada debe ser instantánea por la caché en memoria (sin spawnSync)
+  const startSecond = performance.now();
+  const second = isYtDlpAvailable();
+  const durSecond = performance.now() - startSecond;
+  assert.equal(second, true);
+  assert.ok(durSecond < 5, `durSecond (${durSecond}ms) should be near 0ms due to in-memory memoization`);
+
+  // forceRefresh debe volver a chequear
+  resetYtDlpAvailabilityCache();
+  const third = isYtDlpAvailable(true);
+  assert.equal(third, true);
 });
 
 test("dcYoutubeExtension registers all 4 YouTube tools and /dc-youtube command", () => {
