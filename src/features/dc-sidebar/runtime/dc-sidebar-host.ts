@@ -309,10 +309,8 @@ export function tryWrap(tui: any): boolean {
 let pollTimer: ReturnType<typeof setInterval> | null = null;
 
 export function startPolling(tui: any) {
-  if (pollTimer) clearInterval(pollTimer);
-  pollTimer = setInterval(() => {
-    tryWrap(tui);
-  }, 1000);
+  // Directiva 6: Cero polling ciego continuo. No setInterval.
+  tryWrap(tui);
 }
 
 export function stopPolling() {

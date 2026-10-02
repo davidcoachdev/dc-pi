@@ -158,12 +158,8 @@ export function restoreNative(tui: TUI): void {
 
 export function startPolling(tui: TUI): void {
   activeTui = tui;
-  if (wrapTimer) return;
-  wrapTimer = setInterval(() => {
-    if (!activeTui) return;
-    tryAttachBodyFrame(activeTui);
-  }, 300);
-  wrapTimer.unref?.();
+  // Directiva 6: Cero polling ciego. No setInterval continuo.
+  tryAttachBodyFrame(tui);
 }
 
 export function stopPolling(): void {
@@ -173,6 +169,8 @@ export function stopPolling(): void {
   }
 }
 
+let resizeHandler: (() => void) | null = null;
+
 export function dcBodyExtension(pi: ExtensionAPI): void {
   pi.on("session_start", (_event, ctx: ExtensionContext) => {
     if (!ctx.hasUI || ctx.mode !== "tui") return;
@@ -181,10 +179,30 @@ export function dcBodyExtension(pi: ExtensionAPI): void {
     activeTui = tui;
 
     tryAttachBodyFrame(tui);
-    startPolling(tui);
+
+    // Directiva 6: Layout reactivo por evento de resize
+    const onResize = () => {
+      if (activeTui) {
+        tryAttachBodyFrame(activeTui);
+      }
+    };
+    resizeHandler = onResize;
+    try {
+      process.stdout.on("resize", onResize);
+    } catch {
+      /* noop */
+    }
   });
 
   pi.on("session_shutdown", () => {
+    if (resizeHandler) {
+      try {
+        process.stdout.off("resize", resizeHandler);
+      } catch {
+        /* noop */
+      }
+      resizeHandler = null;
+    }
     stopPolling();
     if (activeTui) {
       restoreNative(activeTui);
@@ -210,6 +228,7 @@ export function dcBodyExtension(pi: ExtensionAPI): void {
       writeBodyPrefs({ frame: nextState });
 
       if (activeTui) {
+        tryAttachBodyFrame(activeTui);
         activeTui.requestRender();
       }
 
