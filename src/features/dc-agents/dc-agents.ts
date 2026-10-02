@@ -2,7 +2,32 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { openDcModal } from "../../ui/dc-modal.ts";
 import { dcNotifier } from "../../integrations/dc-notify/dc-notifier.ts";
 import { syncDcAgents, syncDcSkills, type DcAgentsSyncResult } from "./core/dc-agents-sync.ts";
+import { dcCleanOrphanedEphemeralAgents } from "./core/dc-ephemeral-manager.ts";
+import { registerDcEphemeralTools } from "./tools/dc-ephemeral-tools.ts";
 import { DcAgentsPanel } from "./views/dc-agents-panel.ts";
+import { DcTaxisPanel } from "./views/dc-taxis-panel.ts";
+
+/**
+ * Abre el visor interactivo de la Flota de Taxis (Libre / Ocupado), tokens y logs.
+ */
+export function openTaxisViewer(ctx: ExtensionContext): void {
+  if (!ctx.hasUI || ctx.mode !== "tui") {
+    ctx.ui?.notify?.("Taxis (Alt+Shift+T): visor solo disponible en modo TUI interactivo", "warning");
+    return;
+  }
+
+  openDcModal(ctx, {
+    title: "🚕 Flota de Taxis & Consumo de Tokens (DC Studio)",
+    width: "88%",
+    maxHeight: "82%",
+    footer: {
+      left: " [1-3] Pestañas  [↑/↓] Navegar  [r] Recargar ",
+      right: " [Esc/q] Salir ",
+    },
+    frame: "double",
+    content: (done, theme) => new DcTaxisPanel(theme, () => done(undefined)),
+  });
+}
 
 /**
  * Abre el visor interactivo de subagentes y ejecuciones en DcWindow (2 paneles).
@@ -28,15 +53,23 @@ export function openAgentsViewer(ctx: ExtensionContext): void {
 
 /**
  * Extensión dc-agents para Pi y DC Studio.
+ * - Registra la herramienta dc_ephemeral_agent_run para delegación con Fresh Context Loop.
  * - Sincroniza e instala los subagentes propios de DC Studio en ~/.pi/agent/agents/.
  * - Sincroniza de forma recursiva e idempotente las skills de DC Studio en ~/.pi/agent/skills/.
- * - Abre el visor de 2 paneles (ejecuciones en tiempo real y catálogo).
- * - Registra los comandos /agents, /dc-agents y el atajo Alt+A.
+ * - Ejecuta el sweeper de agentes efímeros huérfanos al arrancar sesión.
+ * - Registra los comandos /agents, /dc-agents, /dc-taxis y el atajo Alt+Shift+T.
  */
 export default function dcAgentsExtension(pi: ExtensionAPI): void {
-  // Al arrancar sesión, verifica y restaura subagentes y skills si faltan
+  // Registrar herramienta de agentes efímeros para el orquestador
+  registerDcEphemeralTools(pi);
+
+  // Al arrancar sesión, verifica y restaura subagentes y skills si faltan, y purga huérfanos
   pi.on("session_start", (_event, ctx) => {
     try {
+      // 1. Sweeper de agentes efímeros huérfanos
+      dcCleanOrphanedEphemeralAgents();
+
+      // 2. Sincronización de agentes y skills estáticos
       const agentsReport: DcAgentsSyncResult = syncDcAgents();
       const skillsReport: DcAgentsSyncResult = syncDcSkills();
 
@@ -66,6 +99,22 @@ export default function dcAgentsExtension(pi: ExtensionAPI): void {
     description: "Abre el visor interactivo de subagentes y ejecuciones (DcWindow)",
     handler: async (_args: string | undefined, ctx: ExtensionContext) => {
       openAgentsViewer(ctx);
+    },
+  });
+
+  // Comando /dc-taxis (abre el monitor de la Flota de Taxis, historial de tokens y logs)
+  pi.registerCommand("dc-taxis", {
+    description: "DC Studio: monitor interactivo de la Flota de Taxis, historial de tokens y auditoría",
+    handler: async (_args: string | undefined, ctx: ExtensionContext) => {
+      openTaxisViewer(ctx);
+    },
+  });
+
+  // Shortcut Alt+Shift+T para abrir el visor de Taxis rápidamente
+  pi.registerShortcut("alt+shift+t", {
+    description: "DC Studio: abrir monitor de Flota de Taxis y tokens",
+    handler: async (ctx: ExtensionContext) => {
+      openTaxisViewer(ctx);
     },
   });
 
@@ -104,3 +153,4 @@ export default function dcAgentsExtension(pi: ExtensionAPI): void {
     },
   });
 }
+
