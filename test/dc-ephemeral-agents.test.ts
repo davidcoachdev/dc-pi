@@ -519,8 +519,50 @@ test("dc-ephemeral-tools: registerDcEphemeralTools registers tool in ExtensionAP
   assert.equal(registered.length, 1);
   assert.equal(registered[0].name, "dc_ephemeral_agent_run");
   assert.ok(registered[0].parameters.properties.task);
+  assert.ok(registered[0].parameters.properties.archetype);
+  assert.ok(registered[0].parameters.properties.toolBricks);
+  assert.ok(registered[0].parameters.properties.behaviorBricks);
   assert.ok(registered[0].parameters.properties.toolPreset);
   assert.ok(registered[0].parameters.properties.effort);
+});
+
+test("dc-ephemeral-tools: dc_ephemeral_agent_run executes with archetype and cleans up in finally", async () => {
+  const registered: any[] = [];
+  const fakePi = {
+    registerTool(toolDef: any) {
+      registered.push(toolDef);
+    },
+  } as any;
+
+  registerDcEphemeralTools(fakePi);
+  const tool = registered[0];
+
+  let executeToolCalled = false;
+  let executedAgentName = "";
+  const fakeCtx = {
+    sessionManager: { getSessionId: () => "sess-archetype-test" },
+    model: { provider: "cpam", id: "ac05/gemini-3.8-flash-high" },
+    executeTool: async (toolName: string, args: any) => {
+      executeToolCalled = true;
+      executedAgentName = args.agent;
+      return {
+        toolCall: { id: "call-1", name: toolName, arguments: args },
+        result: {
+          content: [{ type: "text", text: "Reporte de scout con lego" }],
+          details: { ok: true },
+        },
+      };
+    },
+  };
+
+  const outcome = await tool.execute("call-arch-1", {
+    task: "Mapear modulo x",
+    archetype: "odd-scout",
+  }, undefined, undefined, fakeCtx);
+
+  assert.equal(executeToolCalled, true);
+  assert.ok(executedAgentName.startsWith("dc-ephem-"));
+  assert.ok(outcome.content[0].text.includes("Reporte de scout"));
 });
 
 test("dc-ephemeral-tools: dc_ephemeral_agent_run executes subagent atomically and cleans up in finally", async () => {

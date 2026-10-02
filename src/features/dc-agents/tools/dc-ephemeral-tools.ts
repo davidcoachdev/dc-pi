@@ -11,7 +11,13 @@ import {
   prepareEphemeralAgent,
   cleanupEphemeralAgent,
 } from "../core/dc-ephemeral-manager.ts";
-import type { DcEphemeralToolPreset, DcReasoningEffort } from "../core/dc-ephemeral-types.ts";
+import type {
+  DcEphemeralToolPreset,
+  DcReasoningEffort,
+  DcAgentArchetype,
+  DcToolBrick,
+  DcBehaviorBrick,
+} from "../core/dc-ephemeral-types.ts";
 import { appendTaxiLog } from "../core/dc-taxi-logger.ts";
 import { heartbeatTaxi } from "../core/dc-taxi-dispatcher.ts";
 
@@ -27,14 +33,74 @@ export function registerDcEphemeralTools(pi: ExtensionAPI): void {
           type: "string",
           description: "Instrucción concreta, autocontenida y detallada que debe ejecutar el agente efímero.",
         },
+        archetype: {
+          type: "string",
+          enum: [
+            "odd-scout",
+            "odd-worker",
+            "odd-verifier",
+            "dc-researcher",
+            "dc-media",
+            "dc-browser-inspector",
+            "dc-service-ops",
+            "dc-smoke",
+          ],
+          description: "Arquetipo canónico de subagente listo para usar (Fast-path del Catálogo).",
+        },
+        toolBricks: {
+          type: "array",
+          items: {
+            type: "string",
+            enum: [
+              "fs-read",
+              "fs-write",
+              "terminal",
+              "code-intel",
+              "web-search",
+              "browser",
+              "audio",
+              "services",
+              "docs",
+              "youtube",
+            ],
+          },
+          description: "Bloques de Lego de herramientas para ensamblar un agente a medida sin desperdiciar tokens.",
+        },
+        behaviorBricks: {
+          type: "array",
+          items: {
+            type: "string",
+            enum: [
+              "strict-tdd",
+              "read-only-analyst",
+              "artifact-contract",
+              "non-empty-response",
+              "source-verification",
+              "bounded-worker",
+            ],
+          },
+          description: "Bloques de Lego de comportamiento y directivas operativas.",
+        },
         role: {
           type: "string",
           description: "Nombre del rol o propósito (ej: 'youtube-researcher', 'browser-auditor', 'audio-narrator').",
         },
         toolPreset: {
           type: "string",
-          enum: ["youtube", "browser", "audio", "api", "services", "codegraph", "docs", "research", "scout"],
-          description: "Preset de herramientas aisladas para no cargar las 35 tools en el agente principal.",
+          enum: [
+            "youtube",
+            "browser",
+            "audio",
+            "api",
+            "services",
+            "codegraph",
+            "docs",
+            "research",
+            "scout",
+            "worker",
+            "verifier",
+          ],
+          description: "Preset de herramientas aislado (retrocompatibilidad).",
         },
         tools: {
           type: "array",
@@ -84,7 +150,10 @@ export function registerDcEphemeralTools(pi: ExtensionAPI): void {
           {
             task: params.task,
             role: params.role,
-            label: params.role || params.task.slice(0, 30),
+            label: params.role || params.archetype || params.task.slice(0, 30),
+            archetype: params.archetype as DcAgentArchetype,
+            toolBricks: params.toolBricks as DcToolBrick[],
+            behaviorBricks: params.behaviorBricks as DcBehaviorBrick[],
             toolPreset: params.toolPreset as DcEphemeralToolPreset,
             tools: params.tools,
             seedContext: params.seedContext,
@@ -107,6 +176,8 @@ export function registerDcEphemeralTools(pi: ExtensionAPI): void {
           model: plan.fullModelRef,
           effort: plan.effectiveEffort,
           mode: plan.mode,
+          archetype: params.archetype || "custom-lego",
+          toolBricks: params.toolBricks,
         });
 
         // 2. Ejecutar atómicamente el subagente vía ctx.executeTool si está disponible
