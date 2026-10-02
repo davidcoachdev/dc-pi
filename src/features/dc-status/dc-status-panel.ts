@@ -3,6 +3,7 @@ import {
   Key,
   matchesKey,
   truncateToWidth,
+  visibleWidth,
   wrapTextWithAnsi,
   type Component,
   type TuiMouseEvent,
@@ -19,7 +20,7 @@ export interface DcStatusPanelOptions {
   ctx?: any;
 }
 
-export type StatusTab = "info" | "alerts";
+export type StatusTab = "info" | "alerts" | "changelog";
 
 export class DcStatusPanel implements Component {
   private theme: Pick<Theme, "fg" | "bg" | "bold">;
@@ -39,6 +40,7 @@ export class DcStatusPanel implements Component {
     this.ctx = options.ctx;
 
     const alertCount = this.status.alerts.length;
+    const hasNotice = Boolean(this.status.changelogNotice);
 
     this.tabsComponent = new DcTabs({
       theme: this.theme,
@@ -52,6 +54,12 @@ export class DcStatusPanel implements Component {
           label: "[2] Alertas",
           badge: alertCount > 0 ? `(${alertCount})` : undefined,
           badgeType: "warning",
+        },
+        {
+          id: "changelog",
+          label: "[3] Changelog",
+          badge: hasNotice ? "Nuevo" : undefined,
+          badgeType: "accent",
         },
       ],
       onSelect: (id) => {
@@ -137,7 +145,7 @@ export class DcStatusPanel implements Component {
       lines.push("");
       lines.push(t.fg("border", "─".repeat(safeW)));
       lines.push("");
-    } else {
+    } else if (this.currentTab === "alerts") {
       // Pestaña de alertas con modo slide / carrusel interactivo
       if (this.status.alerts.length === 0) {
         lines.push(`  ${t.fg("success", "✔")} ${t.fg("text", "No hay alertas pendientes en el entorno. Todo en orden.")}`);
@@ -214,6 +222,80 @@ export class DcStatusPanel implements Component {
         lines.push(t.fg("border", "─".repeat(safeW)));
         lines.push(`  ${t.fg("accent", "c")} ${t.fg("dim", "Copiar alerta actual al editor y portapapeles")}`);
       }
+    } else if (this.currentTab === "changelog") {
+      // Pestaña de Changelog y Notificaciones de actualización
+      const notice = this.status.changelogNotice;
+      const wrapW = Math.max(20, safeW - 6);
+
+      if (notice) {
+        const boxInnerW = Math.max(10, safeW - 6);
+        lines.push(`  ${t.bold(t.fg("accent", "╭" + "─".repeat(boxInnerW) + "╮"))}`);
+
+        const headerTitle = " 🚀 NOTIFICACIÓN DE ACTUALIZACIÓN";
+        const headerPad = Math.max(0, boxInnerW - visibleWidth(headerTitle));
+        lines.push(`  ${t.bold(t.fg("accent", "│"))}${t.bold(t.fg("warning", headerTitle))}${" ".repeat(headerPad)}${t.bold(t.fg("accent", "│"))}`);
+
+        const noticeParts = wrapTextWithAnsi(t.fg("text", notice), boxInnerW - 4);
+        for (const p of noticeParts) {
+          const pad = Math.max(0, boxInnerW - 2 - visibleWidth(p));
+          lines.push(`  ${t.bold(t.fg("accent", "│"))}  ${p}${" ".repeat(pad)}${t.bold(t.fg("accent", "│"))}`);
+        }
+        lines.push(`  ${t.bold(t.fg("accent", "╰" + "─".repeat(boxInnerW) + "╯"))}`);
+        lines.push("");
+      }
+
+      const md = this.status.changelogMarkdown;
+      if (!md || !md.trim()) {
+        lines.push(`  ${t.fg("success", "✔")} ${t.fg("text", "El entorno está al día. No hay notas de versión recientes.")}`);
+        lines.push("");
+        lines.push(t.fg("dim", `    Versión activa de Pi: v${this.status.version}`));
+        if (this.status.gentlePiVersion) {
+          lines.push(t.fg("dim", `    Versión activa de gentle-pi: v${this.status.gentlePiVersion}`));
+        }
+      } else {
+        lines.push(`  ${t.bold(t.fg("accent", "Novedades y Cambios Recientes:"))}`);
+        lines.push(t.fg("border", "  " + "┄".repeat(Math.max(10, safeW - 4))));
+        lines.push("");
+
+        const rawLines = md.split("\n");
+        for (const rLine of rawLines) {
+          const trimmed = rLine.trim();
+          if (!trimmed) {
+            lines.push("");
+            continue;
+          }
+
+          if (trimmed.startsWith("## ")) {
+            const heading = trimmed.replace(/^##\s*/, "");
+            lines.push(`  ${t.bold(t.fg("accent", "◆"))} ${t.bold(t.fg("accent", heading))}`);
+            continue;
+          }
+
+          if (trimmed.startsWith("### ")) {
+            const sub = trimmed.replace(/^###\s*/, "");
+            lines.push(`    ${t.bold(t.fg("text", sub))}`);
+            continue;
+          }
+
+          if (trimmed.startsWith("- ") || trimmed.startsWith("* ")) {
+            const bullet = trimmed.replace(/^[-*]\s*/, "");
+            const parts = wrapTextWithAnsi(`${t.fg("accent", "•")} ${t.fg("text", bullet)}`, wrapW - 4);
+            lines.push(`    ${parts[0]}`);
+            for (let j = 1; j < parts.length; j++) {
+              lines.push(`      ${parts[j]}`);
+            }
+            continue;
+          }
+
+          const parts = wrapTextWithAnsi(t.fg("dim", trimmed), wrapW);
+          for (const p of parts) {
+            lines.push(`    ${p}`);
+          }
+        }
+      }
+
+      lines.push("");
+      lines.push(t.fg("border", "─".repeat(safeW)));
     }
 
     return lines;
@@ -228,9 +310,22 @@ export class DcStatusPanel implements Component {
       this.setTab("alerts");
       return true;
     }
+    if (keyData === "3") {
+      this.setTab("changelog");
+      return true;
+    }
 
-    if (matchesKey(keyData, Key.left) || keyData === Key.left || matchesKey(keyData, Key.right) || keyData === Key.right) {
-      this.setTab(this.currentTab === "info" ? "alerts" : "info");
+    if (matchesKey(keyData, Key.left) || keyData === Key.left) {
+      if (this.currentTab === "info") this.setTab("changelog");
+      else if (this.currentTab === "alerts") this.setTab("info");
+      else if (this.currentTab === "changelog") this.setTab("alerts");
+      return true;
+    }
+
+    if (matchesKey(keyData, Key.right) || keyData === Key.right) {
+      if (this.currentTab === "info") this.setTab("alerts");
+      else if (this.currentTab === "alerts") this.setTab("changelog");
+      else if (this.currentTab === "changelog") this.setTab("info");
       return true;
     }
 

@@ -11,6 +11,7 @@ import {
   patchPiCompactionNotices,
   patchPiRetryStatusIndicator,
   patchAssistantMessageAbort,
+  patchPiChangelogNotice,
   recordUserEscape,
 } from "./dc-core-patches.ts";
 
@@ -151,6 +152,11 @@ export default function dcNotifyExtension(pi: ExtensionAPI): void {
   }
   try {
     patchPiRetryStatusIndicator();
+  } catch {
+    /* noop */
+  }
+  try {
+    patchPiChangelogNotice();
   } catch {
     /* noop */
   }

@@ -19,10 +19,13 @@ export async function openStatusViewer(ctx: ExtensionContext, pi: ExtensionAPI):
     width: "55%",
     maxHeight: "75%",
     footer: (theme) => {
-      const isAlerts = panelRef?.getCurrentTab() === "alerts";
-      const leftHints = isAlerts
-        ? `  ${theme.fg("accent", "↑ / ↓")} alerta   ${theme.fg("accent", "← / →")} pestaña   ${theme.fg("accent", "c")} copiar`
-        : `  ${theme.fg("accent", "← / →")} pestaña   ${theme.fg("accent", "esc")} cerrar`;
+      const tab = panelRef?.getCurrentTab();
+      let leftHints = `  ${theme.fg("accent", "← / →")} pestaña   ${theme.fg("accent", "1..3")} saltar   ${theme.fg("accent", "esc")} cerrar`;
+      if (tab === "alerts") {
+        leftHints = `  ${theme.fg("accent", "↑ / ↓")} alerta   ${theme.fg("accent", "← / →")} pestaña   ${theme.fg("accent", "c")} copiar`;
+      } else if (tab === "changelog") {
+        leftHints = `  ${theme.fg("accent", "↑ / ↓")} scroll   ${theme.fg("accent", "← / →")} pestaña   ${theme.fg("accent", "esc")} cerrar`;
+      }
 
       return {
         left: leftHints,

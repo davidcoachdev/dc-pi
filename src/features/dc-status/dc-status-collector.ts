@@ -21,6 +21,8 @@ export interface EnvStatus {
   alerts: string[];
   version: string;
   gentlePiVersion?: string;
+  changelogNotice?: string;
+  changelogMarkdown?: string;
 }
 
 export function getGentlePiVersion(): string | undefined {
@@ -44,6 +46,66 @@ export function getGentlePiVersion(): string | undefined {
   }
 
   return undefined;
+}
+
+export function getLocalPiChangelog(): string | undefined {
+  const candidateDirs = [
+    "/home/linuxbrew/.linuxbrew/Cellar/pi-coding-agent",
+    "/home/linuxbrew/.linuxbrew/lib/node_modules/@earendil-works/pi-coding-agent",
+    "/usr/local/lib/node_modules/@earendil-works/pi-coding-agent",
+    path.join(os.homedir(), ".pi", "agent", "npm", "node_modules", "@earendil-works", "pi-coding-agent"),
+  ];
+
+  for (const dir of candidateDirs) {
+    try {
+      if (!fs.existsSync(dir)) continue;
+      const stat = fs.statSync(dir);
+      if (stat.isFile() && dir.endsWith("CHANGELOG.md")) {
+        return fs.readFileSync(dir, "utf8");
+      }
+      if (dir.includes("Cellar")) {
+        const versions = fs.readdirSync(dir).sort().reverse();
+        for (const v of versions) {
+          const directChangelog = path.join(dir, v, "CHANGELOG.md");
+          if (fs.existsSync(directChangelog)) {
+            return fs.readFileSync(directChangelog, "utf8");
+          }
+          const nestedChangelog = path.join(dir, v, "libexec", "lib", "node_modules", "@earendil-works", "pi-coding-agent", "CHANGELOG.md");
+          if (fs.existsSync(nestedChangelog)) {
+            return fs.readFileSync(nestedChangelog, "utf8");
+          }
+        }
+      } else {
+        const p = path.join(dir, "CHANGELOG.md");
+        if (fs.existsSync(p)) {
+          return fs.readFileSync(p, "utf8");
+        }
+      }
+    } catch {
+      /* ignore */
+    }
+  }
+  return undefined;
+}
+
+export function parseRecentChangelogEntries(raw: string, maxEntries = 3): string {
+  const lines = raw.split("\n");
+  const result: string[] = [];
+  let entryCount = 0;
+  let capturing = false;
+
+  for (const line of lines) {
+    if (line.startsWith("## ")) {
+      entryCount++;
+      if (entryCount > maxEntries) break;
+      capturing = true;
+    }
+    if (capturing) {
+      result.push(line);
+    }
+  }
+
+  return result.join("\n").trim();
 }
 
 export function parseGitBranchOutput(stdout: string): { branch: string; status: string } {
@@ -135,6 +197,40 @@ export async function collectEnvStatus(
     /* noop */
   }
 
+  let changelogNotice: string | undefined;
+  let changelogMarkdown: string | undefined;
+
+  try {
+    const G_CHANGELOG = Symbol.for("dc.env.changelog-notice");
+    const capturedNotice = (globalThis as unknown as Record<symbol, string>)[G_CHANGELOG];
+    if (typeof capturedNotice === "string" && capturedNotice.trim()) {
+      changelogNotice = capturedNotice.trim();
+    }
+  } catch {
+    /* noop */
+  }
+
+  try {
+    const G_CHANGELOG_MD = Symbol.for("dc.env.changelog-markdown");
+    const capturedMd = (globalThis as unknown as Record<symbol, string>)[G_CHANGELOG_MD];
+    if (typeof capturedMd === "string" && capturedMd.trim()) {
+      changelogMarkdown = capturedMd.trim();
+    }
+  } catch {
+    /* noop */
+  }
+
+  if (!changelogMarkdown) {
+    try {
+      const rawCl = getLocalPiChangelog();
+      if (rawCl) {
+        changelogMarkdown = parseRecentChangelogEntries(rawCl, 3);
+      }
+    } catch {
+      /* noop */
+    }
+  }
+
   return {
     gitBranch: git.branch,
     gitStatus: git.status,
@@ -151,5 +247,7 @@ export async function collectEnvStatus(
     alerts,
     version: VERSION ?? "0.85.1",
     gentlePiVersion: getGentlePiVersion(),
+    changelogNotice,
+    changelogMarkdown,
   };
 }
