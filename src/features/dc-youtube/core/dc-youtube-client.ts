@@ -15,13 +15,30 @@ import { redactSecrets } from "../../dc-websearch/core/dc-websearch-security.ts"
 
 const execFileAsync = promisify(execFile);
 
-export function isYtDlpAvailable(): boolean {
+let cachedYtDlpAvailable: boolean | null = null;
+
+/**
+ * Comprueba si el binario `yt-dlp` está disponible en el sistema.
+ * El resultado se memoiza en memoria para evitar llamadas síncronas bloqueantes repetidas.
+ */
+export function isYtDlpAvailable(forceRefresh = false): boolean {
+  if (cachedYtDlpAvailable !== null && !forceRefresh) {
+    return cachedYtDlpAvailable;
+  }
   try {
     const { status } = spawnSync("yt-dlp", ["--version"], { stdio: "ignore" });
-    return status === 0;
+    cachedYtDlpAvailable = status === 0;
   } catch {
-    return false;
+    cachedYtDlpAvailable = false;
   }
+  return cachedYtDlpAvailable;
+}
+
+/**
+ * Invalida la caché de disponibilidad de `yt-dlp` (útil para tests o reconfiguración).
+ */
+export function resetYtDlpAvailabilityCache(): void {
+  cachedYtDlpAvailable = null;
 }
 
 export function formatDuration(seconds?: number): string {

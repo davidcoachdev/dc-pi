@@ -5,7 +5,11 @@ import * as os from "node:os";
 import * as path from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { markdownToSpokenText } from "../src/features/dc-audio/core/dc-audio-cleaner.ts";
-import { isAudioTtsAvailable, synthesizeAudio } from "../src/features/dc-audio/core/dc-audio-synthesizer.ts";
+import {
+  isAudioTtsAvailable,
+  synthesizeAudio,
+  resetAudioTtsAvailabilityCache,
+} from "../src/features/dc-audio/core/dc-audio-synthesizer.ts";
 import dcAudioExtension from "../src/features/dc-audio/dc-audio.ts";
 
 test("dc-audio: markdownToSpokenText cleans markdown formatting for speech", () => {
@@ -43,10 +47,27 @@ const code = "debe eliminarse";
   assert.ok(spoken.includes("Punto uno Punto dos"));
 });
 
-test("dc-audio: isAudioTtsAvailable detects espeak-ng engine", () => {
+test("dc-audio: isAudioTtsAvailable detects engine and memoizes result", () => {
+  resetAudioTtsAvailabilityCache();
+
+  const startFirst = performance.now();
   const status = isAudioTtsAvailable();
+  const durFirst = performance.now() - startFirst;
   assert.equal(status.available, true);
   assert.ok(status.engine === "espeak-ng" || status.engine === "piper");
+
+  // Segunda llamada debe ser instantánea (< 5ms) al usar caché en memoria sin invocar spawnSync
+  const startSecond = performance.now();
+  const statusSecond = isAudioTtsAvailable();
+  const durSecond = performance.now() - startSecond;
+  assert.equal(statusSecond.available, true);
+  assert.equal(statusSecond.engine, status.engine);
+  assert.ok(durSecond < 5, `durSecond (${durSecond}ms) should be near 0ms due to in-memory memoization`);
+
+  // forceRefresh debe forzar re-chequeo
+  resetAudioTtsAvailabilityCache();
+  const statusThird = isAudioTtsAvailable(true);
+  assert.equal(statusThird.available, true);
 });
 
 test("dc-audio: synthesizeAudio creates a real wav audio file", async () => {
