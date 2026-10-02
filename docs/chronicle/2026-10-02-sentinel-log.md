@@ -211,3 +211,16 @@ To report this crash: run `pi -r` to resume the session, then run /bug. The cras
 - **Herramientas Ejecutadas:** `read`, `read`, `find`, `read`, `grep`, `grep`, `read`, `read`, `grep`, `grep`, `bash`, `bash`, `bash`, `bash`, `bash`, `bash`, `bash`, `bash`, `bash`, `bash`, `bash`, `bash`, `bash`, `read`, `read`, `bash`, `bash`, `bash`, `bash`, `bash`, `bash`, `grep`, `bash`, `bash`, `grep`, `find`, `read`, `read`, `read`, `bash`, `bash`, `bash`, `bash`, `read`, `read`, `read`, `read`, `bash`, `read`, `edit`, `todo`, `todo`, `gentle_odd_phase`, `read`, `edit`, `read`, `edit`, `read`, `edit`, `grep`, `read`, `edit`, `bash`, `edit`, `bash`, `bash`, `bash`, `edit`, `todo`, `bash`, `bash`, `mem_save`, `gentle_odd_phase`
 - **⚠️ Errores / Alertas:**
   - [bash Error]: ""
+### Turno: turn-1-1790931694768 (2026-10-02T09:01:34.768Z)
+- **Prompt Usuario:** "ok haz commit"
+- **Pre-Flight Recall Activo:** `Fix bottom commit visibility in dc-git-graph panel`, `Unify semantic color for commit prefix and PR number in dc-git-graph`, `Structure sidebar enhancements into atomic work-unit commits`
+- **Herramientas Ejecutadas:** `bash`, `bash`, `bash`, `bash`, `bash`
+### Turno: turn-2-1790931751029 (2026-10-02T09:02:31.029Z)
+- **Prompt Usuario:** "ok corre dos subagentes temporales en pararl;elo"
+- **Pre-Flight Recall Activo:** `Merge feat/dc-status-changelog-tab to master`, `Pestaña Changelog y Notificación de Update en Ventana de Información`, `fix: unwrap NestedToolOutcome in dc_ephemeral_agent_run and shield TUI updateResult`
+- **Subagentes Delegados:**
+  - 🤖 **dc-ephem-43396092** (task · activo): ✅ OK
+    - *Tarea:* Inspecciona src/features/dc-agents/core/dc-ephemeral-types.ts y lista concisamente los presets soportados en DcEpheme...
+  - 🤖 **dc-ephem-fd83341a** (task · 21.1s): ✅ OK
+    - *Tarea:* Inspecciona src/features/dc-agents/core/dc-taxi-dispatcher.ts y explica en 3 viñetas breves cómo opera heartbeatTaxi ...
+- **Herramientas Ejecutadas:** `dc_ephemeral_agent_run`, `dc_ephemeral_agent_run`, `bash`
