@@ -9,6 +9,7 @@ const CACHE_MISS_PATCHED = Symbol.for("dc.notify.pi-cache-miss-patched");
 const COMPACTION_NOTICE_PATCHED = Symbol.for("dc.notify.pi-compaction-notice-patched");
 const RETRY_PATCHED = Symbol.for("dc.notify.pi-retry-patched");
 const ASSISTANT_ABORT_PATCHED = Symbol.for("dc.notify.assistant-abort-patched");
+const CHANGELOG_PATCHED = Symbol.for("dc.notify.pi-changelog-patched");
 
 const notifiedAbortMessages = new WeakSet<object>();
 
@@ -316,4 +317,53 @@ export function patchAssistantMessageAbort(): void {
   }
 
   (proto as Record<symbol, boolean>)[ASSISTANT_ABORT_PATCHED] = true;
+}
+
+/**
+ * Intercepta el changelog de startup de Pi (`showStartupNoticesIfNeeded`) para
+ * que NO ensucie el body/chat con el recuadro de aviso de actualización.
+ * Guarda el aviso en el registro global `dc.env.changelog-notice` y el markdown
+ * en `dc.env.changelog-markdown`, para ser renderizado en su propia pestaña
+ * dentro de la ventana de información (/dc-status, Alt+E). También notifica por Herdr.
+ */
+export function patchPiChangelogNotice(): void {
+  const proto = (InteractiveMode as unknown as { prototype?: Record<string, unknown> })?.prototype;
+  if (!proto || (proto as Record<symbol, boolean>)[CHANGELOG_PATCHED]) return;
+  const orig = proto.showStartupNoticesIfNeeded as ((this: unknown) => void) | undefined;
+  if (typeof orig !== "function") return;
+  (proto as Record<symbol, boolean>)[CHANGELOG_PATCHED] = true;
+
+  proto.showStartupNoticesIfNeeded = function (this: any): void {
+    if (this.startupNoticesShown) return;
+    this.startupNoticesShown = true;
+    if (!this.changelogMarkdown) return;
+
+    let noticeText = "";
+    const versionMatch = typeof this.changelogMarkdown === "string"
+      ? this.changelogMarkdown.match(/##\s+\[?(\d+\.\d+\.\d+)\]?/)
+      : null;
+    const latestVersion = versionMatch ? versionMatch[1] : (this.version ?? "");
+    noticeText = `Updated to v${latestVersion}. Use /changelog to view full changelog.`;
+
+    const rawMarkdown = typeof this.changelogMarkdown === "string" ? this.changelogMarkdown.trim() : "";
+
+    // Guardar para dc-status
+    const G_CHANGELOG = Symbol.for("dc.env.changelog-notice");
+    const G_CHANGELOG_MD = Symbol.for("dc.env.changelog-markdown");
+    try {
+      (globalThis as unknown as Record<symbol, string>)[G_CHANGELOG] = noticeText;
+      if (rawMarkdown) {
+        (globalThis as unknown as Record<symbol, string>)[G_CHANGELOG_MD] = rawMarkdown;
+      }
+    } catch {
+      /* noop */
+    }
+
+    // Notificar por Herdr si está disponible
+    try {
+      dcNotifier.notifyHerdr("Pi actualizado", noticeText);
+    } catch {
+      /* noop */
+    }
+  };
 }

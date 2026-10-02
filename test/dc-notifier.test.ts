@@ -1,8 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import { InteractiveMode } from "@earendil-works/pi-coding-agent";
 import { DcNotifier } from "../src/integrations/dc-notify/dc-notifier.ts";
 import dcNotifyExtension from "../src/integrations/dc-notify/dc-notifier.ts";
+import { patchPiChangelogNotice } from "../src/integrations/dc-notify/dc-core-patches.ts";
 
 test("DcNotifier detects Herdr presence from environment variables", () => {
   const originalSocket = process.env.HERDR_SOCKET_PATH;
@@ -78,4 +80,41 @@ test("dcNotifyExtension registers /dc-notify-test", () => {
   dcNotifyExtension(mockPi);
   assert.equal(registeredCommand, "dc-notify-test");
   assert.ok(commandHandler);
+});
+
+test("patchPiChangelogNotice intercepts startup notices, captures notice and markdown without adding to chatContainer", () => {
+  patchPiChangelogNotice();
+
+  const G_CHANGELOG = Symbol.for("dc.env.changelog-notice");
+  const G_CHANGELOG_MD = Symbol.for("dc.env.changelog-markdown");
+  delete (globalThis as any)[G_CHANGELOG];
+  delete (globalThis as any)[G_CHANGELOG_MD];
+
+  const addedChildren: any[] = [];
+  const fakeInteractiveHost: any = {
+    startupNoticesShown: false,
+    changelogMarkdown: "## [1.0.0]\n- Cambios importantes",
+    version: "1.0.0",
+    chatContainer: {
+      children: [],
+      addChild(child: any) {
+        addedChildren.push(child);
+      },
+    },
+  };
+
+  // Obtenemos el método patcheado en el prototipo de InteractiveMode
+  assert.ok(typeof (InteractiveMode as any).prototype.showStartupNoticesIfNeeded === "function");
+
+  (InteractiveMode as any).prototype.showStartupNoticesIfNeeded.call(fakeInteractiveHost);
+
+  // Verificamos que se haya marcado startupNoticesShown para no re-ejecutar en Pi
+  assert.equal(fakeInteractiveHost.startupNoticesShown, true);
+
+  // Verificamos que NO se haya ensuciado chatContainer con DynamicBorder ni Text
+  assert.equal(addedChildren.length, 0);
+
+  // Verificamos que se haya guardado el aviso y markdown en los símbolos globales
+  assert.equal((globalThis as any)[G_CHANGELOG], "Updated to v1.0.0. Use /changelog to view full changelog.");
+  assert.equal((globalThis as any)[G_CHANGELOG_MD], "## [1.0.0]\n- Cambios importantes");
 });
