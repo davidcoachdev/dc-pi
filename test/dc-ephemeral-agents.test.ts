@@ -537,10 +537,58 @@ test("dc-taxis-panel: escape key clears search input first and only closes modal
   assert.ok(linesFiltered.length > 0);
 
   // 2. Presionar Escape -> NO debe cerrar la modal (doneCalled sigue false), debe limpiar el buscador
-  panel.handleInput("\x1b");
+  const consumedFirst = panel.handleInput("\x1b");
+  assert.equal(consumedFirst, true); // Debe consumir el evento para que DcWindow no cierre
   assert.equal(doneCalled, false);
 
   // 3. Presionar Escape por segunda vez con buscador vacío -> AHORA SÍ debe cerrar la modal
-  panel.handleInput("\x1b");
+  const consumedSecond = panel.handleInput("\x1b");
+  assert.equal(consumedSecond, true);
   assert.equal(doneCalled, true);
+});
+
+test("dc-taxis-panel: integration with DcWindow handles Escape without prematurely closing window", () => {
+  const fakeTheme = {
+    bold: (s: string) => `*${s}*`,
+    fg: (_c: string, s: string) => s,
+    bg: (_c: string, s: string) => s,
+  } as any;
+
+  let windowClosed = false;
+  const panel = new DcTaxisPanel({
+    theme: fakeTheme,
+    onDone: () => {
+      windowClosed = true;
+    },
+    requestRender: () => {},
+  });
+
+  // Simular cómo DcWindow despacha el input
+  // (dc-window.ts:243: if (this.options.content.handleInput?.(data) === true) return true;)
+  const dispatchToWindow = (key: string) => {
+    if (panel.handleInput(key) === true) {
+      return true; // consumido por el panel
+    }
+    // Si no fue consumido, DcWindow cierra la ventana:
+    if (key === "\x1b") {
+      windowClosed = true;
+      return true;
+    }
+    return false;
+  };
+
+  // Escribir en la búsqueda
+  dispatchToWindow("a");
+  dispatchToWindow("c");
+  dispatchToWindow("0");
+  dispatchToWindow("5");
+
+  // Presionar Escape: debe consumir el evento (retornar true) y la ventana NO debe cerrarse
+  const consumed = dispatchToWindow("\x1b");
+  assert.equal(consumed, true);
+  assert.equal(windowClosed, false); // <--- VENTANA SIGUE ABIERTA Y BUSCADOR LIMPIO
+
+  // Presionar Escape de nuevo con buscador vacío: ahora sí se cierra
+  dispatchToWindow("\x1b");
+  assert.equal(windowClosed, true);
 });

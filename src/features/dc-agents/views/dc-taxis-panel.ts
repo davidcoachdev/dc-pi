@@ -176,25 +176,26 @@ export class DcTaxisPanel implements Component {
     };
   }
 
-  public handleInput(data: string): void {
-    // Escape: si hay texto en el buscador, primero limpia el input; si ya está vacío, cierra la modal
+  public handleInput(data: string): boolean {
+    // Escape: si hay texto en el buscador, limpia el input y consume el evento (return true)
+    // para evitar que DcWindow cierre la modal inmediatamente.
     if (matchesKey(data, Key.escape)) {
       if (!this.searchInput.isEmpty()) {
         this.searchInput.clear();
         this.selectedIndex = 0;
         this.requestRender();
-        return;
+        return true;
       }
       this.destroy();
       this.onDone();
-      return;
+      return true;
     }
 
     // Salir con 'q' sólo si la búsqueda está vacía
     if (this.searchInput.isEmpty() && (data === "q" || data === "Q")) {
       this.destroy();
       this.onDone();
-      return;
+      return true;
     }
 
     // Refrescar con 'r' sólo si la búsqueda está vacía
@@ -207,7 +208,7 @@ export class DcTaxisPanel implements Component {
       } else {
         this.reloadData();
       }
-      return;
+      return true;
     }
 
     // Teclas 1, 2, 3 para alternar pestañas (sólo si no se está escribiendo en el buscador)
@@ -216,19 +217,19 @@ export class DcTaxisPanel implements Component {
         this.activeTab = "fleet";
         this.selectedIndex = 0;
         this.requestRender();
-        return;
+        return true;
       }
       if (data === "2") {
         this.activeTab = "history";
         this.selectedIndex = 0;
         this.requestRender();
-        return;
+        return true;
       }
       if (data === "3") {
         this.activeTab = "logs";
         this.selectedIndex = 0;
         this.requestRender();
-        return;
+        return true;
       }
     }
 
@@ -238,7 +239,7 @@ export class DcTaxisPanel implements Component {
       else this.activeTab = "fleet";
       this.selectedIndex = 0;
       this.requestRender();
-      return;
+      return true;
     }
 
     // Backspace en búsqueda
@@ -246,9 +247,9 @@ export class DcTaxisPanel implements Component {
       if (this.searchInput.backspace()) {
         this.selectedIndex = 0;
         this.requestRender();
-        return;
+        return true;
       }
-      return;
+      return true;
     }
 
     // Caracteres imprimibles buscan en la lista
@@ -256,7 +257,7 @@ export class DcTaxisPanel implements Component {
       this.searchInput.append(data);
       this.selectedIndex = 0;
       this.requestRender();
-      return;
+      return true;
     }
 
     const currentListLength = this.getFilteredItemsCount();
@@ -264,23 +265,25 @@ export class DcTaxisPanel implements Component {
     if (matchesKey(data, Key.up) || data === "k") {
       this.selectedIndex = Math.max(0, this.selectedIndex - 1);
       this.requestRender();
-      return;
+      return true;
     }
     if (matchesKey(data, Key.down) || data === "j") {
       this.selectedIndex = Math.min(Math.max(0, currentListLength - 1), this.selectedIndex + 1);
       this.requestRender();
-      return;
+      return true;
     }
     if (matchesKey(data, Key.pageUp)) {
       this.selectedIndex = Math.max(0, this.selectedIndex - 10);
       this.requestRender();
-      return;
+      return true;
     }
     if (matchesKey(data, Key.pageDown)) {
       this.selectedIndex = Math.min(Math.max(0, currentListLength - 1), this.selectedIndex + 10);
       this.requestRender();
-      return;
+      return true;
     }
+
+    return false;
   }
 
   public handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
