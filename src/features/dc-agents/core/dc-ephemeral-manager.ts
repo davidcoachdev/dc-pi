@@ -14,8 +14,15 @@ import type {
   DcEphemeralTaskOptions,
   DcReasoningEffort,
   DcTaxiTripRecord,
+  DcAgentArchetype,
+  DcArchetypeDefinition,
 } from "./dc-ephemeral-types.ts";
-import { DC_TOOL_PRESETS } from "./dc-ephemeral-types.ts";
+import {
+  DC_TOOL_PRESETS,
+  DC_TOOL_BRICKS,
+  DC_BEHAVIOR_BRICKS,
+  DC_AGENT_ARCHETYPES,
+} from "./dc-ephemeral-types.ts";
 import { leaseTaxi, releaseTaxi } from "./dc-taxi-dispatcher.ts";
 import { calibrateEffortForTask, loadDcAgentsConfig, resolveExecutionModel } from "./dc-effort-policy.ts";
 import { recordTaxiTrip } from "./dc-taxi-history.ts";
@@ -34,6 +41,107 @@ export interface EphemeralAgentLaunchPlan {
   effectiveEffort: DcReasoningEffort;
   tools: string[];
   mode: "task" | "background";
+}
+
+export interface AssembledLegoPlan {
+  tools: string[];
+  directives: string[];
+  archetype?: DcAgentArchetype;
+  recommendedModel?: string;
+  defaultEffort?: DcReasoningEffort;
+}
+
+/**
+ * Motor de Ensamblaje de Legos (Lego Assembler):
+ * Compone de forma determinista el toolset y las directivas de comportamiento
+ * a partir de un Arquetipo Canónico o de bloques individuales (toolBricks + behaviorBricks).
+ */
+export function assembleLegoAgentPlan(options: DcEphemeralTaskOptions): AssembledLegoPlan {
+  // 1. Resolver Arquetipo Canónico si fue solicitado
+  let archetypeDef: DcArchetypeDefinition | undefined;
+  if (options.archetype && DC_AGENT_ARCHETYPES[options.archetype]) {
+    archetypeDef = DC_AGENT_ARCHETYPES[options.archetype];
+  }
+
+  // 2. Resolver herramientas aisladas
+  const toolSet = new Set<string>();
+
+  // Si hay arquetipo, incorporar sus toolBricks y extraTools
+  if (archetypeDef) {
+    for (const brick of archetypeDef.toolBricks) {
+      const tools = DC_TOOL_BRICKS[brick];
+      if (tools) {
+        for (const t of tools) toolSet.add(t);
+      }
+    }
+    if (archetypeDef.extraTools) {
+      for (const t of archetypeDef.extraTools) toolSet.add(t);
+    }
+  }
+
+  // Incorporar toolBricks explícitos
+  if (options.toolBricks && Array.isArray(options.toolBricks)) {
+    for (const brick of options.toolBricks) {
+      const tools = DC_TOOL_BRICKS[brick];
+      if (tools) {
+        for (const t of tools) toolSet.add(t);
+      }
+    }
+  }
+
+  // Incorporar preset retrocompatible si existe
+  if (options.toolPreset && DC_TOOL_PRESETS[options.toolPreset]) {
+    for (const t of DC_TOOL_PRESETS[options.toolPreset]) {
+      toolSet.add(t);
+    }
+  }
+
+  // Incorporar lista explícita de herramientas
+  if (options.tools && Array.isArray(options.tools)) {
+    for (const t of options.tools) {
+      toolSet.add(t);
+    }
+  }
+
+  // Fallback si no hay herramientas
+  if (toolSet.size === 0) {
+    toolSet.add("read");
+  }
+
+  // 3. Resolver Directivas de Comportamiento (Behavior Bricks)
+  const directiveSet = new Set<string>();
+
+  // Directivas universales mínimas
+  directiveSet.add("Usa exclusivamente las herramientas asignadas en tu toolset.");
+  directiveSet.add("No supongas información no provista. Si necesitas una consulta externa al padre, usa subagent_parent_message con kind: 'query'.");
+
+  // Si hay arquetipo, incorporar sus behaviorBricks
+  if (archetypeDef) {
+    for (const brick of archetypeDef.behaviorBricks) {
+      const text = DC_BEHAVIOR_BRICKS[brick];
+      if (text) directiveSet.add(text);
+    }
+  }
+
+  // Incorporar behaviorBricks explícitos
+  if (options.behaviorBricks && Array.isArray(options.behaviorBricks)) {
+    for (const brick of options.behaviorBricks) {
+      const text = DC_BEHAVIOR_BRICKS[brick];
+      if (text) directiveSet.add(text);
+    }
+  }
+
+  // Asegurar siempre contrato de artefacto y directiva de texto visible
+  directiveSet.add(DC_BEHAVIOR_BRICKS["artifact-contract"]);
+  directiveSet.add(DC_BEHAVIOR_BRICKS["non-empty-response"]);
+
+  return {
+    tools: Array.from(toolSet),
+    directives: Array.from(directiveSet),
+    archetype: options.archetype,
+    recommendedModel: archetypeDef?.recommendedModel,
+    defaultEffort: archetypeDef?.defaultEffort,
+  };
 }
 
 /**
@@ -98,26 +206,24 @@ export function prepareEphemeralAgent(
 
   const agentFilePath = path.join(agentsDir, `${agentName}.md`);
 
-  // 1. Resolver herramientas aisladas (Preset o lista explícita)
-  let tools: string[] = ["read"];
-  if (options.tools && options.tools.length > 0) {
-    tools = options.tools;
-  } else if (options.toolPreset && DC_TOOL_PRESETS[options.toolPreset]) {
-    tools = DC_TOOL_PRESETS[options.toolPreset];
-  }
+  // 1. Ensamblar plan de herramientas y directivas vía Motor de Legos
+  const legoPlan = assembleLegoAgentPlan(options);
+  const tools = legoPlan.tools;
 
   // 2. Resolver modelo base y arriendo de Taxi
+  const requestedModel = options.model || legoPlan.recommendedModel;
   const resolvedModel = resolveExecutionModel({
-    requestedModel: options.model,
+    requestedModel,
     parentModel: contextMeta.parentModel,
     config,
   });
 
   // 3. Calibrar esfuerzo adaptativo (anclado a high para modelos de razonamiento)
+  const explicitEffort = options.effort || legoPlan.defaultEffort;
   const effectiveEffort = calibrateEffortForTask(
     options.task,
     options.toolPreset,
-    options.effort,
+    explicitEffort,
     contextMeta.parentEffort,
     resolvedModel.baseModelName,
   );
@@ -128,7 +234,7 @@ export function prepareEphemeralAgent(
       sessionId: contextMeta.sessionId,
       pid,
       model: resolvedModel.baseModelName,
-      taskLabel: options.label || options.role || options.task.slice(0, 40),
+      taskLabel: options.label || options.role || options.archetype || options.task.slice(0, 40),
     },
     resolvedModel.requestedAccount,
   );
@@ -143,10 +249,13 @@ export function prepareEphemeralAgent(
   const fullModelRef = `${resolvedModel.provider}/${leasedAccount}/${resolvedModel.baseModelName}`;
 
   // 4. Generar archivo de definición efímera en disco (Fresh Context Loop)
+  const archetypeHeader = options.archetype ? ` (Arquetipo: ${options.archetype})` : "";
+  const roleLabel = options.role || options.archetype || options.label || "tarea aislada";
+
   const frontmatter = [
     "---",
     `name: ${agentName}`,
-    `description: Agente efímero temporal de DC Studio para ${options.role || options.label || "tarea aislada"}.`,
+    `description: Agente efímero temporal de DC Studio para ${roleLabel}.`,
     `tools: ${tools.join(", ")}`,
     `model: ${fullModelRef}`,
     `effort: ${effectiveEffort}`,
@@ -154,14 +263,11 @@ export function prepareEphemeralAgent(
     "---",
     "",
     "# System Prompt",
-    `Eres un subagente virtual efímero de DC Studio con contexto virgen. Tu misión es única y estrictamente acotada a:`,
+    `Eres un subagente virtual efímero de DC Studio con contexto virgen${archetypeHeader}. Tu misión es única y estrictamente acotada a:`,
     `> ${options.task}`,
     "",
     "## Directivas de Operación",
-    "1. Usa exclusivamente las herramientas asignadas en tu toolset.",
-    "2. No supongas información no provista. Si necesitas una consulta externa al padre, usa subagent_parent_message con kind: 'query'.",
-    "3. Devuelve siempre un Contrato de Artefacto conciso (Resumen Ejecutivo + Archivos Creados + Herramientas Usadas).",
-    "4. Es obligatorio que tu respuesta final contenga texto visible con el Contrato de Artefacto. Nunca finalices tu turno únicamente con pensamientos internos.",
+    ...legoPlan.directives.map((d, idx) => `${idx + 1}. ${d}`),
     "",
     ...(options.seedContext
       ? ["## Contexto Semilla (Seed Context)", options.seedContext, ""]

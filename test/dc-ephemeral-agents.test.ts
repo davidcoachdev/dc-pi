@@ -44,6 +44,7 @@ import {
   cleanupEphemeralAgent,
   dcCleanOrphanedEphemeralAgents,
   isolateSpecializedToolsForOrchestrator,
+  assembleLegoAgentPlan,
 } from "../src/features/dc-agents/core/dc-ephemeral-manager.ts";
 
 import { DcTaxisPanel } from "../src/features/dc-agents/views/dc-taxis-panel.ts";
@@ -833,4 +834,75 @@ test("dc-ephemeral-types: Tool Bricks, Behavior Bricks, and Canonical Archetypes
   assert.ok(DC_TOOL_PRESETS.verifier.includes("read"));
   assert.ok(DC_TOOL_PRESETS.verifier.includes("bash"));
   assert.ok(!DC_TOOL_PRESETS.verifier.includes("edit")); // verifier no puede escribir
+});
+
+test("dc-ephemeral-manager: assembleLegoAgentPlan builds archetypes and custom lego compositions", () => {
+  // 1. Arquetipo canónico odd-worker
+  const workerPlan = assembleLegoAgentPlan({
+    task: "Implementar parser TDD",
+    archetype: "odd-worker",
+  });
+  assert.equal(workerPlan.archetype, "odd-worker");
+  assert.equal(workerPlan.recommendedModel, "gemini-3.8-flash-high");
+  assert.equal(workerPlan.defaultEffort, "high");
+  assert.ok(workerPlan.tools.includes("read"));
+  assert.ok(workerPlan.tools.includes("edit"));
+  assert.ok(workerPlan.tools.includes("write"));
+  assert.ok(workerPlan.tools.includes("bash"));
+  assert.ok(workerPlan.directives.some((d) => d.includes("RED")));
+  assert.ok(workerPlan.directives.some((d) => d.includes("Allowed edit surfaces")));
+  assert.ok(workerPlan.directives.some((d) => d.includes("Contrato de Artefacto")));
+  assert.ok(workerPlan.directives.some((d) => d.includes("texto visible")));
+
+  // 2. Arquetipo canónico odd-verifier (solo lectura + tests)
+  const verifierPlan = assembleLegoAgentPlan({
+    task: "Verificar suite de tests",
+    archetype: "odd-verifier",
+  });
+  assert.ok(verifierPlan.tools.includes("bash"));
+  assert.ok(verifierPlan.tools.includes("read"));
+  assert.ok(!verifierPlan.tools.includes("edit")); // nunca puede escribir
+
+  // 3. Composición dinámica con legos (toolBricks + behaviorBricks)
+  const customPlan = assembleLegoAgentPlan({
+    task: "Investigar API y probar endpoint",
+    toolBricks: ["fs-read", "browser", "services"],
+    behaviorBricks: ["read-only-analyst", "source-verification"],
+  });
+  assert.ok(customPlan.tools.includes("read"));
+  assert.ok(customPlan.tools.includes("dc_browser_navigate"));
+  assert.ok(customPlan.tools.includes("dc_service_status"));
+  assert.ok(!customPlan.tools.includes("edit")); // no fs-write
+  assert.ok(customPlan.directives.some((d) => d.includes("fuente primaria")));
+  assert.ok(customPlan.directives.some((d) => d.includes("solo lectura")));
+
+  // 4. prepareEphemeralAgent con arquetipo odd-worker
+  const plan = prepareEphemeralAgent(
+    {
+      task: "Refactorizar modulo de pagos",
+      archetype: "odd-worker",
+    },
+    {
+      sessionId: "test-sess-lego",
+      parentModel: "cpam/ac05/gemini-3.8-flash-high",
+      pid: process.pid,
+    },
+  );
+
+  assert.ok(plan.agentName.startsWith("dc-ephem-"));
+  assert.equal(plan.effectiveEffort, "high");
+  assert.ok(plan.tools.includes("edit"));
+  assert.ok(plan.tools.includes("bash"));
+
+  const md = fs.readFileSync(plan.agentFilePath, "utf8");
+  assert.ok(md.includes("Arquetipo: odd-worker"));
+  assert.ok(md.includes("RED"));
+
+  cleanupEphemeralAgent(plan, {
+    sessionId: "test-sess-lego",
+    startedAt: Date.now() - 1000,
+    endedAt: Date.now(),
+    status: "completed",
+  });
+  assert.equal(fs.existsSync(plan.agentFilePath), false);
 });
