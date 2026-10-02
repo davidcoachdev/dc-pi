@@ -217,26 +217,27 @@ export function acquireOrchestratorTaxi(
   fleetPath: string = FLEET_STATE_PATH,
   pid: number = process.pid,
   allowedAccounts?: string[],
+  fallbackBaseModel: string = "gemini-3.8-flash-high",
+  fallbackProvider: string = "cpam",
 ): { account: string; modelId: string; changed: boolean } | null {
-  if (!modelId || !modelId.includes("/")) return null;
-
-  const parts = modelId.split("/");
-  let currentAccount = "";
-  let accountIndex = -1;
-
-  for (let i = 0; i < parts.length; i++) {
-    const lower = parts[i].toLowerCase();
-    if (lower.startsWith("ac")) {
-      currentAccount = lower;
-      accountIndex = i;
-      break;
-    }
-  }
-
-  if (!currentAccount) return null;
-
   const state = loadFleetState(fleetPath, allowedAccounts);
   reapAbandonedTaxis(state);
+
+  let currentAccount = "";
+  let accountIndex = -1;
+  let parts: string[] = [];
+
+  if (modelId && modelId.includes("/")) {
+    parts = modelId.split("/");
+    for (let i = 0; i < parts.length; i++) {
+      const lower = parts[i].toLowerCase();
+      if (lower.startsWith("ac")) {
+        currentAccount = lower;
+        accountIndex = i;
+        break;
+      }
+    }
+  }
 
   // Liberar cualquier taxi previo de esta misma sesión y PID que ya no use
   for (const unit of Object.values(state.fleet)) {
@@ -251,47 +252,53 @@ export function acquireOrchestratorTaxi(
     }
   }
 
-  const preferredUnit = state.fleet[currentAccount];
+  // Caso 1: La cuenta preferida es de CPAM ac* y está libre o ya pertenece a este mismo proceso
+  if (currentAccount && state.fleet[currentAccount]) {
+    const preferredUnit = state.fleet[currentAccount];
+    const isMine =
+      preferredUnit?.passenger?.pid === pid ||
+      preferredUnit?.passenger?.sessionId === sessionId;
+    const isFree = preferredUnit?.status === "libre";
 
-  // Caso 1: La cuenta preferida está libre o ya pertenece a este mismo proceso
-  const isMine =
-    preferredUnit?.passenger?.pid === pid ||
-    preferredUnit?.passenger?.sessionId === sessionId;
-  const isFree = preferredUnit?.status === "libre";
+    if (isFree || isMine) {
+      preferredUnit.status = "ocupado";
+      preferredUnit.passenger = {
+        type: "orchestrator",
+        sessionId,
+        pid,
+        model: modelId!,
+        taskLabel: "Sesión Principal (Orquestador)",
+        startedAt: preferredUnit.passenger?.startedAt || Date.now(),
+        heartbeatAt: Date.now(),
+      };
+      saveFleetState(state, fleetPath);
 
-  if (preferredUnit && (isFree || isMine)) {
-    preferredUnit.status = "ocupado";
-    preferredUnit.passenger = {
-      type: "orchestrator",
-      sessionId,
-      pid,
-      model: modelId,
-      taskLabel: "Sesión Principal (Orquestador)",
-      startedAt: preferredUnit.passenger?.startedAt || Date.now(),
-      heartbeatAt: Date.now(),
-    };
-    saveFleetState(state, fleetPath);
+      appendTaxiLog("INFO", "TAXI_ORCHESTRATOR_ACQUIRED", {
+        account: currentAccount,
+        sessionId,
+        pid,
+        modelId,
+        changed: false,
+      });
 
-    appendTaxiLog("INFO", "TAXI_ORCHESTRATOR_ACQUIRED", {
-      account: currentAccount,
-      sessionId,
-      pid,
-      modelId,
-      changed: false,
-    });
-
-    return { account: currentAccount, modelId, changed: false };
+      return { account: currentAccount, modelId: modelId!, changed: false };
+    }
   }
 
-  // Caso 2: La cuenta preferida está ocupada por OTRA sesión viva -> Tomar un taxi libre!
+  // Caso 2: Si el modelo no era de CPAM (ej: Kimi, OpenCode) O si su cuenta ac* está ocupada:
+  // ¡Tomar el primer Taxi LIBRE de la flota de CPAM!
   for (const [ac, unit] of Object.entries(state.fleet)) {
     if (unit.status === "libre") {
       unit.status = "ocupado";
 
-      // Reemplazar la cuenta en el modelId
-      const newParts = [...parts];
-      newParts[accountIndex] = ac;
-      const newModelId = newParts.join("/");
+      let newModelId: string;
+      if (currentAccount && accountIndex >= 0 && parts.length > 0) {
+        const newParts = [...parts];
+        newParts[accountIndex] = ac;
+        newModelId = newParts.join("/");
+      } else {
+        newModelId = `${fallbackProvider}/${ac}/${fallbackBaseModel}`;
+      }
 
       unit.passenger = {
         type: "orchestrator",
@@ -305,11 +312,11 @@ export function acquireOrchestratorTaxi(
       saveFleetState(state, fleetPath);
 
       appendTaxiLog("INFO", "TAXI_ORCHESTRATOR_AUTO_REASSIGNED", {
-        preferredAccount: currentAccount,
+        preferredAccount: currentAccount || "none (fallback)",
         reassignedAccount: ac,
         sessionId,
         pid,
-        originalModelId: modelId,
+        originalModelId: modelId || "none",
         newModelId,
       });
 

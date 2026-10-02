@@ -112,30 +112,31 @@ export default function dcAgentsExtension(pi: ExtensionAPI): void {
       // 2. Sistema de Taxis: Adquirir taxi libre para este orquestador
       const currentModelId = ctx.model ? `${ctx.model.provider || "cpam"}/${ctx.model.id}` : undefined;
       const sessionId = ctx.sessionManager?.getSessionId?.() || `ambient-${Date.now()}`;
-      if (currentModelId) {
-        const taxiResult = acquireOrchestratorTaxi(sessionId, currentModelId);
-        if (taxiResult && taxiResult.changed && taxiResult.modelId) {
-          try {
-            const provider = ctx.model?.provider ? String(ctx.model.provider) : "cpam";
-            const targetId = taxiResult.modelId.replace(new RegExp(`^${provider}/`), "");
-            const available = await (ctx as any).modelRegistry?.getAvailable?.();
-            const foundModel = ctx.modelRegistry?.find?.(provider, targetId)
-              || (Array.isArray(available) ? available.find((m: any) => m.id === targetId || m.id === taxiResult.modelId) : undefined);
+      
+      const taxiResult = acquireOrchestratorTaxi(sessionId, currentModelId);
+      if (taxiResult && taxiResult.changed && taxiResult.modelId) {
+        try {
+          const slashIdx = taxiResult.modelId.indexOf("/");
+          const targetProvider = slashIdx > 0 ? taxiResult.modelId.slice(0, slashIdx) : "cpam";
+          const targetId = slashIdx > 0 ? taxiResult.modelId.slice(slashIdx + 1) : taxiResult.modelId;
 
-            if (foundModel) {
-              await (pi as any).setModel(foundModel);
-              if (ctx.hasUI) {
-                dcNotifier.notify(
-                  ctx,
-                  "🚕 Flota de Taxis",
-                  `Taxi ${taxiResult.account.toUpperCase()} asignado a esta terminal (cuenta default ocupada)`,
-                  "info",
-                );
-              }
+          const available = await (ctx as any).modelRegistry?.getAvailable?.();
+          const foundModel = ctx.modelRegistry?.find?.(targetProvider, targetId)
+            || (Array.isArray(available) ? available.find((m: any) => m.id === targetId || m.id === taxiResult.modelId) : undefined);
+
+          if (foundModel) {
+            await (pi as any).setModel(foundModel);
+            if (ctx.hasUI) {
+              dcNotifier.notify(
+                ctx,
+                "🚕 Flota de Taxis",
+                `Taxi ${taxiResult.account.toUpperCase()} asignado a esta terminal (${targetId})`,
+                "info",
+              );
             }
-          } catch {
-            /* ignore fallback */
           }
+        } catch {
+          /* ignore fallback */
         }
       }
 

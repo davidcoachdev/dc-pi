@@ -259,6 +259,46 @@ test("dc-taxi-dispatcher: acquireOrchestratorTaxi prevents collisions between mu
   }
 });
 
+test("dc-taxi-dispatcher: acquireOrchestratorTaxi auto-binds free CPAM taxi when starting with non-CPAM model or no default", () => {
+  const tempDir = createTempDir("kimi-fallback");
+  const fleetPath = path.join(tempDir, "dc-taxis.json");
+
+  try {
+    const customAccounts = ["ac01", "ac02"];
+    saveFleetState(createInitialFleetState(customAccounts), fleetPath);
+
+    // Terminal arranca con un modelo externo (ej: Kimi de opencode-go)
+    const resKimi = acquireOrchestratorTaxi(
+      "sess-kimi",
+      "opencode-go/kimi-k2.7-code",
+      fleetPath,
+      process.pid,
+      customAccounts,
+    );
+
+    assert.ok(resKimi);
+    assert.equal(resKimi.changed, true);
+    assert.equal(resKimi.account, "ac01");
+    assert.equal(resKimi.modelId, "cpam/ac01/gemini-3.8-flash-high");
+
+    // Terminal arranca sin modelo previo (undefined)
+    const resNoModel = acquireOrchestratorTaxi(
+      "sess-none",
+      undefined,
+      fleetPath,
+      process.pid + 1,
+      customAccounts,
+    );
+
+    assert.ok(resNoModel);
+    assert.equal(resNoModel.changed, true);
+    assert.equal(resNoModel.account, "ac02");
+    assert.equal(resNoModel.modelId, "cpam/ac02/gemini-3.8-flash-high");
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("dc-effort-policy: calibrateEffortForTask respects presets, keywords and parent fallback", () => {
   // Presets
   assert.equal(calibrateEffortForTask("extraer video", "youtube"), "low");
