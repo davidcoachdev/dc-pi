@@ -3,6 +3,7 @@ import { openDcModal } from "../../ui/dc-modal.ts";
 import { dcNotifier } from "../../integrations/dc-notify/dc-notifier.ts";
 import { syncDcAgents, syncDcSkills, type DcAgentsSyncResult } from "./core/dc-agents-sync.ts";
 import { dcCleanOrphanedEphemeralAgents } from "./core/dc-ephemeral-manager.ts";
+import { syncOrchestratorTaxi } from "./core/dc-taxi-dispatcher.ts";
 import { registerDcEphemeralTools } from "./tools/dc-ephemeral-tools.ts";
 import { DcAgentsPanel } from "./views/dc-agents-panel.ts";
 import { DcTaxisPanel } from "./views/dc-taxis-panel.ts";
@@ -16,16 +17,44 @@ export function openTaxisViewer(ctx: ExtensionContext): void {
     return;
   }
 
+  let panelRef: DcTaxisPanel | undefined;
+
   openDcModal(ctx, {
     title: "🚕 Flota de Taxis & Consumo de Tokens (DC Studio)",
     width: "88%",
     maxHeight: "82%",
-    footer: {
-      left: " [1-3] Pestañas  [↑/↓] Navegar  [r] Recargar ",
-      right: " [Esc/q] Salir ",
+    paddingX: 0,
+    footer: () => panelRef?.getFooterInfo() ?? {
+      left: "  Sincronizando estado de Taxis...",
+      right: "[ Refrescando... ]  ",
+    },
+    onFooterRightClick: async () => {
+      if (panelRef) {
+        panelRef.setLoading(true);
+        panelRef.reloadData();
+        await new Promise((r) => setTimeout(r, 600));
+        panelRef.setLoading(false);
+        dcNotifier.notify(ctx, "Taxis", "Flota de Taxis sincronizada", "info");
+      }
+    },
+    onClose: () => {
+      panelRef?.destroy();
     },
     frame: "double",
-    content: (done, theme) => new DcTaxisPanel(theme, () => done(undefined)),
+    content: (done, theme, tui) => {
+      const panel = new DcTaxisPanel({
+        theme,
+        onDone: () => done(undefined),
+        onRefresh: async () => {
+          panel.reloadData();
+          await new Promise((r) => setTimeout(r, 600));
+          tui.requestRender();
+        },
+        requestRender: () => tui.requestRender(),
+      });
+      panelRef = panel;
+      return panel;
+    },
   });
 }
 
@@ -69,7 +98,12 @@ export default function dcAgentsExtension(pi: ExtensionAPI): void {
       // 1. Sweeper de agentes efímeros huérfanos
       dcCleanOrphanedEphemeralAgents();
 
-      // 2. Sincronización de agentes y skills estáticos
+      // 2. Sincronizar el orquestador activo con su taxi en la flota
+      const currentModelId = ctx.model ? `${ctx.model.provider || "cpam"}/${ctx.model.id}` : undefined;
+      const sessionId = ctx.sessionManager?.getSessionId?.() || `ambient-${Date.now()}`;
+      syncOrchestratorTaxi(sessionId, currentModelId);
+
+      // 3. Sincronización de agentes y skills estáticos
       const agentsReport: DcAgentsSyncResult = syncDcAgents();
       const skillsReport: DcAgentsSyncResult = syncDcSkills();
 
@@ -91,6 +125,17 @@ export default function dcAgentsExtension(pi: ExtensionAPI): void {
       }
     } catch {
       /* noop en startup */
+    }
+  });
+
+  // Sincronizar el taxi si cambia el modelo en caliente
+  pi.on("model_select", (_event, ctx) => {
+    try {
+      const currentModelId = ctx.model ? `${ctx.model.provider || "cpam"}/${ctx.model.id}` : undefined;
+      const sessionId = ctx.sessionManager?.getSessionId?.() || `ambient-${Date.now()}`;
+      syncOrchestratorTaxi(sessionId, currentModelId);
+    } catch {
+      /* noop */
     }
   });
 

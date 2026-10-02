@@ -1,8 +1,10 @@
 /**
- * dc-taxi-dispatcher.ts — Central de Despacho de la Flota de Taxis (Libre / Ocupado).
+ * dc-taxi-dispatcher.ts — Central de Despacho de la Flota de Taxis (Libre / Ocupado / Recargando).
  *
  * Coordina el estado de las cuentas de IA entre todas las sesiones concurrentes de Pi.
- * Implementa auto-recuperación de zombis mediante verificación de PID en el OS.
+ * Implementa auto-recuperación de zombis mediante verificación de PID en el OS,
+ * sincronización dinámica de cuentas desde models.json (ac01..ac15, ac20...)
+ * y estado 'recargando' para cuentas con <5% de cuota hasta recuperar >=60%.
  * Cumple con la Directiva 1 (cero dependencias de Pi) y Directiva 2 (aislado en dc-studio/).
  */
 
@@ -16,6 +18,8 @@ import type {
 } from "./dc-ephemeral-types.ts";
 import { DEFAULT_DC_AGENTS_CONFIG } from "./dc-ephemeral-types.ts";
 import { appendTaxiLog } from "./dc-taxi-logger.ts";
+import { discoverCpamAccounts } from "./dc-taxi-accounts.ts";
+import { fetchAllTaxisQuotas, type DcTaxiQuotaInfo } from "./dc-taxi-quota.ts";
 
 const FLEET_STATE_PATH = path.join(os.homedir(), ".pi", "agent", "dc-studio", "dc-taxis.json");
 
@@ -36,17 +40,17 @@ export function isProcessAlive(pid: number): boolean {
     return true;
   } catch (err: unknown) {
     const error = err as NodeJS.ErrnoException;
-    // EPERM significa que el proceso existe pero pertenece a otro usuario (sigue vivo)
     return error.code === "EPERM";
   }
 }
 
 /**
- * Inicializa la flota por defecto si no existe archivo de estado previo.
+ * Inicializa la flota por defecto descubriendo dinámicamente las cuentas de CPAM.
  */
-export function createInitialFleetState(accounts: string[] = DEFAULT_DC_AGENTS_CONFIG.accountPool.accounts): DcTaxiFleetState {
+export function createInitialFleetState(accounts?: string[]): DcTaxiFleetState {
+  const activeAccounts = accounts && accounts.length > 0 ? accounts : discoverCpamAccounts();
   const fleet: Record<string, DcTaxiUnit> = {};
-  for (const ac of accounts) {
+  for (const ac of activeAccounts) {
     fleet[ac] = {
       account: ac,
       status: "libre",
@@ -60,30 +64,31 @@ export function createInitialFleetState(accounts: string[] = DEFAULT_DC_AGENTS_C
 }
 
 /**
- * Carga el estado actual de la flota desde disco.
+ * Carga el estado actual de la flota desde disco sincronizando cuentas dinámicamente.
  */
 export function loadFleetState(
   fleetPath: string = FLEET_STATE_PATH,
   defaultAccounts?: string[],
 ): DcTaxiFleetState {
-  const fallbackAccounts = defaultAccounts || DEFAULT_DC_AGENTS_CONFIG.accountPool.accounts;
-
   if (!fs.existsSync(fleetPath)) {
-    return createInitialFleetState(fallbackAccounts);
+    const discovered = defaultAccounts && defaultAccounts.length > 0 ? defaultAccounts : discoverCpamAccounts();
+    return createInitialFleetState(discovered);
   }
 
   try {
     const raw = fs.readFileSync(fleetPath, "utf8");
     const parsed = JSON.parse(raw);
     if (!parsed || typeof parsed !== "object" || !parsed.fleet || Object.keys(parsed.fleet).length === 0) {
-      return createInitialFleetState(fallbackAccounts);
+      const discovered = defaultAccounts && defaultAccounts.length > 0 ? defaultAccounts : discoverCpamAccounts();
+      return createInitialFleetState(discovered);
     }
 
     const fleet: Record<string, DcTaxiUnit> = { ...parsed.fleet };
 
-    // Si se pasaron cuentas default explícitas, asegurar que existan
-    if (defaultAccounts && defaultAccounts.length > 0) {
-      for (const ac of defaultAccounts) {
+    // Solo sincronizar cuentas automáticas si no se pasaron cuentas explícitas
+    if (!defaultAccounts || defaultAccounts.length === 0) {
+      const discovered = discoverCpamAccounts();
+      for (const ac of discovered) {
         if (!fleet[ac]) {
           fleet[ac] = { account: ac, status: "libre", passenger: null };
         }
@@ -95,7 +100,8 @@ export function loadFleetState(
       lastUpdated: typeof parsed.lastUpdated === "number" ? parsed.lastUpdated : Date.now(),
     };
   } catch {
-    return createInitialFleetState(fallbackAccounts);
+    const discovered = defaultAccounts && defaultAccounts.length > 0 ? defaultAccounts : discoverCpamAccounts();
+    return createInitialFleetState(discovered);
   }
 }
 
@@ -110,7 +116,6 @@ export function saveFleetState(state: DcTaxiFleetState, fleetPath: string = FLEE
     fs.writeFileSync(tempPath, JSON.stringify(state, null, 2) + "\n", "utf8");
     fs.renameSync(tempPath, fleetPath);
   } catch {
-    /* fallback directo si rename falla */
     try {
       fs.writeFileSync(fleetPath, JSON.stringify(state, null, 2) + "\n", "utf8");
     } catch {
@@ -121,7 +126,6 @@ export function saveFleetState(state: DcTaxiFleetState, fleetPath: string = FLEE
 
 /**
  * Barre y recupera taxis zombis cuyo proceso murió o cuyo TTL expiró.
- * Devuelve la cantidad de taxis recuperados.
  */
 export function reapAbandonedTaxis(
   state: DcTaxiFleetState,
@@ -157,17 +161,107 @@ export function reapAbandonedTaxis(
 }
 
 /**
- * Solicita y arrienda un taxi libre para un pasajero (orquestador o subagente).
+ * Aplica la política de cuota mínima:
+ * Si una cuenta tiene < 5% en Gemini 5h, entra en 'recargando'.
+ * No vuelve a 'libre' hasta tener al menos >= 60% de cuota.
+ */
+export function updateTaxiRechargingState(
+  unit: DcTaxiUnit,
+  quotaInfo?: DcTaxiQuotaInfo,
+): void {
+  if (!quotaInfo || quotaInfo.gemini5hPct === null) return;
+
+  const pct = quotaInfo.gemini5hPct;
+
+  // Si está ocupada por un pasajero real, no interrumpimos abruptamente salvo que esté libre
+  if (unit.status === "libre" && pct < 5) {
+    unit.status = "recargando";
+    appendTaxiLog("WARN", "TAXI_RECHARGING_ENTERED", {
+      account: unit.account,
+      pct,
+      resetTimeIso: quotaInfo.resetTimeIso,
+    });
+  } else if (unit.status === "recargando") {
+    if (pct >= 60) {
+      unit.status = "libre";
+      appendTaxiLog("INFO", "TAXI_RECHARGING_RESTORED", {
+        account: unit.account,
+        pct,
+      });
+    }
+  }
+}
+
+/**
+ * Sincroniza el orquestador activo: registra la cuenta que está usando el padre
+ * como 'ocupado' para que ningún subagente la colisione.
+ */
+export function syncOrchestratorTaxi(
+  sessionId: string,
+  modelId?: string,
+  fleetPath: string = FLEET_STATE_PATH,
+  pid: number = process.pid,
+): void {
+  if (!modelId || !modelId.includes("/")) return;
+
+  const parts = modelId.split("/");
+  // Buscar prefijo ac*
+  let account = "";
+  for (const part of parts) {
+    const lower = part.toLowerCase();
+    if (lower.startsWith("ac")) {
+      account = lower;
+      break;
+    }
+  }
+
+  if (!account) return;
+
+  const state = loadFleetState(fleetPath);
+  reapAbandonedTaxis(state);
+
+  // Liberar cualquier taxi previo de esta misma sesión con passenger.type === "orchestrator"
+  for (const unit of Object.values(state.fleet)) {
+    if (unit.passenger && unit.passenger.sessionId === sessionId && unit.passenger.type === "orchestrator" && unit.account !== account) {
+      unit.status = "libre";
+      unit.passenger = null;
+    }
+  }
+
+  const targetUnit = state.fleet[account];
+  if (targetUnit) {
+    targetUnit.status = "ocupado";
+    targetUnit.passenger = {
+      type: "orchestrator",
+      sessionId,
+      pid,
+      model: modelId,
+      taskLabel: "Sesión Principal (Orquestador)",
+      startedAt: Date.now(),
+      heartbeatAt: Date.now(),
+    };
+    saveFleetState(state, fleetPath);
+
+    appendTaxiLog("INFO", "TAXI_ORCHESTRATOR_SYNCED", {
+      account,
+      sessionId,
+      pid,
+      modelId,
+    });
+  }
+}
+
+/**
+ * Solicita y arrienda un taxi libre para un pasajero.
  */
 export function leaseTaxi(
   passengerData: Omit<DcTaxiPassenger, "startedAt" | "heartbeatAt">,
   preferredAccount?: string,
   fleetPath: string = FLEET_STATE_PATH,
   leaseTtlMs: number = DEFAULT_DC_AGENTS_CONFIG.accountPool.leaseTtlMs,
+  allowedAccounts?: string[],
 ): { account: string; unit: DcTaxiUnit } | null {
-  const state = loadFleetState(fleetPath);
-
-  // 1. Limpieza preventiva de zombis antes de buscar
+  const state = loadFleetState(fleetPath, allowedAccounts);
   reapAbandonedTaxis(state, leaseTtlMs);
 
   const now = Date.now();
@@ -177,7 +271,7 @@ export function leaseTaxi(
     heartbeatAt: now,
   };
 
-  // 2. Intentar cuenta preferida si está libre
+  // 1. Intentar cuenta preferida si está estrictamente libre
   if (preferredAccount && state.fleet[preferredAccount] && state.fleet[preferredAccount].status === "libre") {
     const unit = state.fleet[preferredAccount];
     unit.status = "ocupado";
@@ -196,7 +290,7 @@ export function leaseTaxi(
     return { account: preferredAccount, unit };
   }
 
-  // 3. Buscar cualquier taxi libre disponible
+  // 2. Buscar cualquier taxi libre disponible
   for (const [account, unit] of Object.entries(state.fleet)) {
     if (unit.status === "libre") {
       unit.status = "ocupado";
@@ -216,7 +310,7 @@ export function leaseTaxi(
     }
   }
 
-  // 4. Flota agotada
+  // 3. Flota agotada
   appendTaxiLog("WARN", "TAXI_FLEET_EXHAUSTED", {
     requestedBy: fullPassenger.type,
     sessionId: fullPassenger.sessionId,
@@ -234,15 +328,15 @@ export function releaseTaxi(
   account: string,
   sessionId?: string,
   fleetPath: string = FLEET_STATE_PATH,
+  allowedAccounts?: string[],
 ): boolean {
-  const state = loadFleetState(fleetPath);
+  const state = loadFleetState(fleetPath, allowedAccounts);
   const unit = state.fleet[account];
 
   if (!unit || unit.status !== "ocupado") {
     return false;
   }
 
-  // Si se pasa sessionId, validar pertenencia para evitar liberaciones cruzadas espurias
   if (sessionId && unit.passenger && unit.passenger.sessionId !== sessionId) {
     appendTaxiLog("WARN", "TAXI_RELEASE_SESSION_MISMATCH", {
       account,
@@ -268,7 +362,7 @@ export function releaseTaxi(
 }
 
 /**
- * Envía un pulso de vida (heartbeat) para mantener el taxi arrendado y no ser reapeado.
+ * Envía un pulso de vida (heartbeat) para mantener el taxi arrendado.
  */
 export function heartbeatTaxi(
   account: string,
@@ -289,24 +383,30 @@ export function heartbeatTaxi(
 /**
  * Devuelve un resumen estadístico de la flota para TUI y auditoría.
  */
-export function getFleetStatusSummary(fleetPath: string = FLEET_STATE_PATH): {
+export function getFleetStatusSummary(
+  fleetPath: string = FLEET_STATE_PATH,
+  allowedAccounts?: string[],
+): {
   total: number;
   libres: number;
   ocupados: number;
+  recargando: number;
   units: DcTaxiUnit[];
 } {
-  const state = loadFleetState(fleetPath);
+  const state = loadFleetState(fleetPath, allowedAccounts);
   reapAbandonedTaxis(state);
 
   const units = Object.values(state.fleet);
   const total = units.length;
   const libres = units.filter((u) => u.status === "libre").length;
   const ocupados = units.filter((u) => u.status === "ocupado").length;
+  const recargando = units.filter((u) => u.status === "recargando").length;
 
   return {
     total,
     libres,
     ocupados,
+    recargando,
     units,
   };
 }

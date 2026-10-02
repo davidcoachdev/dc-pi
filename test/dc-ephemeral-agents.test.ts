@@ -100,6 +100,8 @@ test("dc-taxi-dispatcher: leaseTaxi respects preferred account and allocates nex
       },
       "ac02",
       fleetPath,
+      300000,
+      customAccounts,
     );
 
     assert.ok(lease1);
@@ -116,6 +118,8 @@ test("dc-taxi-dispatcher: leaseTaxi respects preferred account and allocates nex
       },
       "ac02",
       fleetPath,
+      300000,
+      customAccounts,
     );
 
     assert.ok(lease2);
@@ -132,16 +136,18 @@ test("dc-taxi-dispatcher: leaseTaxi respects preferred account and allocates nex
       },
       undefined,
       fleetPath,
+      300000,
+      customAccounts,
     );
 
     assert.equal(lease3, null);
 
     // 4. Liberar ac02
-    const released = releaseTaxi("ac02", "sess-1", fleetPath);
+    const released = releaseTaxi("ac02", "sess-1", fleetPath, customAccounts);
     assert.equal(released, true);
 
     // 5. Ahora ac02 vuelve a estar libre
-    const summary = getFleetStatusSummary(fleetPath);
+    const summary = getFleetStatusSummary(fleetPath, customAccounts);
     assert.equal(summary.libres, 1);
     assert.equal(summary.ocupados, 1);
   } finally {
@@ -382,8 +388,12 @@ test("dc-taxis-panel: renders all 3 tabs cleanly without crashing", () => {
   } as any;
 
   let doneCalled = false;
-  const panel = new DcTaxisPanel(fakeTheme, () => {
-    doneCalled = true;
+  const panel = new DcTaxisPanel({
+    theme: fakeTheme,
+    onDone: () => {
+      doneCalled = true;
+    },
+    requestRender: () => {},
   });
 
   // 1. Render Pestaña 1 (Flota)

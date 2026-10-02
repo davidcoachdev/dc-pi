@@ -5,7 +5,7 @@
  * Cumple estrictamente con la Directiva 1 de DC Studio (cero dependencias de Pi / pi-tui).
  */
 
-export type DcTaxiStatus = "libre" | "ocupado";
+export type DcTaxiStatus = "libre" | "ocupado" | "recargando";
 
 export type DcPassengerType = "orchestrator" | "subagent" | "ephemeral_subagent";
 
