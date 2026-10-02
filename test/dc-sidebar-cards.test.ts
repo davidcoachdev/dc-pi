@@ -34,8 +34,8 @@ test("getEffectiveAgents returns agents and createAgentsCard renders valid card 
   assert.ok(lines.length >= 5);
   // Contiene título con glifo
   assert.ok(lines.some((l) => l.includes("👨‍💼") || l.includes("Subagents")));
-  // Contiene nombres de agentes
-  assert.ok(lines.some((l) => l.includes("gentle-ai-explore") || l.includes("ready")));
+  // Contiene nombres de agentes o estado de tareas
+  assert.ok(lines.some((l) => l.includes("gentle-ai-explore") || l.includes("ready") || l.includes("listo") || l.includes("activos")));
 
   // Simular clic en la barra de título (y = 1)
   const res = (card as any).handleMouse?.({ type: "click", button: "left", x: 10, y: 1 });

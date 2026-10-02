@@ -21,6 +21,7 @@ import {
 import {
   calibrateEffortForTask,
   resolveExecutionModel,
+  isGeminiModel,
   loadDcAgentsConfig,
   saveDcAgentsConfig,
 } from "../src/features/dc-agents/core/dc-effort-policy.ts";
@@ -43,11 +44,17 @@ import {
   cleanupEphemeralAgent,
   dcCleanOrphanedEphemeralAgents,
   isolateSpecializedToolsForOrchestrator,
+  assembleLegoAgentPlan,
 } from "../src/features/dc-agents/core/dc-ephemeral-manager.ts";
 
 import { DcTaxisPanel } from "../src/features/dc-agents/views/dc-taxis-panel.ts";
 import { registerDcEphemeralTools } from "../src/features/dc-agents/tools/dc-ephemeral-tools.ts";
-import { DC_TOOL_PRESETS } from "../src/features/dc-agents/core/dc-ephemeral-types.ts";
+import {
+  DC_TOOL_PRESETS,
+  DC_TOOL_BRICKS,
+  DC_BEHAVIOR_BRICKS,
+  DC_AGENT_ARCHETYPES,
+} from "../src/features/dc-agents/core/dc-ephemeral-types.ts";
 
 function createTempDir(prefix: string): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), `dc-test-${prefix}-`));
@@ -320,9 +327,21 @@ test("dc-effort-policy: calibrateEffortForTask respects presets, keywords and pa
   // Fallback al padre
   assert.equal(calibrateEffortForTask("tarea general sin preset ni keywords", undefined, undefined, "high"), "high");
   assert.equal(calibrateEffortForTask("tarea general", undefined, undefined, "low"), "low");
+
+  // Default canónico para subagentes sin preset ni keywords: high
+  assert.equal(calibrateEffortForTask("tarea general sin preset"), "high");
+  // Preset scout y research calibrados a high para evitar paradas prematuras
+  assert.equal(calibrateEffortForTask("mapear estructura", "scout"), "high");
+  assert.equal(calibrateEffortForTask("investigar dependencias", "research"), "high");
 });
 
 test("dc-effort-policy: resolveExecutionModel enforces provider policy and parses account refs", () => {
+  // 0. isGeminiModel guard
+  assert.equal(isGeminiModel("gemini-3.8-flash-high"), true);
+  assert.equal(isGeminiModel("gemini-3-flash"), true);
+  assert.equal(isGeminiModel("claude-sonnet-4-6"), false);
+  assert.equal(isGeminiModel("gpt-5.5"), false);
+
   // 1. Force Gemini
   const res1 = resolveExecutionModel({
     config: {
@@ -348,6 +367,14 @@ test("dc-effort-policy: resolveExecutionModel enforces provider policy and parse
   assert.equal(res2.provider, "cpam");
   assert.equal(res2.requestedAccount, "ac03");
   assert.equal(res2.baseModelName, "gemini-3.8-flash-high");
+
+  // 3. Intento de solicitar modelo no-Gemini (ej: Claude) es neutralizado y redirigido a Gemini
+  const resClaude = resolveExecutionModel({
+    requestedModel: "cpam/ac04/claude-sonnet-4-6",
+  });
+  assert.equal(resClaude.provider, "cpam");
+  assert.equal(resClaude.requestedAccount, "ac04");
+  assert.equal(resClaude.baseModelName, "gemini-3.8-flash-high"); // Salvaguarda de cuotas activada
 });
 
 test("dc-taxi-history: records trips, bounds history and computes aggregate metrics", () => {
@@ -492,8 +519,50 @@ test("dc-ephemeral-tools: registerDcEphemeralTools registers tool in ExtensionAP
   assert.equal(registered.length, 1);
   assert.equal(registered[0].name, "dc_ephemeral_agent_run");
   assert.ok(registered[0].parameters.properties.task);
+  assert.ok(registered[0].parameters.properties.archetype);
+  assert.ok(registered[0].parameters.properties.toolBricks);
+  assert.ok(registered[0].parameters.properties.behaviorBricks);
   assert.ok(registered[0].parameters.properties.toolPreset);
   assert.ok(registered[0].parameters.properties.effort);
+});
+
+test("dc-ephemeral-tools: dc_ephemeral_agent_run executes with archetype and cleans up in finally", async () => {
+  const registered: any[] = [];
+  const fakePi = {
+    registerTool(toolDef: any) {
+      registered.push(toolDef);
+    },
+  } as any;
+
+  registerDcEphemeralTools(fakePi);
+  const tool = registered[0];
+
+  let executeToolCalled = false;
+  let executedAgentName = "";
+  const fakeCtx = {
+    sessionManager: { getSessionId: () => "sess-archetype-test" },
+    model: { provider: "cpam", id: "ac05/gemini-3.8-flash-high" },
+    executeTool: async (toolName: string, args: any) => {
+      executeToolCalled = true;
+      executedAgentName = args.agent;
+      return {
+        toolCall: { id: "call-1", name: toolName, arguments: args },
+        result: {
+          content: [{ type: "text", text: "Reporte de scout con lego" }],
+          details: { ok: true },
+        },
+      };
+    },
+  };
+
+  const outcome = await tool.execute("call-arch-1", {
+    task: "Mapear modulo x",
+    archetype: "odd-scout",
+  }, undefined, undefined, fakeCtx);
+
+  assert.equal(executeToolCalled, true);
+  assert.ok(executedAgentName.startsWith("dc-ephem-"));
+  assert.ok(outcome.content[0].text.includes("Reporte de scout"));
 });
 
 test("dc-ephemeral-tools: dc_ephemeral_agent_run executes subagent atomically and cleans up in finally", async () => {
@@ -769,4 +838,113 @@ test("dc-taxis-panel: Enter or Space on taxi unit opens live telemetry detail, E
   // El render debe volver a la lista general de la flota
   const listLines = panel.render(80);
   assert.ok(listLines.some((l) => l.includes("Flota de Taxis")));
+});
+
+test("dc-ephemeral-types: Tool Bricks, Behavior Bricks, and Canonical Archetypes Catalog contracts", () => {
+  // 1. Tool Bricks
+  assert.ok(Array.isArray(DC_TOOL_BRICKS["fs-read"]));
+  assert.ok(DC_TOOL_BRICKS["fs-read"].includes("read"));
+  assert.ok(DC_TOOL_BRICKS["fs-read"].includes("grep"));
+  assert.ok(DC_TOOL_BRICKS["fs-read"].includes("find"));
+
+  assert.ok(DC_TOOL_BRICKS["fs-write"].includes("edit"));
+  assert.ok(DC_TOOL_BRICKS["fs-write"].includes("write"));
+  assert.ok(DC_TOOL_BRICKS["terminal"].includes("bash"));
+  assert.ok(DC_TOOL_BRICKS["code-intel"].includes("dc_codegraph_status"));
+
+  // 2. Behavior Bricks
+  assert.ok(DC_BEHAVIOR_BRICKS["strict-tdd"].includes("RED"));
+  assert.ok(DC_BEHAVIOR_BRICKS["strict-tdd"].includes("GREEN"));
+  assert.ok(DC_BEHAVIOR_BRICKS["read-only-analyst"].includes("solo lectura"));
+  assert.ok(DC_BEHAVIOR_BRICKS["artifact-contract"].includes("Contrato de Artefacto"));
+  assert.ok(DC_BEHAVIOR_BRICKS["non-empty-response"].includes("texto visible"));
+
+  // 3. Catálogo de Arquetipos Canónicos
+  const archetypes = ["odd-scout", "odd-worker", "odd-verifier", "dc-researcher", "dc-media", "dc-browser-inspector", "dc-service-ops", "dc-smoke"] as const;
+  for (const name of archetypes) {
+    const arch = DC_AGENT_ARCHETYPES[name];
+    assert.ok(arch, `Archetype ${name} must exist`);
+    assert.equal(arch.name, name);
+    assert.ok(arch.toolBricks.length > 0, `${name} must have toolBricks`);
+    assert.ok(arch.behaviorBricks.length > 0, `${name} must have behaviorBricks`);
+    assert.ok(arch.recommendedModel?.includes("gemini"), `${name} must recommend Gemini model`);
+  }
+
+  // 4. Presets retrocompatibles worker y verifier
+  assert.ok(DC_TOOL_PRESETS.worker.includes("edit"));
+  assert.ok(DC_TOOL_PRESETS.worker.includes("bash"));
+  assert.ok(DC_TOOL_PRESETS.verifier.includes("read"));
+  assert.ok(DC_TOOL_PRESETS.verifier.includes("bash"));
+  assert.ok(!DC_TOOL_PRESETS.verifier.includes("edit")); // verifier no puede escribir
+});
+
+test("dc-ephemeral-manager: assembleLegoAgentPlan builds archetypes and custom lego compositions", () => {
+  // 1. Arquetipo canónico odd-worker
+  const workerPlan = assembleLegoAgentPlan({
+    task: "Implementar parser TDD",
+    archetype: "odd-worker",
+  });
+  assert.equal(workerPlan.archetype, "odd-worker");
+  assert.equal(workerPlan.recommendedModel, "gemini-3.8-flash-high");
+  assert.equal(workerPlan.defaultEffort, "high");
+  assert.ok(workerPlan.tools.includes("read"));
+  assert.ok(workerPlan.tools.includes("edit"));
+  assert.ok(workerPlan.tools.includes("write"));
+  assert.ok(workerPlan.tools.includes("bash"));
+  assert.ok(workerPlan.directives.some((d) => d.includes("RED")));
+  assert.ok(workerPlan.directives.some((d) => d.includes("Allowed edit surfaces")));
+  assert.ok(workerPlan.directives.some((d) => d.includes("Contrato de Artefacto")));
+  assert.ok(workerPlan.directives.some((d) => d.includes("texto visible")));
+
+  // 2. Arquetipo canónico odd-verifier (solo lectura + tests)
+  const verifierPlan = assembleLegoAgentPlan({
+    task: "Verificar suite de tests",
+    archetype: "odd-verifier",
+  });
+  assert.ok(verifierPlan.tools.includes("bash"));
+  assert.ok(verifierPlan.tools.includes("read"));
+  assert.ok(!verifierPlan.tools.includes("edit")); // nunca puede escribir
+
+  // 3. Composición dinámica con legos (toolBricks + behaviorBricks)
+  const customPlan = assembleLegoAgentPlan({
+    task: "Investigar API y probar endpoint",
+    toolBricks: ["fs-read", "browser", "services"],
+    behaviorBricks: ["read-only-analyst", "source-verification"],
+  });
+  assert.ok(customPlan.tools.includes("read"));
+  assert.ok(customPlan.tools.includes("dc_browser_navigate"));
+  assert.ok(customPlan.tools.includes("dc_service_status"));
+  assert.ok(!customPlan.tools.includes("edit")); // no fs-write
+  assert.ok(customPlan.directives.some((d) => d.includes("fuente primaria")));
+  assert.ok(customPlan.directives.some((d) => d.includes("solo lectura")));
+
+  // 4. prepareEphemeralAgent con arquetipo odd-worker
+  const plan = prepareEphemeralAgent(
+    {
+      task: "Refactorizar modulo de pagos",
+      archetype: "odd-worker",
+    },
+    {
+      sessionId: "test-sess-lego",
+      parentModel: "cpam/ac05/gemini-3.8-flash-high",
+      pid: process.pid,
+    },
+  );
+
+  assert.ok(plan.agentName.startsWith("dc-ephem-"));
+  assert.equal(plan.effectiveEffort, "high");
+  assert.ok(plan.tools.includes("edit"));
+  assert.ok(plan.tools.includes("bash"));
+
+  const md = fs.readFileSync(plan.agentFilePath, "utf8");
+  assert.ok(md.includes("Arquetipo: odd-worker"));
+  assert.ok(md.includes("RED"));
+
+  cleanupEphemeralAgent(plan, {
+    sessionId: "test-sess-lego",
+    startedAt: Date.now() - 1000,
+    endedAt: Date.now(),
+    status: "completed",
+  });
+  assert.equal(fs.existsSync(plan.agentFilePath), false);
 });
