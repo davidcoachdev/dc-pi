@@ -73,15 +73,26 @@ export function saveDcAgentsConfig(
 }
 
 /**
+ * Comprueba si un modelo pertenece a la familia Gemini.
+ */
+export function isGeminiModel(modelName: string): boolean {
+  if (!modelName) return false;
+  const lower = modelName.toLowerCase();
+  return lower.includes("gemini");
+}
+
+/**
  * Calibra el esfuerzo cognitivo (thinking) según el preset de herramientas o la naturaleza de la tarea.
+ * Para modelos con razonamiento profundo (-high), asegura esfuerzo 'high' para evitar salidas vacías.
  */
 export function calibrateEffortForTask(
   task: string,
   preset?: DcEphemeralToolPreset,
   explicitEffort?: DcReasoningEffort,
   parentEffort?: string,
+  modelName?: string,
 ): DcReasoningEffort {
-  // 1. Prioridad máxima: override explícito en la llamada
+  // 1. Prioridad: override explícito en la llamada
   if (explicitEffort) {
     return explicitEffort;
   }
@@ -96,11 +107,11 @@ export function calibrateEffortForTask(
 
       case "browser":
       case "api":
+        return "medium";
+
       case "docs":
       case "research":
       case "scout":
-        return "medium";
-
       case "codegraph":
         return "high";
     }
@@ -113,6 +124,7 @@ export function calibrateEffortForTask(
     "architect", "refactor", "concurrency", "deadlock", "race condition",
     "codegraph", "blast radius", "audit", "security", "vulnerability",
     "complex", "redesign", "investigate bug", "performance bottleneck",
+    "explora", "explore", "inspect", "inspecciona", "analiza",
   ];
   if (heavyKeywords.some((kw) => lower.includes(kw))) {
     return "high";
@@ -135,7 +147,8 @@ export function calibrateEffortForTask(
     }
   }
 
-  return "medium";
+  // 5. Default canónico para subagentes: "high" (evita paradas prematuras y fallos en tools)
+  return "high";
 }
 
 export interface ResolvedExecutionModel {
@@ -163,27 +176,40 @@ export function resolveExecutionModel(
     const trimmed = options.requestedModel.trim();
     const parts = trimmed.split("/");
 
+    let parsedProvider = routing.defaultSubagentProvider;
+    let parsedAccount: string | undefined;
+    let parsedBaseModel = trimmed;
+
     if (parts.length >= 3) {
       // Formato provider/account/model (ej: cpam/ac01/gemini-3.8-flash-high)
-      return {
-        provider: parts[0],
-        requestedAccount: parts[1],
-        baseModelName: parts.slice(2).join("/"),
-        fullModelId: trimmed,
-      };
+      parsedProvider = parts[0];
+      parsedAccount = parts[1];
+      parsedBaseModel = parts.slice(2).join("/");
     } else if (parts.length === 2) {
       // Formato provider/model o account/model
-      return {
-        provider: routing.defaultSubagentProvider,
-        baseModelName: parts[1],
-        fullModelId: trimmed,
-      };
+      if (parts[0].startsWith("ac") || parts[0].startsWith("cc")) {
+        parsedAccount = parts[0];
+        parsedBaseModel = parts[1];
+      } else {
+        parsedProvider = parts[0];
+        parsedBaseModel = parts[1];
+      }
+    }
+
+    // Regla estricta: los subagentes deben usar exclusivamente modelos de la familia Gemini
+    // para preservar cuotas de Claude y OpenAI.
+    if (!isGeminiModel(parsedBaseModel)) {
+      parsedBaseModel = routing.defaultSubagentModel;
+      parsedProvider = routing.defaultSubagentProvider;
     }
 
     return {
-      provider: routing.defaultSubagentProvider,
-      baseModelName: trimmed,
-      fullModelId: `${routing.defaultSubagentProvider}/${trimmed}`,
+      provider: parsedProvider,
+      requestedAccount: parsedAccount,
+      baseModelName: parsedBaseModel,
+      fullModelId: parsedAccount
+        ? `${parsedProvider}/${parsedAccount}/${parsedBaseModel}`
+        : `${parsedProvider}/${parsedBaseModel}`,
     };
   }
 

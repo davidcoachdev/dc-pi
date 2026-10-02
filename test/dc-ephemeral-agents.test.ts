@@ -21,6 +21,7 @@ import {
 import {
   calibrateEffortForTask,
   resolveExecutionModel,
+  isGeminiModel,
   loadDcAgentsConfig,
   saveDcAgentsConfig,
 } from "../src/features/dc-agents/core/dc-effort-policy.ts";
@@ -320,9 +321,21 @@ test("dc-effort-policy: calibrateEffortForTask respects presets, keywords and pa
   // Fallback al padre
   assert.equal(calibrateEffortForTask("tarea general sin preset ni keywords", undefined, undefined, "high"), "high");
   assert.equal(calibrateEffortForTask("tarea general", undefined, undefined, "low"), "low");
+
+  // Default canónico para subagentes sin preset ni keywords: high
+  assert.equal(calibrateEffortForTask("tarea general sin preset"), "high");
+  // Preset scout y research calibrados a high para evitar paradas prematuras
+  assert.equal(calibrateEffortForTask("mapear estructura", "scout"), "high");
+  assert.equal(calibrateEffortForTask("investigar dependencias", "research"), "high");
 });
 
 test("dc-effort-policy: resolveExecutionModel enforces provider policy and parses account refs", () => {
+  // 0. isGeminiModel guard
+  assert.equal(isGeminiModel("gemini-3.8-flash-high"), true);
+  assert.equal(isGeminiModel("gemini-3-flash"), true);
+  assert.equal(isGeminiModel("claude-sonnet-4-6"), false);
+  assert.equal(isGeminiModel("gpt-5.5"), false);
+
   // 1. Force Gemini
   const res1 = resolveExecutionModel({
     config: {
@@ -348,6 +361,14 @@ test("dc-effort-policy: resolveExecutionModel enforces provider policy and parse
   assert.equal(res2.provider, "cpam");
   assert.equal(res2.requestedAccount, "ac03");
   assert.equal(res2.baseModelName, "gemini-3.8-flash-high");
+
+  // 3. Intento de solicitar modelo no-Gemini (ej: Claude) es neutralizado y redirigido a Gemini
+  const resClaude = resolveExecutionModel({
+    requestedModel: "cpam/ac04/claude-sonnet-4-6",
+  });
+  assert.equal(resClaude.provider, "cpam");
+  assert.equal(resClaude.requestedAccount, "ac04");
+  assert.equal(resClaude.baseModelName, "gemini-3.8-flash-high"); // Salvaguarda de cuotas activada
 });
 
 test("dc-taxi-history: records trips, bounds history and computes aggregate metrics", () => {

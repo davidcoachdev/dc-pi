@@ -106,20 +106,21 @@ export function prepareEphemeralAgent(
     tools = DC_TOOL_PRESETS[options.toolPreset];
   }
 
-  // 2. Calibrar esfuerzo adaptativo
-  const effectiveEffort = calibrateEffortForTask(
-    options.task,
-    options.toolPreset,
-    options.effort,
-    contextMeta.parentEffort,
-  );
-
-  // 3. Resolver modelo base y arriendo de Taxi
+  // 2. Resolver modelo base y arriendo de Taxi
   const resolvedModel = resolveExecutionModel({
     requestedModel: options.model,
     parentModel: contextMeta.parentModel,
     config,
   });
+
+  // 3. Calibrar esfuerzo adaptativo (anclado a high para modelos de razonamiento)
+  const effectiveEffort = calibrateEffortForTask(
+    options.task,
+    options.toolPreset,
+    options.effort,
+    contextMeta.parentEffort,
+    resolvedModel.baseModelName,
+  );
 
   const leaseResult = leaseTaxi(
     {
@@ -160,6 +161,7 @@ export function prepareEphemeralAgent(
     "1. Usa exclusivamente las herramientas asignadas en tu toolset.",
     "2. No supongas información no provista. Si necesitas una consulta externa al padre, usa subagent_parent_message con kind: 'query'.",
     "3. Devuelve siempre un Contrato de Artefacto conciso (Resumen Ejecutivo + Archivos Creados + Herramientas Usadas).",
+    "4. Es obligatorio que tu respuesta final contenga texto visible con el Contrato de Artefacto. Nunca finalices tu turno únicamente con pensamientos internos.",
     "",
     ...(options.seedContext
       ? ["## Contexto Semilla (Seed Context)", options.seedContext, ""]

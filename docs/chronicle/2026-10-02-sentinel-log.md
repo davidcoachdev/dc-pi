@@ -224,3 +224,76 @@ To report this crash: run `pi -r` to resume the session, then run /bug. The cras
   - 🤖 **dc-ephem-fd83341a** (task · 21.1s): ✅ OK
     - *Tarea:* Inspecciona src/features/dc-agents/core/dc-taxi-dispatcher.ts y explica en 3 viñetas breves cómo opera heartbeatTaxi ...
 - **Herramientas Ejecutadas:** `dc_ephemeral_agent_run`, `dc_ephemeral_agent_run`, `bash`
+### Turno: turn-3-1790931921550 (2026-10-02T09:05:21.550Z)
+- **Prompt Usuario:** "muy bien merge y nos vidrios bb pilas"
+- **Pre-Flight Recall Activo:** `Merge perf/memoize-binary-checks to master`, `Merge perf/erradicar-polling-ui to master`, `Merge feat/dc-status-changelog-tab to master`
+- **Herramientas Ejecutadas:** `read`, `bash`, `bash`, `bash`, `bash`, `bash`, `bash`, `bash`, `mem_save`, `mem_session_summary`, `gentle_odd_phase`, `bash`
+### Turno: turn-1-1790969833172 (2026-10-02T19:37:13.172Z)
+- **Prompt Usuario:** "bueno como vamos con lo de los subagentes temporales"
+- **Herramientas Ejecutadas:** `mem_search`, `mem_context`, `bash`, `bash`, `ls`, `ls`, `ls`, `find`, `find`, `bash`, `bash`, `bash`, `grep`
+- **⚠️ Errores / Alertas:**
+  - [find Error]: ""
+  - [bash Error]: ""
+### Turno: turn-2-1790970288670 (2026-10-02T19:44:48.670Z)
+- **Prompt Usuario:** "ok vamos a implementar la ventana de manager de dc-pi pero lo vamos ahcer con odd pero levantandio agente virtuales asi qe hay que investigar como levantamos los agentes de odd pero con nuetsroagnetes virtuales pilasbb"
+- **Pre-Flight Recall Activo:** `Implementación de Sistema de Agentes Efímeros y Flota de Taxis`, `Pestaña Changelog y Notificación de Update en Ventana de Información`, `Fix Engram project resolution and memory manager in sidebar`
+- **Herramientas Ejecutadas:** `gentle_odd_phase`, `find`, `read`, `find`, `read`, `read`, `read`, `subagent_list_agents`, `read`, `read`, `read`, `read`, `find`, `find`, `bash`, `read`, `read`, `read`, `read`, `read`, `grep`, `grep`, `ls`, `read`, `read`, `ls`, `read`
+### Turno: turn-3-1790970980488 (2026-10-02T19:56:20.488Z)
+- **Prompt Usuario:** "ok pero primero has una investiagcion y sustenta lo que me propusistes para que ausmas nada y todo tenga base vamos a implementar la dase de conocimiento fientifico siempre con bases vamos bb"
+- **Herramientas Ejecutadas:** `gentle_odd_phase`, `read`, `read`, `grep`, `read`, `read`, `read`, `read`, `read`, `read`, `ls`, `ls`, `read`, `read`, `read`, `read`, `read`, `read`, `read`
+- **⚠️ Errores / Alertas:**
+  - [read Error]: ""
+### Turno: turn-4-1790971865389 (2026-10-02T20:11:05.389Z)
+- **Prompt Usuario:** "ok vamos priemro la parte 2 incluir todos los sugagntes que puede enviar el ood y los mios propios y tambien quiero que vallas al repo de joker y veas tambien sus agentes y sugagentes para tambien teberlo en cuenta podemos hacer un catalogo de subagnetes que podemos inciar temporalmente asi ahorramos computo pero tambien si el subagentes que tenemos que levantar no conside con minguno el orsquestador tenga bloaues de legos para armar el subagentes asi tambien es meno gasto de rtoken analiza y dime que opinas"
+- **Pre-Flight Recall Activo:** `Implementación de Sistema de Agentes Efímeros y Flota de Taxis`, `Global skills kept outside project repos`, `fix: unwrap NestedToolOutcome in dc_ephemeral_agent_run and shield TUI updateResult`
+- **Herramientas Ejecutadas:** `find`, `bash`, `find`, `find`, `ls`, `grep`, `read`, `read`, `ls`
+- **⚠️ Errores / Alertas:**
+  - [find Error]: ""
+### Turno: turn-5-1790972725545 (2026-10-02T20:25:25.545Z)
+- **Prompt Usuario:** "[un modelo rápido (gemini-2.5-flash con esfuerzo low). Si es un worker TDD, le asigna gemini-3.8-flash-high con esfuerzo high.] esto abria que probar si funciona los distintos modelos perimero para tener una ida con pruevas cual podemos usar porque si vamos a teneter taxi ac01 con modelo 2.5 se podria usar otro taxi ac01 con modelo 3.8 y eso no nos puede agregar complegida a los taxis o podemos gestinar eso mejor para que si vamos a tener varios modelos podemos tener varias uniades y las 15 unides se puieden multiplicar por n modelos y tambien hay que ver si usamos 2.5 en vez del 3.8 por rapides no quemamos mas token que si usamos solos el 3.8 pilas revisa y dime"
+- **Pre-Flight Recall Activo:** `Implementación de Sistema de Agentes Efímeros y Flota de Taxis`, `decision: merge feat/dc-ephemeral-agents to master`, `Merge feat/dc-status-info-gentle-pi-version to master`
+- **Herramientas Ejecutadas:** `read`, `read`, `read`, `grep`, `read`, `find`, `bash`, `read`, `bash`, `bash`, `bash`, `bash`, `read`, `read`, `read`, `grep`
+### Turno: turn-1-1790973872982 (2026-10-02T20:44:32.982Z)
+- **Prompt Usuario:** "dale con la prueva"
+- **Subagentes Delegados:**
+  - 🤖 **dc-ephem-b283aee2** (task · 11.6s): ✅ OK
+    - *Tarea:* Lee el archivo package.json del proyecto actual y reporta en exactamente 3 viñetas breves: 1) El campo 'name', 2) La ...
+  - 🤖 **dc-ephem-13a8c945** (task · 8.7s): ✅ OK
+    - *Tarea:* Lee el archivo package.json del proyecto actual y reporta en exactamente 3 viñetas breves: 1) El campo 'name', 2) La ...
+  - 🤖 **dc-ephem-b8c6ce40** (task · 11.3s): ✅ OK
+    - *Tarea:* Lee el archivo package.json del proyecto actual y reporta en exactamente 3 viñetas breves: 1) El campo 'name', 2) La ...
+  - 🤖 **dc-ephem-c0f97d85** (task · 6.7s): ✅ OK
+    - *Tarea:* Lee el archivo package.json del proyecto actual y reporta en exactamente 3 viñetas breves: 1) El campo 'name', 2) La ...
+  - 🤖 **dc-ephem-3db01d4d** (task · 8.6s): ✅ OK
+    - *Tarea:* Lee el archivo package.json del proyecto actual y reporta en exactamente 3 viñetas breves: 1) El campo 'name', 2) La ...
+- **Herramientas Ejecutadas:** `bash`, `bash`, `dc_ephemeral_agent_run`, `bash`, `grep`, `bash`, `bash`, `dc_ephemeral_agent_run`, `bash`, `dc_ephemeral_agent_run`, `bash`, `dc_ephemeral_agent_run`, `bash`, `dc_ephemeral_agent_run`, `bash`, `bash`
+- **⚠️ Errores / Alertas:**
+  - [bash Error]: ""
+### Turno: turn-2-1790974589087 (2026-10-02T20:56:29.087Z)
+- **Prompt Usuario:** "solo use modelos de gemeinis no los otros eso lo uso para otra cosas y su qouta es muy pequeña recuerda eso, y en el consumen de token como fue"
+- **Pre-Flight Recall Activo:** `Fix dc-git-graph left panel scroll, files divider line, and tabs mouse click`
+- **Herramientas Ejecutadas:** `bash`, `find`, `grep`, `bash`, `bash`, `bash`, `bash`, `bash`, `bash`, `subagent_status`, `subagent_result`, `grep`, `read`, `read`, `grep`, `read`, `read`, `bash`, `bash`, `bash`, `read`, `mem_save`, `read`
+- **⚠️ Errores / Alertas:**
+  - [bash Error]: ""
+### Turno: turn-3-1790976013626 (2026-10-02T21:20:13.626Z)
+- **Prompt Usuario:** "antes quiero que coras dos subagntes el explore de gente -ai y el un explore con muestro subagentes temporales"
+- **Pre-Flight Recall Activo:** `Restricción estricta de subagentes a modelos Gemini`, `Implementación de Sistema de Agentes Efímeros y Flota de Taxis`, `decision: merge feat/dc-ephemeral-agents to master`
+- **Subagentes Delegados:**
+  - 🤖 **gentle-ai-explore** (task · 0.7s): ✅ OK
+    - *Tarea:* Explora el módulo src/features/dc-models/ y reporta: 1) Los archivos clave y su responsabilidad, 2) Cómo se conecta c...
+  - 🤖 **dc-ephem-71d7dcee** (task · 12.1s): ✅ OK
+    - *Tarea:* Explora el módulo src/features/dc-models/ y reporta: 1) Los archivos clave y su responsabilidad, 2) Cómo se conecta c...
+  - 🤖 **dc-ephem-34e0ebf1** (task · 61.5s): ✅ OK
+    - *Tarea:* Explora el módulo src/features/dc-models/ y reporta: 1) Los archivos clave y su responsabilidad, 2) Cómo se conecta c...
+- **Herramientas Ejecutadas:** `dc_ephemeral_agent_run`, `bash`, `grep`, `grep`, `grep`, `grep`, `grep`, `read`, `bash`, `subagent_status`, `grep`, `ls`, `read`, `grep`, `read`, `grep`, `read`, `grep`, `read`, `grep`, `grep`, `grep`, `ls`, `read`, `read`, `read`, `bash`, `dc_ephemeral_agent_run`, `bash`, `bash`, `bash`
+### Turno: turn-4-1790976901672 (2026-10-02T21:35:01.672Z)
+- **Prompt Usuario:** "antes de eso mira porque dio un erro, y si no da error con high como vamos a amnehae eso"
+- **Pre-Flight Recall Activo:** `Memoize system binary checks for yt-dlp and audio TTS`, `Document DC Studio integration specs inspired by j0k3r-pi`, `fix: unwrap NestedToolOutcome in dc_ephemeral_agent_run and shield TUI updateResult`
+- **Herramientas Ejecutadas:** `bash`, `grep`, `grep`, `bash`, `grep`, `bash`, `bash`, `grep`
+- **⚠️ Errores / Alertas:**
+  - [grep Error]: ""
+### Turno: turn-5-1790977298110 (2026-10-02T21:41:38.110Z)
+- **Prompt Usuario:** "pero en el orquestador le pongo medium y si funciona"
+- **Herramientas Ejecutadas:** `bash`, `bash`, `bash`, `bash`, `bash`, `bash`, `grep`, `read`, `read`, `bash`, `bash`, `grep`, `bash`, `bash`, `bash`, `bash`, `bash`, `bash`, `bash`, `bash`
+- **⚠️ Errores / Alertas:**
+  - [bash Error]: ""
