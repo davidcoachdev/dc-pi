@@ -177,12 +177,28 @@ export class DcTaxisPanel implements Component {
   }
 
   public handleInput(data: string): void {
-    if (matchesKey(data, Key.escape) || data === "q" || data === "Q") {
+    // Escape: si hay texto en el buscador, primero limpia el input; si ya está vacío, cierra la modal
+    if (matchesKey(data, Key.escape)) {
+      if (!this.searchInput.isEmpty()) {
+        this.searchInput.clear();
+        this.selectedIndex = 0;
+        this.requestRender();
+        return;
+      }
+      this.destroy();
       this.onDone();
       return;
     }
 
-    if (data === "r" || data === "R") {
+    // Salir con 'q' sólo si la búsqueda está vacía
+    if (this.searchInput.isEmpty() && (data === "q" || data === "Q")) {
+      this.destroy();
+      this.onDone();
+      return;
+    }
+
+    // Refrescar con 'r' sólo si la búsqueda está vacía
+    if (this.searchInput.isEmpty() && (data === "r" || data === "R")) {
       if (this.onRefreshCallback) {
         this.setLoading(true);
         void this.onRefreshCallback().finally(() => {
@@ -194,24 +210,26 @@ export class DcTaxisPanel implements Component {
       return;
     }
 
-    // Teclas 1, 2, 3 para alternar pestañas
-    if (data === "1") {
-      this.activeTab = "fleet";
-      this.selectedIndex = 0;
-      this.requestRender();
-      return;
-    }
-    if (data === "2") {
-      this.activeTab = "history";
-      this.selectedIndex = 0;
-      this.requestRender();
-      return;
-    }
-    if (data === "3") {
-      this.activeTab = "logs";
-      this.selectedIndex = 0;
-      this.requestRender();
-      return;
+    // Teclas 1, 2, 3 para alternar pestañas (sólo si no se está escribiendo en el buscador)
+    if (this.searchInput.isEmpty()) {
+      if (data === "1") {
+        this.activeTab = "fleet";
+        this.selectedIndex = 0;
+        this.requestRender();
+        return;
+      }
+      if (data === "2") {
+        this.activeTab = "history";
+        this.selectedIndex = 0;
+        this.requestRender();
+        return;
+      }
+      if (data === "3") {
+        this.activeTab = "logs";
+        this.selectedIndex = 0;
+        this.requestRender();
+        return;
+      }
     }
 
     if (matchesKey(data, Key.tab)) {
@@ -234,7 +252,7 @@ export class DcTaxisPanel implements Component {
     }
 
     // Caracteres imprimibles buscan en la lista
-    if (data.length === 1 && data >= " " && data <= "~" && data !== "r" && data !== "R" && data !== "q" && data !== "Q") {
+    if (data.length === 1 && data >= " " && data <= "~") {
       this.searchInput.append(data);
       this.selectedIndex = 0;
       this.requestRender();

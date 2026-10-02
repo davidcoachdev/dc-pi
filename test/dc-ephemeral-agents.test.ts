@@ -235,7 +235,7 @@ test("dc-taxi-dispatcher: acquireOrchestratorTaxi prevents collisions between mu
       "sess-term-2",
       "cpam/ac02/gemini-3.8-flash-high",
       fleetPath,
-      process.pid + 1, // Simular otro proceso
+      process.ppid, // PID vivo del proceso padre
       customAccounts,
     );
 
@@ -286,7 +286,7 @@ test("dc-taxi-dispatcher: acquireOrchestratorTaxi auto-binds free CPAM taxi when
       "sess-none",
       undefined,
       fleetPath,
-      process.pid + 1,
+      process.ppid,
       customAccounts,
     );
 
@@ -507,5 +507,40 @@ test("dc-taxis-panel: renders all 3 tabs cleanly without crashing", () => {
 
   // 4. Salir con escape
   panel.handleInput("q");
+  assert.equal(doneCalled, true);
+});
+
+test("dc-taxis-panel: escape key clears search input first and only closes modal when empty", () => {
+  const fakeTheme = {
+    bold: (s: string) => `*${s}*`,
+    fg: (_c: string, s: string) => s,
+    bg: (_c: string, s: string) => s,
+  } as any;
+
+  let doneCalled = false;
+  const panel = new DcTaxisPanel({
+    theme: fakeTheme,
+    onDone: () => {
+      doneCalled = true;
+    },
+    requestRender: () => {},
+  });
+
+  // 1. Escribir en el buscador: "ac05"
+  panel.handleInput("a");
+  panel.handleInput("c");
+  panel.handleInput("0");
+  panel.handleInput("5");
+
+  // El render debe reflejar el filtro
+  const linesFiltered = panel.render(80);
+  assert.ok(linesFiltered.length > 0);
+
+  // 2. Presionar Escape -> NO debe cerrar la modal (doneCalled sigue false), debe limpiar el buscador
+  panel.handleInput("\x1b");
+  assert.equal(doneCalled, false);
+
+  // 3. Presionar Escape por segunda vez con buscador vacío -> AHORA SÍ debe cerrar la modal
+  panel.handleInput("\x1b");
   assert.equal(doneCalled, true);
 });
