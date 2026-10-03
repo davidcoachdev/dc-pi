@@ -8,6 +8,12 @@ import { getEffectiveTodoTasks, createTodoCard } from "../src/features/dc-sideba
 import { getEffectiveAgents, createAgentsCard, openSubagentsView } from "../src/features/dc-sidebar/components/dc-sidebar-agents-card.ts";
 import { createStatusCard } from "../src/features/dc-sidebar/components/dc-sidebar-status-card.ts";
 import { getCachedAccountQuotas } from "../src/features/dc-sidebar/providers/dc-quota-provider.ts";
+import {
+  formatFleetSummaryText,
+  formatElapsedDuration,
+  formatPassengerRole,
+  getSidebarTaxiFleet,
+} from "../src/features/dc-sidebar/providers/dc-taxi-provider.ts";
 
 test("getEffectiveTodoTasks returns tasks and createTodoCard renders valid card", () => {
   const { tasks } = getEffectiveTodoTasks();
@@ -199,3 +205,63 @@ test("Status sidebar refreshes quota values on the same card instance", async ()
     syncBuiltinESMExports();
   }
 });
+
+test("dc-taxi-provider: formatters and fleet summary helper", () => {
+  // Summary text format
+  assert.equal(formatFleetSummaryText(5, 0), "0 ocupados · 5 libres");
+  assert.equal(formatFleetSummaryText(1, 1), "1 ocupado · 1 libre");
+  assert.equal(formatFleetSummaryText(4, 2, 1), "2 ocupados · 4 libres · 1 recargando");
+
+  // Elapsed duration format
+  assert.equal(formatElapsedDuration(0), "0s");
+  const now = Date.now();
+  assert.equal(formatElapsedDuration(now - 15000), "15s");
+  assert.ok(formatElapsedDuration(now - 130000).includes("2m"));
+  assert.ok(formatElapsedDuration(now - 3700000).includes("1h"));
+
+  // Passenger role format
+  assert.equal(formatPassengerRole({ type: "orchestrator", sessionId: "s1", pid: 1234, startedAt: now, heartbeatAt: now }), "orquestador");
+  assert.equal(formatPassengerRole({ type: "subagent", agentName: "dc-researcher", sessionId: "s2", pid: 1235, startedAt: now, heartbeatAt: now }), "dc-researcher");
+  assert.equal(formatPassengerRole({ type: "ephemeral_subagent", sessionId: "s3", pid: 1236, startedAt: now, heartbeatAt: now }), "efímero");
+
+  // Fleet data safe retrieval
+  const fleetInfo = getSidebarTaxiFleet();
+  assert.equal(typeof fleetInfo.total, "number");
+  assert.equal(typeof fleetInfo.libres, "number");
+  assert.equal(typeof fleetInfo.ocupados, "number");
+  assert.ok(Array.isArray(fleetInfo.units));
+  assert.ok(typeof fleetInfo.summaryText === "string");
+});
+
+test("Status sidebar: Taxis collapsible renders right after Quota with expandable units and fleet launcher", () => {
+  const card = createStatusCard(() => {});
+  const cardContent = (card as any).options.content;
+  const children = cardContent.children;
+
+  // Verify order: Quota -> separator -> Taxis -> separator -> Profile
+  const quotaIdx = children.findIndex((c: any) => c.options?.title?.includes("Quota:"));
+  const taxisIdx = children.findIndex((c: any) => c.options?.title?.includes("Taxis:"));
+  const profileIdx = children.findIndex((c: any) => c.options?.title?.includes("Profile:"));
+
+  assert.ok(quotaIdx >= 0, "Quota collapsible must exist");
+  assert.ok(taxisIdx >= 0, "Taxis collapsible must exist");
+  assert.ok(profileIdx >= 0, "Profile collapsible must exist");
+  assert.equal(taxisIdx, quotaIdx + 2, "Taxis must be positioned immediately after Quota (separated by a divider)");
+  assert.equal(profileIdx, taxisIdx + 2, "Profile must be positioned after Taxis (separated by a divider)");
+
+  const taxisCollapsible = children[taxisIdx];
+  assert.match(taxisCollapsible.options.title, /Taxis:/);
+  assert.match(taxisCollapsible.options.titleRight, /\[↗\]/);
+  assert.equal(typeof taxisCollapsible.options.onTitleRightClick, "function");
+
+  // Render collapsed: should show summary info
+  const collapsedLines = card.render(80);
+  assert.ok(collapsedLines.some((l: string) => l.includes("Taxis:") || l.includes("libres") || l.includes("ocupado")));
+
+  // Render expanded: should show units list and manager link
+  taxisCollapsible.expanded = true;
+  const expandedLines = card.render(80);
+  assert.ok(expandedLines.some((l: string) => l.includes("Gestor /dc-taxis") || l.includes("Alt+Shift+T")));
+  assert.ok(expandedLines.some((l: string) => l.includes("ac01") || l.includes("disponible") || l.includes("libre") || l.includes("ocupado")));
+});
+
