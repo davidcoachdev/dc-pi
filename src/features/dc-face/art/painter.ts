@@ -1,34 +1,63 @@
 /**
- * Coloreado por carácter para arte ASCII grande de DC Studio.
- * Port fiel del plugin OpenCode / Gentle-pi.
- * Mapea caracteres individuales a roles de tema de Pi (accent, error, text, muted, warning).
+ * Coloreado con run-length chunking para arte ASCII grande de DC Studio.
+ * Agrupa caracteres consecutivos del mismo rol semántico para reducir
+ * las llamadas a theme.fg() y el tamaño de las secuencias de escape ANSI.
  */
 export function paintBigLine(line: string, fg: (role: string, text: string) => string): string {
-  return Array.from(line)
-    .map((ch, idx) => {
-      let role = "accent";
-      const isOuter =
-        ch === "┌" ||
-        ch === "┐" ||
-        ch === "└" ||
-        ch === "┘" ||
-        (ch === "─" && (line.trim().startsWith("┌") || line.trim().startsWith("└"))) ||
-        (ch === "│" && (idx === 0 || idx === line.length - 1));
+  if (!line) return "";
 
-      if (isOuter) role = "error";
-      else if ("~".includes(ch)) role = "text";
-      else if ("▲".includes(ch)) role = "error";
-      else if ("╔║╚╞╒╝╗╛╕╜╖".includes(ch)) role = "text";
-      else if ("═".includes(ch) && line.includes("╔")) role = "text";
-      else if ("♥".includes(ch)) role = "error";
-      else if ("■♦≡".includes(ch)) role = "accent";
-      else if ("╩‖".includes(ch)) role = "muted";
-      else if ("╘╬╕╒«»═╝╗╛╜╖".includes(ch)) role = "text";
-      else if ("#".includes(ch)) role = "error";
-      else if ("zZ".includes(ch)) role = "muted";
-      else if ("?!".includes(ch)) role = "warning";
+  const trimmed = line.trim();
+  const startsWithCorner = trimmed.startsWith("┌") || trimmed.startsWith("└");
+  const chars = Array.from(line);
+  const len = chars.length;
 
-      return fg(role, ch);
-    })
-    .join("");
+  const getRole = (ch: string, idx: number): string => {
+    const isOuter =
+      ch === "┌" ||
+      ch === "┐" ||
+      ch === "└" ||
+      ch === "┘" ||
+      (ch === "─" && startsWithCorner) ||
+      (ch === "│" && (idx === 0 || idx === len - 1));
+
+    if (isOuter) return "error";
+    if (ch === "~") return "text";
+    if (ch === "▲") return "error";
+    if ("╔║╚╞╒╝╗╛╕╜╖".includes(ch)) return "text";
+    if (ch === "═" && line.includes("╔")) return "text";
+    if (ch === "♥") return "error";
+    if ("■♦≡".includes(ch)) return "accent";
+    if ("╩‖".includes(ch)) return "muted";
+    if ("╘╬«»═╝╗╛╜╖".includes(ch)) return "text";
+    if (ch === "#") return "error";
+    if (ch === "z" || ch === "Z") return "muted";
+    if (ch === "?" || ch === "!") return "warning";
+
+    return "accent";
+  };
+
+  let out = "";
+  let currentChunk = "";
+  let currentRole = "";
+
+  for (let i = 0; i < len; i++) {
+    const ch = chars[i]!;
+    const role = getRole(ch, i);
+
+    if (role === currentRole) {
+      currentChunk += ch;
+    } else {
+      if (currentChunk) {
+        out += fg(currentRole, currentChunk);
+      }
+      currentChunk = ch;
+      currentRole = role;
+    }
+  }
+
+  if (currentChunk) {
+    out += fg(currentRole, currentChunk);
+  }
+
+  return out;
 }

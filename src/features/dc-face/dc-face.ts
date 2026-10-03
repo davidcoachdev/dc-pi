@@ -7,6 +7,7 @@ import {
   DOT,
   type FaceMode,
   setFaceFrameIndex,
+  mapAgentStateToFaceMode,
 } from "./core/dc-face-types.ts";
 import { readFacePrefs, writeFacePrefs } from "./core/dc-face-prefs.ts";
 import { ttsBridgeClient } from "./core/dc-face-bridge.ts";
@@ -43,32 +44,6 @@ export default function dcFaceExtension(pi: ExtensionAPI): void {
 
   const getProfile = () => readFacePrefs().profile ?? "dcdev";
   const getTui = () => tuiRef ?? (globalThis as any)[Symbol.for("dc.sidebar.tui-ref")];
-
-  const mapStateToMode = (state: AgentState): FaceMode => {
-    switch (state) {
-      case "idle":
-        return "feliz";
-      case "thinking":
-        return "pensando";
-      case "writing":
-      case "typing":
-        return "escribiendo";
-      case "working":
-        return "trabajando";
-      case "dormant":
-        return "dormido";
-      case "compacting":
-        return "compactando";
-      case "retying":
-        return "reintentando";
-      case "talking":
-        return "hablando";
-      case "prompting":
-        return "pregunta";
-      default:
-        return "feliz";
-    }
-  };
 
   const publishMiniFace = () => {
     setFaceFrameIndex(frameIdx);
@@ -109,8 +84,14 @@ export default function dcFaceExtension(pi: ExtensionAPI): void {
     }
   };
 
-  const isIdleOrDormant = (mode: FaceMode): boolean => {
-    return mode === "feliz" || mode === "dormido";
+  /**
+   * Determina si un modo tiene animación de múltiples frames.
+   * 'feliz' es estático en reposo inicial (1 solo frame: ≧(❂‿❂)≦).
+   * 'dormido' tiene 4 frames de sueño (z, z Z, z Z Z) y se anima continuamente hasta que el agente cambie de estado.
+   * Todos los estados activos (pensando, trabajando, escribiendo, compactando, etc.) se animan continuamente.
+   */
+  const hasAnimatedFrames = (mode: FaceMode): boolean => {
+    return mode !== "feliz";
   };
 
   const syncFaceMode = (mode: FaceMode) => {
@@ -124,9 +105,9 @@ export default function dcFaceExtension(pi: ExtensionAPI): void {
       tui.requestRender?.();
     }
 
-    // Directiva 6: Cero polling continuo en reposo.
-    // Solo animar si el agente está en actividad (pensando, trabajando, escribiendo, reintentando, etc.)
-    const shouldAnimate = !isIdleOrDormant(activeMode) && !isDemoActive;
+    // Animar continuamente cualquier modo que tenga múltiples frames (incluido 'dormido')
+    // Pausar el timer únicamente en 'feliz' (reposo inicial de 1 solo frame)
+    const shouldAnimate = hasAnimatedFrames(activeMode) && !isDemoActive;
     if (shouldAnimate && !animTimer) {
       animTimer = setInterval(() => {
         if (!isDemoActive) {
@@ -153,7 +134,7 @@ export default function dcFaceExtension(pi: ExtensionAPI): void {
     }
     isDemoActive = false;
     const currentState = agentVisualStateStore.getState() ?? "idle";
-    syncFaceMode(mapStateToMode(currentState));
+    syncFaceMode(mapAgentStateToFaceMode(currentState));
   };
 
   const startDemo = (ctx: ExtensionContext, only?: FaceMode) => {
@@ -228,7 +209,7 @@ export default function dcFaceExtension(pi: ExtensionAPI): void {
     // Sincronización de estado con AgentVisualStateStore
     unsubStore = agentVisualStateStore.subscribe((state) => {
       if (!isDemoActive) {
-        syncFaceMode(mapStateToMode(state));
+        syncFaceMode(mapAgentStateToFaceMode(state));
       }
     });
 
@@ -238,7 +219,7 @@ export default function dcFaceExtension(pi: ExtensionAPI): void {
         if (ttsStatus === "playing" && activeMode === "feliz") {
           syncFaceMode("hablando");
         } else if (ttsStatus === "idle" && activeMode === "hablando") {
-          syncFaceMode(mapStateToMode(agentVisualStateStore.getState() ?? "idle"));
+          syncFaceMode(mapAgentStateToFaceMode(agentVisualStateStore.getState() ?? "idle"));
         }
       }
     });
@@ -251,7 +232,7 @@ export default function dcFaceExtension(pi: ExtensionAPI): void {
     });
 
     // Inicializar estado reactivo sin polling ciego
-    syncFaceMode(mapStateToMode(agentVisualStateStore.getState() ?? "idle"));
+    syncFaceMode(mapAgentStateToFaceMode(agentVisualStateStore.getState() ?? "idle"));
   });
 
   pi.on("session_shutdown", () => {

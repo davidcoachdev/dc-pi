@@ -16,6 +16,7 @@ import {
   ProfileDuel,
   openProfilePicker,
   dcFaceExtension,
+  mapAgentStateToFaceMode,
 } from "../src/features/dc-face/index.ts";
 import {
   createSidebarFooter,
@@ -66,18 +67,18 @@ test("dc-face/art: mini faces have stable frames for all modes", () => {
   assert.ok(sleepFace.includes("zZ"));
 });
 
-test("dc-face/art: paintBigLine applies ANSI semantic colors", () => {
+test("dc-face/art: paintBigLine applies ANSI semantic colors with chunking", () => {
   const lineHeart = " │══║  ♥  ║═══║  ♥  ║══│ ";
   const fg = (role: string, text: string) => `[${role}:${text}]`;
   const paintedHeart = paintBigLine(lineHeart, fg);
 
   assert.ok(paintedHeart.includes("[error:♥]"));
-  assert.ok(paintedHeart.includes("[text:║]"));
+  assert.ok(paintedHeart.includes("[text:══║]"));
 
   const lineCubis = "│  ▲▲▲▲▲▲▲   ▲▲▲▲▲▲▲  │";
   const paintedCubis = paintBigLine(lineCubis, fg);
   assert.ok(paintedCubis.includes("[error:│]"));
-  assert.ok(paintedCubis.includes("[error:▲]"));
+  assert.ok(paintedCubis.includes("[error:▲▲▲▲▲▲▲]"));
 });
 
 test("dc-face/core: BIG_FACE_MIN_ROWS is 46 and prefs persist cleanly", () => {
@@ -308,4 +309,33 @@ test("dcFaceExtension: binds to agentVisualStateStore reactively and stays quiet
     handler();
   }
 });
+
+test("mapAgentStateToFaceMode maps all AgentState values accurately", () => {
+  assert.equal(mapAgentStateToFaceMode("idle"), "feliz");
+  assert.equal(mapAgentStateToFaceMode("thinking"), "pensando");
+  assert.equal(mapAgentStateToFaceMode("writing"), "escribiendo");
+  assert.equal(mapAgentStateToFaceMode("typing"), "escribiendo");
+  assert.equal(mapAgentStateToFaceMode("working"), "trabajando");
+  assert.equal(mapAgentStateToFaceMode("dormant"), "dormido");
+  assert.equal(mapAgentStateToFaceMode("compacting"), "compactando");
+  assert.equal(mapAgentStateToFaceMode("retying"), "reintentando");
+  assert.equal(mapAgentStateToFaceMode("talking"), "hablando");
+  assert.equal(mapAgentStateToFaceMode("prompting"), "pregunta");
+});
+
+test("paintBigLine uses run-length chunking for contiguous glyphs", () => {
+  const line = "╔═════╗";
+  const calls: string[] = [];
+  const fg = (role: string, text: string) => {
+    calls.push(`${role}:${text}`);
+    return text;
+  };
+
+  const painted = paintBigLine(line, fg);
+  assert.equal(painted, "╔═════╗");
+  // Con chunking, todos los glifos de rol 'text' (╔, ═════, ╗) se agrupan en una sola llamada continua
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0], "text:╔═════╗");
+});
+
 
