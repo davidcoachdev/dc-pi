@@ -15,6 +15,7 @@ Following the technical audit by `odd-scout`, harden the Taxi Fleet and Ephemera
 - [x] Task 3: Wire automatic `'recargando'` cooling transition in `releaseTaxi()` and `leaseTaxi()`.
 - [x] Task 4: Fix background subagent cleanup and extract real token usage in `dc-ephemeral-tools.ts`.
 - [x] Task 5: Add unit tests for concurrency, atomic history, caching, and cooling, and run complete test suite.
+- [x] Task 6: Replicate all 5 audit failure scenarios in dedicated stress test suite (`test/replicate-audit-scenarios.test.ts`).
 
 ## Evidence
 - `withFleetLock`: Atomic lockfile with backoff, stale lock recovery, and reentrancy support in `dc-taxi-dispatcher.ts`.
@@ -22,4 +23,5 @@ Following the technical audit by `odd-scout`, harden the Taxi Fleet and Ephemera
 - `dc-taxi-provider.ts`: 5s TTL memory cache for `getSidebarTaxiFleet()`.
 - Quota cooling: Synchronous automatic cooldown in `releaseTaxi()` (<5% -> 'recargando') and recovery in `leaseTaxi()` (>=60% -> 'libre').
 - Background & Tokens: Isolated background lifecycle without premature file deletion in `dc-ephemeral-tools.ts`, plus normalized `extractSubagentMetrics`.
-- Tests: 344/344 tests passing (`npm test`).
+- Dedicated Replication Tests: `test/replicate-audit-scenarios.test.ts` passed 5/5 scenarios under real multi-process forking.
+- Full Suite: 349/349 tests passing (`npm test`).
