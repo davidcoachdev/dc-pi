@@ -13,6 +13,8 @@ import {
   formatElapsedDuration,
   formatPassengerRole,
   getSidebarTaxiFleet,
+  clearSidebarTaxiFleetCache,
+  CACHE_TTL_MS,
 } from "../src/features/dc-sidebar/providers/dc-taxi-provider.ts";
 
 test("getEffectiveTodoTasks returns tasks and createTodoCard renders valid card", () => {
@@ -231,6 +233,56 @@ test("dc-taxi-provider: formatters and fleet summary helper", () => {
   assert.equal(typeof fleetInfo.ocupados, "number");
   assert.ok(Array.isArray(fleetInfo.units));
   assert.ok(typeof fleetInfo.summaryText === "string");
+});
+
+test("dc-taxi-provider: in-memory cache with 5s TTL, forceReload, and cache clear", () => {
+  assert.equal(CACHE_TTL_MS, 5000);
+
+  clearSidebarTaxiFleetCache();
+
+  // Primera invocación puebla la caché
+  const ref1 = getSidebarTaxiFleet();
+  assert.ok(ref1);
+
+  // Segunda invocación inmediata reutiliza la misma referencia en memoria (sin I/O adicional)
+  const ref2 = getSidebarTaxiFleet();
+  assert.equal(ref2, ref1, "Llamadas sucesivas dentro del TTL deben devolver la misma referencia");
+
+  // forceReload = true debe invalidar y refrescar la caché devolviendo una nueva referencia
+  const ref3 = getSidebarTaxiFleet(true);
+  assert.notEqual(ref3, ref1, "forceReload = true debe generar una nueva instancia");
+
+  // Llamada subsiguiente reutiliza la nueva instancia
+  const ref4 = getSidebarTaxiFleet();
+  assert.equal(ref4, ref3, "Llamadas tras forceReload deben devolver la nueva referencia cacheada");
+
+  // clearSidebarTaxiFleetCache() invalida la caché
+  clearSidebarTaxiFleetCache();
+  const ref5 = getSidebarTaxiFleet();
+  assert.notEqual(ref5, ref3, "clearSidebarTaxiFleetCache() debe invalidar la referencia en caché");
+
+  // Expiración por TTL (> 5000ms)
+  const originalDateNow = Date.now;
+  try {
+    let mockTime = 1000000;
+    Date.now = () => mockTime;
+
+    clearSidebarTaxiFleetCache();
+    const timeRef1 = getSidebarTaxiFleet();
+
+    // 4.99 segundos después: dentro del TTL
+    mockTime += 4990;
+    const timeRef2 = getSidebarTaxiFleet();
+    assert.equal(timeRef2, timeRef1, "Dentro de los 5 segundos debe reutilizar la caché");
+
+    // 5.01 segundos después del primer fetch (total > 5000ms): expira TTL
+    mockTime += 20;
+    const timeRef3 = getSidebarTaxiFleet();
+    assert.notEqual(timeRef3, timeRef1, "Al superar CACHE_TTL_MS debe refrescar la caché");
+  } finally {
+    Date.now = originalDateNow;
+    clearSidebarTaxiFleetCache();
+  }
 });
 
 test("Status sidebar: Taxis collapsible renders right after Quota with expandable units and fleet launcher", () => {

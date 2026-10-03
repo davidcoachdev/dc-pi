@@ -21,6 +21,98 @@ import type {
 import { appendTaxiLog } from "../core/dc-taxi-logger.ts";
 import { heartbeatTaxi } from "../core/dc-taxi-dispatcher.ts";
 
+export interface ExtractedSubagentMetrics {
+  tokens?: {
+    input?: number;
+    output?: number;
+    reasoning?: number;
+    total?: number;
+  };
+  costEstimated?: number;
+}
+
+/**
+ * Extrae de forma resiliente el consumo de tokens y el costo estimado
+ * a partir de las diversas variantes en las que Pi o subagent_run empaquetan los datos.
+ */
+export function extractSubagentMetrics(rawOutcome: any, unwrapped?: any): ExtractedSubagentMetrics {
+  const tokenSources = [
+    rawOutcome?.result?.details?.tokens,
+    rawOutcome?.result?.details?.usage,
+    rawOutcome?.result?.usage,
+    rawOutcome?.result?.tokens,
+    rawOutcome?.details?.tokens,
+    rawOutcome?.details?.usage,
+    rawOutcome?.usage,
+    rawOutcome?.tokens,
+    unwrapped?.details?.tokens,
+    unwrapped?.details?.usage,
+    unwrapped?.usage,
+    unwrapped?.tokens,
+  ];
+
+  let input: number | undefined;
+  let output: number | undefined;
+  let reasoning: number | undefined;
+  let total: number | undefined;
+
+  for (const src of tokenSources) {
+    if (src && typeof src === "object") {
+      const inVal = src.input ?? src.inputTokens ?? src.promptTokens ?? src.prompt_tokens;
+      const outVal = src.output ?? src.outputTokens ?? src.completionTokens ?? src.completion_tokens;
+      const reasonVal = src.reasoning ?? src.reasoningTokens ?? src.reasoning_tokens;
+      const totVal = src.total ?? src.totalTokens ?? src.total_tokens;
+
+      if (typeof inVal === "number" && !Number.isNaN(inVal) && input === undefined) input = inVal;
+      if (typeof outVal === "number" && !Number.isNaN(outVal) && output === undefined) output = outVal;
+      if (typeof reasonVal === "number" && !Number.isNaN(reasonVal) && reasoning === undefined) reasoning = reasonVal;
+      if (typeof totVal === "number" && !Number.isNaN(totVal) && total === undefined) total = totVal;
+
+      if (input !== undefined || output !== undefined || reasoning !== undefined || total !== undefined) {
+        break;
+      }
+    }
+  }
+
+  let tokens: { input?: number; output?: number; reasoning?: number; total?: number } | undefined;
+  if (input !== undefined || output !== undefined || reasoning !== undefined || total !== undefined) {
+    const computedTotal = total !== undefined
+      ? total
+      : ((input ?? 0) + (output ?? 0) + (reasoning ?? 0));
+    tokens = {
+      ...(input !== undefined ? { input } : {}),
+      ...(output !== undefined ? { output } : {}),
+      ...(reasoning !== undefined ? { reasoning } : {}),
+      total: computedTotal,
+    };
+  }
+
+  const costSources = [
+    rawOutcome?.result?.details?.costEstimated,
+    rawOutcome?.result?.details?.cost,
+    rawOutcome?.result?.costEstimated,
+    rawOutcome?.result?.cost,
+    rawOutcome?.details?.costEstimated,
+    rawOutcome?.details?.cost,
+    rawOutcome?.costEstimated,
+    rawOutcome?.cost,
+    unwrapped?.details?.costEstimated,
+    unwrapped?.details?.cost,
+    unwrapped?.costEstimated,
+    unwrapped?.cost,
+  ];
+
+  let costEstimated: number | undefined;
+  for (const c of costSources) {
+    if (typeof c === "number" && !Number.isNaN(c)) {
+      costEstimated = c;
+      break;
+    }
+  }
+
+  return { tokens, costEstimated };
+}
+
 export function registerDcEphemeralTools(pi: ExtensionAPI): void {
   pi.registerTool({
     name: "dc_ephemeral_agent_run",
@@ -185,13 +277,17 @@ export function registerDcEphemeralTools(pi: ExtensionAPI): void {
         let heartbeatTimer: NodeJS.Timeout | undefined;
         let taskStatus: "completed" | "failed" | "cancelled" | "timeout" = "completed";
         let executionError: string | undefined;
+        let tokens: { input?: number; output?: number; reasoning?: number; total?: number } | undefined;
+        let costEstimated: number | undefined;
 
         try {
-          // Activar pulso de vida (heartbeat) cada 45 segundos para que la tarea nunca sea reapeada por TTL
-          heartbeatTimer = setInterval(() => {
-            if (plan) heartbeatTaxi(plan.leasedAccount);
-          }, 45000);
-          heartbeatTimer.unref?.();
+          // Activar pulso de vida (heartbeat) cada 45 segundos para que la tarea nunca sea reapeada por TTL (solo modo síncrono)
+          if (plan.mode !== "background") {
+            heartbeatTimer = setInterval(() => {
+              if (plan) heartbeatTaxi(plan.leasedAccount);
+            }, 45000);
+            heartbeatTimer.unref?.();
+          }
 
           if (typeof (ctx as any)?.executeTool === "function") {
             const rawOutcome = await (ctx as any).executeTool(
@@ -232,6 +328,11 @@ export function registerDcEphemeralTools(pi: ExtensionAPI): void {
 
             subagentResult = unwrapped;
 
+            // Extraer tokens y costo estimado de subagent_run para métricas persistentes
+            const metrics = extractSubagentMetrics(rawOutcome, unwrapped);
+            tokens = metrics.tokens;
+            costEstimated = metrics.costEstimated;
+
             if (subagentResult?.isError) {
               taskStatus = "failed";
               executionError = subagentResult?.content?.[0]?.text || "Error en ejecución de subagente";
@@ -271,14 +372,30 @@ export function registerDcEphemeralTools(pi: ExtensionAPI): void {
         } finally {
           if (heartbeatTimer) clearInterval(heartbeatTimer);
 
-          // Limpieza garantizada: libera el taxi, borra el markdown y anota el viaje en el histórico
-          cleanupEphemeralAgent(plan, {
-            sessionId,
-            startedAt,
-            endedAt: Date.now(),
-            status: taskStatus,
-            error: executionError,
-          });
+          if (plan) {
+            if (plan.mode === "background") {
+              // En modo background NO destruimos el archivo .md ni liberamos el taxi sincrónicamente
+              // porque la tarea de fondo aún continúa corriendo.
+              // Registramos la delegación y dejamos que el ciclo de vida del subagente / TTL gestione su liberación.
+              appendTaxiLog("INFO", "EPHEMERAL_AGENT_BACKGROUND_DELEGATED", {
+                agent: plan.agentName,
+                account: plan.leasedAccount,
+                model: plan.fullModelRef,
+                sessionId,
+              });
+            } else {
+              // Limpieza garantizada sincrónica: libera el taxi, borra el markdown y anota el viaje en el histórico
+              cleanupEphemeralAgent(plan, {
+                sessionId,
+                startedAt,
+                endedAt: Date.now(),
+                status: taskStatus,
+                error: executionError,
+                tokens,
+                costEstimated,
+              });
+            }
+          }
         }
 
         return subagentResult;

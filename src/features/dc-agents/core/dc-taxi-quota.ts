@@ -103,3 +103,37 @@ export async function fetchAllTaxisQuotas(accounts: string[]): Promise<Map<strin
 
   return map;
 }
+
+/**
+ * Obtiene la cuota almacenada en caché para una cuenta (sincrónico, sin bloqueo de I/O).
+ * Retorna undefined si la cuenta no ha sido consultada o no está en caché.
+ */
+export function getCachedTaxiQuota(account: string): DcTaxiQuotaInfo | undefined {
+  return quotaCache.get(account);
+}
+
+/**
+ * Permite registrar o actualizar manualmente la información de cuota en caché.
+ * Muy útil para inyección síncrona en pruebas y sincronizaciones reactivas.
+ */
+export function setCachedTaxiQuota(
+  account: string,
+  info: Partial<DcTaxiQuotaInfo> & { gemini5hPct?: number | null },
+): void {
+  const current = quotaCache.get(account);
+  quotaCache.set(account, {
+    account,
+    gemini5hPct: info.gemini5hPct !== undefined ? info.gemini5hPct : (current?.gemini5hPct ?? 100),
+    geminiWeeklyPct: info.geminiWeeklyPct !== undefined ? info.geminiWeeklyPct : (current?.geminiWeeklyPct ?? 100),
+    resetTimeIso: info.resetTimeIso ?? current?.resetTimeIso,
+    lastChecked: info.lastChecked ?? Date.now(),
+  });
+}
+
+/**
+ * Limpia la caché en memoria de cuotas de taxis (para aislamiento en pruebas unitarias).
+ */
+export function clearTaxiQuotaCache(): void {
+  quotaCache.clear();
+}
+

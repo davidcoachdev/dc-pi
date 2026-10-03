@@ -52,14 +52,33 @@ export function formatPassengerRole(passenger: DcTaxiPassenger): string {
   return passenger.type === "ephemeral_subagent" ? "efímero" : "subagente";
 }
 
+export const CACHE_TTL_MS = 5000;
+
+let cachedFleetInfo: SidebarTaxiFleetInfo | null = null;
+let lastFetchTime = 0;
+
+/**
+ * Invalida la caché en memoria del estado de la flota de taxis.
+ */
+export function clearSidebarTaxiFleetCache(): void {
+  cachedFleetInfo = null;
+  lastFetchTime = 0;
+}
+
 /**
  * Obtiene el estado actual de la flota de taxis formateado para el Sidebar.
+ * Reutiliza una caché en memoria con TTL de 5 segundos para erradicar I/O sincrónico en renders.
  */
-export function getSidebarTaxiFleet(): SidebarTaxiFleetInfo {
+export function getSidebarTaxiFleet(forceReload = false): SidebarTaxiFleetInfo {
+  const now = Date.now();
+  if (!forceReload && cachedFleetInfo !== null && now - lastFetchTime < CACHE_TTL_MS) {
+    return cachedFleetInfo;
+  }
+
   try {
     const summary = getFleetStatusSummary();
     const summaryText = formatFleetSummaryText(summary.libres, summary.ocupados, summary.recargando);
-    return {
+    cachedFleetInfo = {
       total: summary.total,
       libres: summary.libres,
       ocupados: summary.ocupados,
@@ -67,8 +86,10 @@ export function getSidebarTaxiFleet(): SidebarTaxiFleetInfo {
       units: summary.units,
       summaryText,
     };
+    lastFetchTime = now;
+    return cachedFleetInfo;
   } catch {
-    return {
+    cachedFleetInfo = {
       total: 0,
       libres: 0,
       ocupados: 0,
@@ -76,5 +97,7 @@ export function getSidebarTaxiFleet(): SidebarTaxiFleetInfo {
       units: [],
       summaryText: "sin datos de flota",
     };
+    lastFetchTime = now;
+    return cachedFleetInfo;
   }
 }
