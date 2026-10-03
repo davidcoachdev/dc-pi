@@ -48,12 +48,13 @@ export class TtsBridgeClient {
     }
   }
 
-  startPolling(intervalMs: number = 1500): void {
+  /**
+   * Directiva 6: Cero polling ciego continuo en reposo.
+   * No ejecuta setInterval continuo a 127.0.0.1:9877 para prevenir memory leaks y CPU churn.
+   * Se reserva checkStatus() para invocaciones explícitas bajo demanda.
+   */
+  startPolling(_intervalMs: number = 1500): void {
     this.stopPolling();
-    void this.checkStatus();
-    this.pollTimer = setInterval(() => {
-      void this.checkStatus();
-    }, intervalMs);
   }
 
   stopPolling(): void {

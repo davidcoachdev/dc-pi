@@ -226,3 +226,86 @@ test("openProfilePicker renders with DcWindow native footer and complete divider
   const renderedLines = capturedComponent.render(80);
   assert.ok(renderedLines.length >= 10);
 });
+
+test("dcFaceExtension: binds to agentVisualStateStore reactively and stays quiet at idle", async () => {
+  const events = new Map<string, Function[]>();
+  let registeredCommands = new Map<string, any>();
+  let registeredShortcuts = new Map<string, any>();
+
+  const mockPi: any = {
+    on: (evt: string, fn: Function) => {
+      if (!events.has(evt)) events.set(evt, []);
+      events.get(evt)!.push(fn);
+    },
+    registerCommand: (name: string, def: any) => {
+      registeredCommands.set(name, def);
+    },
+    registerShortcut: (name: string, def: any) => {
+      registeredShortcuts.set(name, def);
+    },
+  };
+
+  let workingIndicatorDef: any;
+  let widgetRegistered = false;
+
+  const mockCtx: any = {
+    hasUI: true,
+    ui: {
+      theme: { fg: (_r: string, t: string) => t },
+      setWorkingIndicator: (def: any) => {
+        workingIndicatorDef = def;
+      },
+      setWidget: (name: string, _factory: any, _opts: any) => {
+        if (name === "dc-face-anchor") widgetRegistered = true;
+      },
+      onTerminalInput: () => () => {},
+      notify: () => {},
+    },
+  };
+
+  // Register extension
+  dcFaceExtension(mockPi);
+  assert.ok(registeredCommands.has("dc-face"));
+  assert.ok(registeredCommands.has("dc-faces"));
+  assert.ok(registeredShortcuts.has("alt+c"));
+
+  // Fire session_start
+  const sessionStartHandlers = events.get("session_start") || [];
+  for (const handler of sessionStartHandlers) {
+    await handler({}, mockCtx);
+  }
+  assert.ok(widgetRegistered);
+
+  // Initial state should be idle (feliz)
+  const faceKey = Symbol.for("dc.face.mini");
+  let currentFace = (globalThis as any)[faceKey];
+  assert.ok(currentFace.includes("feliz"));
+
+  // Reactive state: Transition to thinking
+  agentVisualStateStore.setState("thinking");
+  currentFace = (globalThis as any)[faceKey];
+  assert.ok(currentFace.includes("pensando"));
+  assert.ok(workingIndicatorDef !== undefined);
+
+  // Reactive state: Transition to working
+  agentVisualStateStore.setState("working");
+  currentFace = (globalThis as any)[faceKey];
+  assert.ok(currentFace.includes("trabajando"));
+
+  // Reactive state: Transition to dormant (sleep)
+  agentVisualStateStore.setState("dormant");
+  currentFace = (globalThis as any)[faceKey];
+  assert.ok(currentFace.includes("dormido"));
+
+  // Reactive state: Back to idle
+  agentVisualStateStore.setState("idle");
+  currentFace = (globalThis as any)[faceKey];
+  assert.ok(currentFace.includes("feliz"));
+
+  // Shutdown cleans up listeners and timers
+  const shutdownHandlers = events.get("session_shutdown") || [];
+  for (const handler of shutdownHandlers) {
+    handler();
+  }
+});
+

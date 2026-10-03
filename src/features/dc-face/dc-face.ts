@@ -109,14 +109,12 @@ export default function dcFaceExtension(pi: ExtensionAPI): void {
     }
   };
 
-  const stopDemo = () => {
-    if (demoTimer) {
-      clearTimeout(demoTimer);
-      demoTimer = null;
-    }
-    isDemoActive = false;
-    const currentState = agentVisualStateStore.getState() ?? "idle";
-    activeMode = mapStateToMode(currentState);
+  const isIdleOrDormant = (mode: FaceMode): boolean => {
+    return mode === "feliz" || mode === "dormido";
+  };
+
+  const syncFaceMode = (mode: FaceMode) => {
+    activeMode = mode;
     frameIdx = 0;
     publishMiniFace();
     paintIndicator();
@@ -125,6 +123,37 @@ export default function dcFaceExtension(pi: ExtensionAPI): void {
       bumpCache(tui);
       tui.requestRender?.();
     }
+
+    // Directiva 6: Cero polling continuo en reposo.
+    // Solo animar si el agente está en actividad (pensando, trabajando, escribiendo, reintentando, etc.)
+    const shouldAnimate = !isIdleOrDormant(activeMode) && !isDemoActive;
+    if (shouldAnimate && !animTimer) {
+      animTimer = setInterval(() => {
+        if (!isDemoActive) {
+          frameIdx = (frameIdx + 1) % 10000;
+          publishMiniFace();
+          const t = getTui();
+          if (t) {
+            bumpCache(t);
+            t.requestRender?.();
+          }
+        }
+      }, ANIM_MS);
+      animTimer.unref?.();
+    } else if (!shouldAnimate && animTimer) {
+      clearInterval(animTimer);
+      animTimer = null;
+    }
+  };
+
+  const stopDemo = () => {
+    if (demoTimer) {
+      clearTimeout(demoTimer);
+      demoTimer = null;
+    }
+    isDemoActive = false;
+    const currentState = agentVisualStateStore.getState() ?? "idle";
+    syncFaceMode(mapStateToMode(currentState));
   };
 
   const startDemo = (ctx: ExtensionContext, only?: FaceMode) => {
@@ -182,7 +211,6 @@ export default function dcFaceExtension(pi: ExtensionAPI): void {
 
   pi.on("session_start", async (_event, ctx) => {
     ctxRef = ctx;
-    ttsBridgeClient.startPolling();
 
     try {
       ctx.ui.setWidget(
@@ -200,15 +228,7 @@ export default function dcFaceExtension(pi: ExtensionAPI): void {
     // Sincronización de estado con AgentVisualStateStore
     unsubStore = agentVisualStateStore.subscribe((state) => {
       if (!isDemoActive) {
-        activeMode = mapStateToMode(state);
-        frameIdx = 0;
-        publishMiniFace();
-        paintIndicator();
-        const tui = getTui();
-        if (tui) {
-          bumpCache(tui);
-          tui.requestRender?.();
-        }
+        syncFaceMode(mapStateToMode(state));
       }
     });
 
@@ -216,18 +236,9 @@ export default function dcFaceExtension(pi: ExtensionAPI): void {
     unsubTts = ttsBridgeClient.subscribe((ttsStatus) => {
       if (!isDemoActive) {
         if (ttsStatus === "playing" && activeMode === "feliz") {
-          activeMode = "hablando";
-          frameIdx = 0;
+          syncFaceMode("hablando");
         } else if (ttsStatus === "idle" && activeMode === "hablando") {
-          activeMode = mapStateToMode(agentVisualStateStore.getState() ?? "idle");
-          frameIdx = 0;
-        }
-        publishMiniFace();
-        paintIndicator();
-        const tui = getTui();
-        if (tui) {
-          bumpCache(tui);
-          tui.requestRender?.();
+          syncFaceMode(mapStateToMode(agentVisualStateStore.getState() ?? "idle"));
         }
       }
     });
@@ -239,21 +250,8 @@ export default function dcFaceExtension(pi: ExtensionAPI): void {
       return { consume: true };
     });
 
-    // Loop de animación regular (900ms)
-    animTimer = setInterval(() => {
-      if (!isDemoActive) {
-        frameIdx = (frameIdx + 1) % 10000;
-        publishMiniFace();
-        const tui = getTui();
-        if (tui) {
-          bumpCache(tui);
-          tui.requestRender?.();
-        }
-      }
-    }, ANIM_MS);
-
-    publishMiniFace();
-    paintIndicator();
+    // Inicializar estado reactivo sin polling ciego
+    syncFaceMode(mapStateToMode(agentVisualStateStore.getState() ?? "idle"));
   });
 
   pi.on("session_shutdown", () => {
