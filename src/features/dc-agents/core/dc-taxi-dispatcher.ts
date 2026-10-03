@@ -19,9 +19,152 @@ import type {
 import { DEFAULT_DC_AGENTS_CONFIG } from "./dc-ephemeral-types.ts";
 import { appendTaxiLog } from "./dc-taxi-logger.ts";
 import { discoverCpamAccounts } from "./dc-taxi-accounts.ts";
-import { fetchAllTaxisQuotas, type DcTaxiQuotaInfo } from "./dc-taxi-quota.ts";
+import {
+  fetchAllTaxisQuotas,
+  getCachedTaxiQuota,
+  type DcTaxiQuotaInfo,
+} from "./dc-taxi-quota.ts";
 
 const FLEET_STATE_PATH = path.join(os.homedir(), ".pi", "agent", "dc-studio", "dc-taxis.json");
+const LOCK_STALE_MS = 10_000;
+const LOCK_MAX_WAIT_MS = 15_000;
+
+// Reentrancia dentro del mismo proceso: ruta resuelta -> profundidad de anidamiento
+const activeFleetLocks = new Map<string, number>();
+
+function sleepSync(ms: number): void {
+  try {
+    const sab = new SharedArrayBuffer(4);
+    const ia = new Int32Array(sab);
+    Atomics.wait(ia, 0, 0, ms);
+  } catch {
+    const end = Date.now() + ms;
+    while (Date.now() < end) {
+      /* fallback busy spin */
+    }
+  }
+}
+
+/**
+ * Adquiere un lockfile exclusivo atómicamente con reintentos y backoff sincrónico.
+ * Soporta romper stale locks (>10s o PID muerto) y reentrancia en el mismo proceso.
+ */
+function acquireFleetLock(lockPath: string): () => void {
+  const resolved = path.resolve(lockPath);
+  const currentDepth = activeFleetLocks.get(resolved) ?? 0;
+
+  if (currentDepth > 0) {
+    // Reentrancia dentro del mismo proceso
+    activeFleetLocks.set(resolved, currentDepth + 1);
+    return () => {
+      const depth = activeFleetLocks.get(resolved) ?? 1;
+      if (depth <= 1) {
+        activeFleetLocks.delete(resolved);
+        try {
+          fs.unlinkSync(lockPath);
+        } catch {
+          /* defensive */
+        }
+      } else {
+        activeFleetLocks.set(resolved, depth - 1);
+      }
+    };
+  }
+
+  ensureDirectory(lockPath);
+  const startTime = Date.now();
+
+  while (true) {
+    try {
+      const fd = fs.openSync(lockPath, "wx");
+      try {
+        const payload = JSON.stringify({ pid: process.pid, createdAt: Date.now() });
+        fs.writeSync(fd, payload, 0, "utf8");
+      } finally {
+        fs.closeSync(fd);
+      }
+
+      activeFleetLocks.set(resolved, 1);
+
+      let released = false;
+      return () => {
+        if (released) return;
+        released = true;
+        const depth = activeFleetLocks.get(resolved) ?? 1;
+        if (depth <= 1) {
+          activeFleetLocks.delete(resolved);
+          try {
+            fs.unlinkSync(lockPath);
+          } catch {
+            /* defensive */
+          }
+        } else {
+          activeFleetLocks.set(resolved, depth - 1);
+        }
+      };
+    } catch (err: unknown) {
+      const error = err as NodeJS.ErrnoException;
+      if (error.code !== "EEXIST") {
+        throw err;
+      }
+
+      // El archivo lock ya existe. Comprobar si está stale o el PID murió
+      let isStale = false;
+      try {
+        const raw = fs.readFileSync(lockPath, "utf8");
+        const parsed = JSON.parse(raw);
+        const age = Date.now() - (typeof parsed.createdAt === "number" ? parsed.createdAt : 0);
+        const pidDead = typeof parsed.pid === "number" && !isProcessAlive(parsed.pid);
+        if (age > LOCK_STALE_MS || pidDead) {
+          isStale = true;
+        }
+      } catch {
+        // Si el archivo está incompleto o corrupto, comprobar mtime
+        try {
+          const stat = fs.statSync(lockPath);
+          if (Date.now() - stat.mtimeMs > LOCK_STALE_MS) {
+            isStale = true;
+          }
+        } catch {
+          // El lockfile ya no existe (otro proceso lo liberó concurrentemente)
+          continue;
+        }
+      }
+
+      if (isStale) {
+        try {
+          fs.unlinkSync(lockPath);
+          // Reintentar de inmediato la adquisición
+          continue;
+        } catch {
+          /* otro proceso pudo haberlo eliminado concurrentemente */
+        }
+      }
+
+      if (Date.now() - startTime > LOCK_MAX_WAIT_MS) {
+        throw new Error(`Timeout waiting for fleet lock: ${lockPath}`);
+      }
+
+      // Backoff sincrónico de 10 a 30ms
+      const backoffMs = Math.floor(Math.random() * 21) + 10;
+      sleepSync(backoffMs);
+    }
+  }
+}
+
+/**
+ * Ejecuta una operación atómica bajo el file lock exclusivo de la flota.
+ * Garantiza la liberación del lock en el bloque finally.
+ */
+export function withFleetLock<T>(fleetPath: string, fn: () => T): T {
+  const lockPath = `${fleetPath}.lock`;
+  const unlock = acquireFleetLock(lockPath);
+  try {
+    return fn();
+  } finally {
+    unlock();
+  }
+}
 
 function ensureDirectory(targetPath: string): void {
   const dir = path.dirname(targetPath);
@@ -270,13 +413,24 @@ export function loadFleetState(
  * Guarda el estado de la flota de forma segura con escritura atómica.
  */
 export function saveFleetState(state: DcTaxiFleetState, fleetPath: string = FLEET_STATE_PATH): void {
+  let tempPath: string | undefined;
   try {
     ensureDirectory(fleetPath);
     state.lastUpdated = Date.now();
-    const tempPath = `${fleetPath}.${Date.now()}.${Math.random().toString(36).slice(2)}.tmp`;
+    tempPath = `${fleetPath}.${Date.now()}.${Math.random().toString(36).slice(2)}.tmp`;
     fs.writeFileSync(tempPath, JSON.stringify(state, null, 2) + "\n", "utf8");
     fs.renameSync(tempPath, fleetPath);
+    tempPath = undefined;
   } catch {
+    if (tempPath) {
+      try {
+        if (fs.existsSync(tempPath)) {
+          fs.unlinkSync(tempPath);
+        }
+      } catch {
+        /* defensive */
+      }
+    }
     try {
       fs.writeFileSync(fleetPath, JSON.stringify(state, null, 2) + "\n", "utf8");
     } catch {
@@ -292,6 +446,7 @@ export function reapAbandonedTaxis(
   state: DcTaxiFleetState,
   leaseTtlMs: number = DEFAULT_DC_AGENTS_CONFIG.accountPool.leaseTtlMs,
   now: number = Date.now(),
+  quotaGetter: (account: string) => DcTaxiQuotaInfo | undefined = getCachedTaxiQuota,
 ): number {
   let reapedCount = 0;
 
@@ -312,8 +467,10 @@ export function reapAbandonedTaxis(
         pid: passenger.pid,
       });
 
-      unit.status = "libre";
       unit.passenger = null;
+      unit.status = "libre";
+      const quota = quotaGetter(account);
+      updateTaxiRechargingState(unit, quota);
       reapedCount++;
     }
   }
@@ -381,112 +538,124 @@ export function acquireOrchestratorTaxi(
   fallbackBaseModel: string = "gemini-3.8-flash-high",
   fallbackProvider: string = "cpam",
 ): { account: string; modelId: string; changed: boolean } | null {
-  const state = loadFleetState(fleetPath, allowedAccounts);
-  reapAbandonedTaxis(state);
+  return withFleetLock(fleetPath, () => {
+    const state = loadFleetState(fleetPath, allowedAccounts);
+    reapAbandonedTaxis(state);
 
-  let currentAccount = "";
-  let accountIndex = -1;
-  let parts: string[] = [];
+    let currentAccount = "";
+    let accountIndex = -1;
+    let parts: string[] = [];
 
-  if (modelId && modelId.includes("/")) {
-    parts = modelId.split("/");
-    for (let i = 0; i < parts.length; i++) {
-      const lower = parts[i].toLowerCase();
-      if (lower.startsWith("ac")) {
-        currentAccount = lower;
-        accountIndex = i;
-        break;
+    if (modelId && modelId.includes("/")) {
+      parts = modelId.split("/");
+      for (let i = 0; i < parts.length; i++) {
+        const lower = parts[i].toLowerCase();
+        if (lower.startsWith("ac")) {
+          currentAccount = lower;
+          accountIndex = i;
+          break;
+        }
       }
     }
-  }
 
-  // Liberar cualquier taxi previo de esta misma sesión y PID que ya no use
-  for (const unit of Object.values(state.fleet)) {
-    if (
-      unit.passenger &&
-      unit.passenger.type === "orchestrator" &&
-      (unit.passenger.sessionId === sessionId || unit.passenger.pid === pid) &&
-      unit.account !== currentAccount
-    ) {
-      unit.status = "libre";
-      unit.passenger = null;
-    }
-  }
-
-  // Caso 1: La cuenta preferida es de CPAM ac* y está libre o ya pertenece a este mismo proceso
-  if (currentAccount && state.fleet[currentAccount]) {
-    const preferredUnit = state.fleet[currentAccount];
-    const isMine =
-      preferredUnit?.passenger?.pid === pid ||
-      preferredUnit?.passenger?.sessionId === sessionId;
-    const isFree = preferredUnit?.status === "libre";
-
-    if (isFree || isMine) {
-      preferredUnit.status = "ocupado";
-      preferredUnit.passenger = {
-        type: "orchestrator",
-        sessionId,
-        pid,
-        model: modelId!,
-        taskLabel: "Sesión Principal (Orquestador)",
-        startedAt: preferredUnit.passenger?.startedAt || Date.now(),
-        heartbeatAt: Date.now(),
-      };
-      saveFleetState(state, fleetPath);
-
-      appendTaxiLog("INFO", "TAXI_ORCHESTRATOR_ACQUIRED", {
-        account: currentAccount,
-        sessionId,
-        pid,
-        modelId,
-        changed: false,
-      });
-
-      return { account: currentAccount, modelId: modelId!, changed: false };
-    }
-  }
-
-  // Caso 2: Si el modelo no era de CPAM (ej: Kimi, OpenCode) O si su cuenta ac* está ocupada:
-  // ¡Tomar el primer Taxi LIBRE de la flota de CPAM!
-  for (const [ac, unit] of Object.entries(state.fleet)) {
-    if (unit.status === "libre") {
-      unit.status = "ocupado";
-
-      let newModelId: string;
-      if (currentAccount && accountIndex >= 0 && parts.length > 0) {
-        const newParts = [...parts];
-        newParts[accountIndex] = ac;
-        newModelId = newParts.join("/");
-      } else {
-        newModelId = `${fallbackProvider}/${ac}/${fallbackBaseModel}`;
+    // Liberar cualquier taxi previo de esta misma sesión y PID que ya no use
+    for (const unit of Object.values(state.fleet)) {
+      if (
+        unit.passenger &&
+        unit.passenger.type === "orchestrator" &&
+        (unit.passenger.sessionId === sessionId || unit.passenger.pid === pid) &&
+        unit.account !== currentAccount
+      ) {
+        unit.passenger = null;
+        unit.status = "libre";
+        const quota = getCachedTaxiQuota(unit.account);
+        updateTaxiRechargingState(unit, quota);
       }
-
-      unit.passenger = {
-        type: "orchestrator",
-        sessionId,
-        pid,
-        model: newModelId,
-        taskLabel: "Sesión Principal (Orquestador)",
-        startedAt: Date.now(),
-        heartbeatAt: Date.now(),
-      };
-      saveFleetState(state, fleetPath);
-
-      appendTaxiLog("INFO", "TAXI_ORCHESTRATOR_AUTO_REASSIGNED", {
-        preferredAccount: currentAccount || "none (fallback)",
-        reassignedAccount: ac,
-        sessionId,
-        pid,
-        originalModelId: modelId || "none",
-        newModelId,
-      });
-
-      return { account: ac, modelId: newModelId, changed: true };
     }
-  }
 
-  // Caso 3: Flota llena
-  return null;
+    // Evaluar unidades en 'recargando' o 'libre' con cuotas cacheadas
+    for (const unit of Object.values(state.fleet)) {
+      if (unit.status === "recargando" || unit.status === "libre") {
+        const quota = getCachedTaxiQuota(unit.account);
+        updateTaxiRechargingState(unit, quota);
+      }
+    }
+
+    // Caso 1: La cuenta preferida es de CPAM ac* y está libre o ya pertenece a este mismo proceso
+    if (currentAccount && state.fleet[currentAccount]) {
+      const preferredUnit = state.fleet[currentAccount];
+      const isMine =
+        preferredUnit?.passenger?.pid === pid ||
+        preferredUnit?.passenger?.sessionId === sessionId;
+      const isFree = preferredUnit?.status === "libre";
+
+      if (isFree || isMine) {
+        preferredUnit.status = "ocupado";
+        preferredUnit.passenger = {
+          type: "orchestrator",
+          sessionId,
+          pid,
+          model: modelId!,
+          taskLabel: "Sesión Principal (Orquestador)",
+          startedAt: preferredUnit.passenger?.startedAt || Date.now(),
+          heartbeatAt: Date.now(),
+        };
+        saveFleetState(state, fleetPath);
+
+        appendTaxiLog("INFO", "TAXI_ORCHESTRATOR_ACQUIRED", {
+          account: currentAccount,
+          sessionId,
+          pid,
+          modelId,
+          changed: false,
+        });
+
+        return { account: currentAccount, modelId: modelId!, changed: false };
+      }
+    }
+
+    // Caso 2: Si el modelo no era de CPAM (ej: Kimi, OpenCode) O si su cuenta ac* está ocupada:
+    // ¡Tomar el primer Taxi LIBRE de la flota de CPAM!
+    for (const [ac, unit] of Object.entries(state.fleet)) {
+      if (unit.status === "libre") {
+        unit.status = "ocupado";
+
+        let newModelId: string;
+        if (currentAccount && accountIndex >= 0 && parts.length > 0) {
+          const newParts = [...parts];
+          newParts[accountIndex] = ac;
+          newModelId = newParts.join("/");
+        } else {
+          newModelId = `${fallbackProvider}/${ac}/${fallbackBaseModel}`;
+        }
+
+        unit.passenger = {
+          type: "orchestrator",
+          sessionId,
+          pid,
+          model: newModelId,
+          taskLabel: "Sesión Principal (Orquestador)",
+          startedAt: Date.now(),
+          heartbeatAt: Date.now(),
+        };
+        saveFleetState(state, fleetPath);
+
+        appendTaxiLog("INFO", "TAXI_ORCHESTRATOR_AUTO_REASSIGNED", {
+          preferredAccount: currentAccount || "none (fallback)",
+          reassignedAccount: ac,
+          sessionId,
+          pid,
+          originalModelId: modelId || "none",
+          newModelId,
+        });
+
+        return { account: ac, modelId: newModelId, changed: true };
+      }
+    }
+
+    // Caso 3: Flota llena
+    return null;
+  });
 }
 
 /**
@@ -498,29 +667,33 @@ export function releaseOrchestratorTaxi(
   fleetPath: string = FLEET_STATE_PATH,
   allowedAccounts?: string[],
 ): void {
-  const state = loadFleetState(fleetPath, allowedAccounts);
-  let changed = false;
+  withFleetLock(fleetPath, () => {
+    const state = loadFleetState(fleetPath, allowedAccounts);
+    let changed = false;
 
-  for (const unit of Object.values(state.fleet)) {
-    if (
-      unit.passenger &&
-      unit.passenger.type === "orchestrator" &&
-      ((sessionId && unit.passenger.sessionId === sessionId) || unit.passenger.pid === pid)
-    ) {
-      unit.status = "libre";
-      unit.passenger = null;
-      changed = true;
-      appendTaxiLog("INFO", "TAXI_ORCHESTRATOR_RELEASED", {
-        account: unit.account,
-        sessionId,
-        pid,
-      });
+    for (const unit of Object.values(state.fleet)) {
+      if (
+        unit.passenger &&
+        unit.passenger.type === "orchestrator" &&
+        ((sessionId && unit.passenger.sessionId === sessionId) || unit.passenger.pid === pid)
+      ) {
+        unit.passenger = null;
+        unit.status = "libre";
+        const quota = getCachedTaxiQuota(unit.account);
+        updateTaxiRechargingState(unit, quota);
+        changed = true;
+        appendTaxiLog("INFO", "TAXI_ORCHESTRATOR_RELEASED", {
+          account: unit.account,
+          sessionId,
+          pid,
+        });
+      }
     }
-  }
 
-  if (changed) {
-    saveFleetState(state, fleetPath);
-  }
+    if (changed) {
+      saveFleetState(state, fleetPath);
+    }
+  });
 }
 
 /**
@@ -532,65 +705,76 @@ export function leaseTaxi(
   fleetPath: string = FLEET_STATE_PATH,
   leaseTtlMs: number = DEFAULT_DC_AGENTS_CONFIG.accountPool.leaseTtlMs,
   allowedAccounts?: string[],
+  quotaGetter: (account: string) => DcTaxiQuotaInfo | undefined = getCachedTaxiQuota,
 ): { account: string; unit: DcTaxiUnit } | null {
-  const state = loadFleetState(fleetPath, allowedAccounts);
-  reapAbandonedTaxis(state, leaseTtlMs);
+  return withFleetLock(fleetPath, () => {
+    const state = loadFleetState(fleetPath, allowedAccounts);
+    reapAbandonedTaxis(state, leaseTtlMs, Date.now(), quotaGetter);
 
-  const now = Date.now();
-  const fullPassenger: DcTaxiPassenger = {
-    ...passengerData,
-    startedAt: now,
-    heartbeatAt: now,
-  };
+    // Evaluar unidades en 'recargando' (si recuperaron >=60% se reactivan a 'libre') y 'libre' (<5% a 'recargando')
+    for (const unit of Object.values(state.fleet)) {
+      if (unit.status === "recargando" || unit.status === "libre") {
+        const quota = quotaGetter(unit.account);
+        updateTaxiRechargingState(unit, quota);
+      }
+    }
 
-  // 1. Intentar cuenta preferida si está estrictamente libre
-  if (preferredAccount && state.fleet[preferredAccount] && state.fleet[preferredAccount].status === "libre") {
-    const unit = state.fleet[preferredAccount];
-    unit.status = "ocupado";
-    unit.passenger = fullPassenger;
-    saveFleetState(state, fleetPath);
+    const now = Date.now();
+    const fullPassenger: DcTaxiPassenger = {
+      ...passengerData,
+      startedAt: now,
+      heartbeatAt: now,
+    };
 
-    appendTaxiLog("INFO", "TAXI_LEASED", {
-      account: preferredAccount,
-      type: fullPassenger.type,
-      sessionId: fullPassenger.sessionId,
-      pid: fullPassenger.pid,
-      model: fullPassenger.model,
-      preferred: true,
-    });
-
-    return { account: preferredAccount, unit };
-  }
-
-  // 2. Buscar cualquier taxi libre disponible
-  for (const [account, unit] of Object.entries(state.fleet)) {
-    if (unit.status === "libre") {
+    // 1. Intentar cuenta preferida si está estrictamente libre
+    if (preferredAccount && state.fleet[preferredAccount] && state.fleet[preferredAccount].status === "libre") {
+      const unit = state.fleet[preferredAccount];
       unit.status = "ocupado";
       unit.passenger = fullPassenger;
       saveFleetState(state, fleetPath);
 
       appendTaxiLog("INFO", "TAXI_LEASED", {
-        account,
+        account: preferredAccount,
         type: fullPassenger.type,
         sessionId: fullPassenger.sessionId,
         pid: fullPassenger.pid,
         model: fullPassenger.model,
-        preferred: false,
+        preferred: true,
       });
 
-      return { account, unit };
+      return { account: preferredAccount, unit };
     }
-  }
 
-  // 3. Flota agotada
-  appendTaxiLog("WARN", "TAXI_FLEET_EXHAUSTED", {
-    requestedBy: fullPassenger.type,
-    sessionId: fullPassenger.sessionId,
-    preferredAccount,
+    // 2. Buscar cualquier taxi libre disponible
+    for (const [account, unit] of Object.entries(state.fleet)) {
+      if (unit.status === "libre") {
+        unit.status = "ocupado";
+        unit.passenger = fullPassenger;
+        saveFleetState(state, fleetPath);
+
+        appendTaxiLog("INFO", "TAXI_LEASED", {
+          account,
+          type: fullPassenger.type,
+          sessionId: fullPassenger.sessionId,
+          pid: fullPassenger.pid,
+          model: fullPassenger.model,
+          preferred: false,
+        });
+
+        return { account, unit };
+      }
+    }
+
+    // 3. Flota agotada
+    appendTaxiLog("WARN", "TAXI_FLEET_EXHAUSTED", {
+      requestedBy: fullPassenger.type,
+      sessionId: fullPassenger.sessionId,
+      preferredAccount,
+    });
+
+    saveFleetState(state, fleetPath);
+    return null;
   });
-
-  saveFleetState(state, fleetPath);
-  return null;
 }
 
 /**
@@ -601,36 +785,43 @@ export function releaseTaxi(
   sessionId?: string,
   fleetPath: string = FLEET_STATE_PATH,
   allowedAccounts?: string[],
+  quotaGetter: (account: string) => DcTaxiQuotaInfo | undefined = getCachedTaxiQuota,
 ): boolean {
-  const state = loadFleetState(fleetPath, allowedAccounts);
-  const unit = state.fleet[account];
+  return withFleetLock(fleetPath, () => {
+    const state = loadFleetState(fleetPath, allowedAccounts);
+    const unit = state.fleet[account];
 
-  if (!unit || unit.status !== "ocupado") {
-    return false;
-  }
+    if (!unit || unit.status !== "ocupado") {
+      return false;
+    }
 
-  if (sessionId && unit.passenger && unit.passenger.sessionId !== sessionId) {
-    appendTaxiLog("WARN", "TAXI_RELEASE_SESSION_MISMATCH", {
+    if (sessionId && unit.passenger && unit.passenger.sessionId !== sessionId) {
+      appendTaxiLog("WARN", "TAXI_RELEASE_SESSION_MISMATCH", {
+        account,
+        expectedSession: unit.passenger.sessionId,
+        actualSession: sessionId,
+      });
+      return false;
+    }
+
+    const previousPassenger = unit.passenger;
+    unit.passenger = null;
+    unit.status = "libre";
+
+    const quota = quotaGetter(account);
+    updateTaxiRechargingState(unit, quota);
+
+    saveFleetState(state, fleetPath);
+
+    appendTaxiLog("INFO", "TAXI_RELEASED", {
       account,
-      expectedSession: unit.passenger.sessionId,
-      actualSession: sessionId,
+      releasedBySession: sessionId,
+      passengerType: previousPassenger?.type,
+      pid: previousPassenger?.pid,
     });
-    return false;
-  }
 
-  const previousPassenger = unit.passenger;
-  unit.status = "libre";
-  unit.passenger = null;
-  saveFleetState(state, fleetPath);
-
-  appendTaxiLog("INFO", "TAXI_RELEASED", {
-    account,
-    releasedBySession: sessionId,
-    passengerType: previousPassenger?.type,
-    pid: previousPassenger?.pid,
+    return true;
   });
-
-  return true;
 }
 
 /**
@@ -667,6 +858,13 @@ export function getFleetStatusSummary(
 } {
   const state = loadFleetState(fleetPath, allowedAccounts);
   reapAbandonedTaxis(state);
+
+  for (const unit of Object.values(state.fleet)) {
+    if (unit.status === "recargando" || unit.status === "libre") {
+      const quota = getCachedTaxiQuota(unit.account);
+      updateTaxiRechargingState(unit, quota);
+    }
+  }
 
   // Escaneo activo de procesos vivos del OS si estamos en entorno real
   if (!allowedAccounts || allowedAccounts.length === 0) {

@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
+import { spawn } from "node:child_process";
 
 import {
   isProcessAlive,
@@ -16,7 +17,13 @@ import {
   getFleetStatusSummary,
   acquireOrchestratorTaxi,
   releaseOrchestratorTaxi,
+  withFleetLock,
 } from "../src/features/dc-agents/core/dc-taxi-dispatcher.ts";
+
+import {
+  setCachedTaxiQuota,
+  clearTaxiQuotaCache,
+} from "../src/features/dc-agents/core/dc-taxi-quota.ts";
 
 import {
   calibrateEffortForTask,
@@ -48,7 +55,10 @@ import {
 } from "../src/features/dc-agents/core/dc-ephemeral-manager.ts";
 
 import { DcTaxisPanel } from "../src/features/dc-agents/views/dc-taxis-panel.ts";
-import { registerDcEphemeralTools } from "../src/features/dc-agents/tools/dc-ephemeral-tools.ts";
+import {
+  registerDcEphemeralTools,
+  extractSubagentMetrics,
+} from "../src/features/dc-agents/tools/dc-ephemeral-tools.ts";
 import {
   DC_TOOL_PRESETS,
   DC_TOOL_BRICKS,
@@ -88,6 +98,109 @@ test("dc-taxi-dispatcher: initial state and atomic fleet persistence", () => {
 
     const reloaded = loadFleetState(fleetPath, customAccounts);
     assert.equal(reloaded.fleet["ac01"].status, "ocupado");
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("dc-taxi-dispatcher: withFleetLock acquires lockfile, guarantees finally release, and supports reentrancy", () => {
+  const tempDir = createTempDir("lock-basic");
+  const fleetPath = path.join(tempDir, "dc-taxis.json");
+  const lockPath = `${fleetPath}.lock`;
+
+  try {
+    let lockExistedDuringFn = false;
+    let lockPayloadDuringFn = "";
+
+    const result = withFleetLock(fleetPath, () => {
+      lockExistedDuringFn = fs.existsSync(lockPath);
+      if (lockExistedDuringFn) {
+        lockPayloadDuringFn = fs.readFileSync(lockPath, "utf8");
+      }
+      // Reentrancy test
+      const nested = withFleetLock(fleetPath, () => "nested-ok");
+      assert.equal(nested, "nested-ok");
+      return "outer-ok";
+    });
+
+    assert.equal(result, "outer-ok");
+    assert.equal(lockExistedDuringFn, true);
+    assert.ok(lockPayloadDuringFn.includes(`"pid":${process.pid}`));
+    // Lock must be released after completion
+    assert.equal(fs.existsSync(lockPath), false);
+
+    // Guaranteed release on error
+    assert.throws(() => {
+      withFleetLock(fleetPath, () => {
+        assert.equal(fs.existsSync(lockPath), true);
+        throw new Error("simulated failure inside lock");
+      });
+    }, /simulated failure/);
+
+    assert.equal(fs.existsSync(lockPath), false);
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("dc-taxi-dispatcher: withFleetLock breaks stale lock with dead PID or >10s timestamp", () => {
+  const tempDir = createTempDir("lock-stale");
+  const fleetPath = path.join(tempDir, "dc-taxis.json");
+  const lockPath = `${fleetPath}.lock`;
+
+  try {
+    // 1. Stale lock due to dead PID
+    const deadPidPayload = JSON.stringify({ pid: 99999999, createdAt: Date.now() });
+    fs.writeFileSync(lockPath, deadPidPayload, "utf8");
+
+    const res1 = withFleetLock(fleetPath, () => "recovered-dead-pid");
+    assert.equal(res1, "recovered-dead-pid");
+    assert.equal(fs.existsSync(lockPath), false);
+
+    // 2. Stale lock due to age > 10,000ms
+    const staleTimePayload = JSON.stringify({ pid: process.pid, createdAt: Date.now() - 20000 });
+    fs.writeFileSync(lockPath, staleTimePayload, "utf8");
+
+    const res2 = withFleetLock(fleetPath, () => "recovered-stale-time");
+    assert.equal(res2, "recovered-stale-time");
+    assert.equal(fs.existsSync(lockPath), false);
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("dc-taxi-dispatcher: withFleetLock handles inter-process contention and waits with backoff", () => {
+  const tempDir = createTempDir("lock-contention");
+  const fleetPath = path.join(tempDir, "dc-taxis.json");
+  const lockPath = `${fleetPath}.lock`;
+
+  try {
+    // Spawn a detached-like node child process that creates lockPath, holds it for 50ms, then releases it
+    const childScript = `
+      const fs = require("node:fs");
+      fs.writeFileSync(${JSON.stringify(lockPath)}, JSON.stringify({ pid: process.pid, createdAt: Date.now() }));
+      setTimeout(() => {
+        try { fs.unlinkSync(${JSON.stringify(lockPath)}); } catch {}
+        process.exit(0);
+      }, 50);
+    `;
+
+    const child = spawn(process.execPath, ["-e", childScript], { stdio: "ignore" });
+
+    // Wait until child has written the lockfile
+    const start = Date.now();
+    while (!fs.existsSync(lockPath) && Date.now() - start < 1000) {
+      const sab = new SharedArrayBuffer(4);
+      Atomics.wait(new Int32Array(sab), 0, 0, 5);
+    }
+    assert.equal(fs.existsSync(lockPath), true);
+
+    // withFleetLock will block with backoff until the child releases it
+    const outcome = withFleetLock(fleetPath, () => "acquired-after-contention");
+    assert.equal(outcome, "acquired-after-contention");
+    assert.equal(fs.existsSync(lockPath), false);
+
+    child.kill();
   } finally {
     fs.rmSync(tempDir, { recursive: true, force: true });
   }
@@ -163,6 +276,195 @@ test("dc-taxi-dispatcher: leaseTaxi respects preferred account and allocates nex
     assert.equal(summary.libres, 1);
     assert.equal(summary.ocupados, 1);
   } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("dc-taxi-dispatcher: releaseTaxi sets status to recargando when quota is <5% and libre when >=5%", () => {
+  const tempDir = createTempDir("release-recharge");
+  const fleetPath = path.join(tempDir, "dc-taxis.json");
+  clearTaxiQuotaCache();
+
+  try {
+    const customAccounts = ["ac01", "ac02"];
+    const initial = createInitialFleetState(customAccounts);
+
+    // Ocupamos ac01 y ac02
+    initial.fleet["ac01"].status = "ocupado";
+    initial.fleet["ac01"].passenger = {
+      type: "ephemeral_subagent",
+      sessionId: "sess-critica",
+      pid: process.pid,
+      model: "gemini-3.8-flash-high",
+      startedAt: Date.now(),
+      heartbeatAt: Date.now(),
+    };
+
+    initial.fleet["ac02"].status = "ocupado";
+    initial.fleet["ac02"].passenger = {
+      type: "ephemeral_subagent",
+      sessionId: "sess-saludable",
+      pid: process.pid,
+      model: "gemini-3.8-flash-high",
+      startedAt: Date.now(),
+      heartbeatAt: Date.now(),
+    };
+
+    saveFleetState(initial, fleetPath);
+
+    // Caso 1: ac01 con cuota crítica (<5%, ej: 3%)
+    setCachedTaxiQuota("ac01", { gemini5hPct: 3 });
+
+    const released1 = releaseTaxi("ac01", "sess-critica", fleetPath, customAccounts);
+    assert.equal(released1, true);
+
+    const afterRelease1 = loadFleetState(fleetPath, customAccounts);
+    assert.equal(afterRelease1.fleet["ac01"].status, "recargando");
+    assert.equal(afterRelease1.fleet["ac01"].passenger, null);
+
+    // Caso 2: ac02 con cuota sana (>=5%, ej: 50%)
+    setCachedTaxiQuota("ac02", { gemini5hPct: 50 });
+
+    const released2 = releaseTaxi("ac02", "sess-saludable", fleetPath, customAccounts);
+    assert.equal(released2, true);
+
+    const afterRelease2 = loadFleetState(fleetPath, customAccounts);
+    assert.equal(afterRelease2.fleet["ac02"].status, "libre");
+    assert.equal(afterRelease2.fleet["ac02"].passenger, null);
+  } finally {
+    clearTaxiQuotaCache();
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("dc-taxi-dispatcher: leaseTaxi ignores recharging units (<60%) and reactivates them when recovering (>=60%)", () => {
+  const tempDir = createTempDir("lease-recharge");
+  const fleetPath = path.join(tempDir, "dc-taxis.json");
+  clearTaxiQuotaCache();
+
+  try {
+    const customAccounts = ["ac01", "ac02"];
+    const initial = createInitialFleetState(customAccounts);
+
+    // ac01 está en recargando (cuota 45% < 60%)
+    initial.fleet["ac01"].status = "recargando";
+    initial.fleet["ac01"].passenger = null;
+    setCachedTaxiQuota("ac01", { gemini5hPct: 45 });
+
+    // ac02 está ocupado
+    initial.fleet["ac02"].status = "ocupado";
+    initial.fleet["ac02"].passenger = {
+      type: "orchestrator",
+      sessionId: "orch-sess",
+      pid: process.pid,
+      model: "gemini-3.8-flash-high",
+      startedAt: Date.now(),
+      heartbeatAt: Date.now(),
+    };
+
+    saveFleetState(initial, fleetPath);
+
+    // 1. Intentar arrendar: ac01 está en recargando (<60%) y ac02 ocupado -> debe devolver null (flota agotada)
+    const lease1 = leaseTaxi(
+      {
+        type: "ephemeral_subagent",
+        sessionId: "sub-1",
+        pid: process.pid,
+        model: "gemini-3.8-flash-high",
+      },
+      "ac01",
+      fleetPath,
+      300000,
+      customAccounts,
+    );
+    assert.equal(lease1, null);
+
+    // 2. Intentar sin cuenta preferida: debe seguir ignorando ac01
+    const leaseGeneric = leaseTaxi(
+      {
+        type: "ephemeral_subagent",
+        sessionId: "sub-gen",
+        pid: process.pid,
+        model: "gemini-3.8-flash-high",
+      },
+      undefined,
+      fleetPath,
+      300000,
+      customAccounts,
+    );
+    assert.equal(leaseGeneric, null);
+
+    // 3. Simular que ac01 recuperó cuota (>= 60%, ej: 75%)
+    setCachedTaxiQuota("ac01", { gemini5hPct: 75 });
+
+    // 4. Ahora leaseTaxi debe reactivar ac01 a 'libre' y arrendarla exitosamente
+    const lease2 = leaseTaxi(
+      {
+        type: "ephemeral_subagent",
+        sessionId: "sub-2",
+        pid: process.pid,
+        model: "gemini-3.8-flash-high",
+      },
+      "ac01",
+      fleetPath,
+      300000,
+      customAccounts,
+    );
+    assert.ok(lease2);
+    assert.equal(lease2.account, "ac01");
+    assert.equal(lease2.unit.status, "ocupado");
+    assert.equal(lease2.unit.passenger?.sessionId, "sub-2");
+
+    const stateAfter = loadFleetState(fleetPath, customAccounts);
+    assert.equal(stateAfter.fleet["ac01"].status, "ocupado");
+  } finally {
+    clearTaxiQuotaCache();
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("dc-taxi-dispatcher: reapAbandonedTaxis transitions dead PID unit to recargando if quota <5%", () => {
+  const tempDir = createTempDir("reap-recharge");
+  const fleetPath = path.join(tempDir, "dc-taxis.json");
+  clearTaxiQuotaCache();
+
+  try {
+    const state = createInitialFleetState(["ac01", "ac02"]);
+
+    // ac01 con PID muerto y cuota crítica (2%)
+    state.fleet["ac01"].status = "ocupado";
+    state.fleet["ac01"].passenger = {
+      type: "subagent",
+      sessionId: "dead-crit",
+      pid: 99999999,
+      startedAt: Date.now(),
+      heartbeatAt: Date.now(),
+    };
+    setCachedTaxiQuota("ac01", { gemini5hPct: 2 });
+
+    // ac02 con PID muerto y cuota normal (80%)
+    state.fleet["ac02"].status = "ocupado";
+    state.fleet["ac02"].passenger = {
+      type: "subagent",
+      sessionId: "dead-ok",
+      pid: 99999999,
+      startedAt: Date.now(),
+      heartbeatAt: Date.now(),
+    };
+    setCachedTaxiQuota("ac02", { gemini5hPct: 80 });
+
+    saveFleetState(state, fleetPath);
+
+    const reaped = reapAbandonedTaxis(state, 300000);
+    assert.equal(reaped, 2);
+
+    assert.equal(state.fleet["ac01"].status, "recargando");
+    assert.equal(state.fleet["ac01"].passenger, null);
+
+    assert.equal(state.fleet["ac02"].status, "libre");
+    assert.equal(state.fleet["ac02"].passenger, null);
+  } finally {
+    clearTaxiQuotaCache();
     fs.rmSync(tempDir, { recursive: true, force: true });
   }
 });
@@ -450,6 +752,64 @@ test("dc-taxi-history: records trips, bounds history and computes aggregate metr
   }
 });
 
+test("dc-taxi-history: loadTaxiTripHistory creates .corrupt.bak backup when JSON is malformed", () => {
+  const tempDir = createTempDir("corrupt-history");
+  const historyPath = path.join(tempDir, "dc-taxis-history.json");
+
+  try {
+    const corruptContent = "{ this is invalid json content";
+    fs.writeFileSync(historyPath, corruptContent, "utf8");
+
+    const history = loadTaxiTripHistory(10, historyPath);
+    // Returns empty array
+    assert.deepEqual(history, []);
+
+    // Backup file must have been created with .corrupt.<timestamp>.bak
+    const files = fs.readdirSync(tempDir);
+    const backupFile = files.find((f) => f.includes(".corrupt.") && f.endsWith(".bak"));
+    assert.ok(backupFile, "Expected backup file with .corrupt.*.bak to be created");
+
+    const backupContent = fs.readFileSync(path.join(tempDir, backupFile), "utf8");
+    assert.equal(backupContent, corruptContent);
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("dc-taxi-history: recordTaxiTrip writes atomically with temp file and no leftovers", () => {
+  const tempDir = createTempDir("atomic-history");
+  const historyPath = path.join(tempDir, "dc-taxis-history.json");
+
+  try {
+    recordTaxiTrip(
+      {
+        tripId: "t-atomic-1",
+        account: "ac01",
+        passengerType: "ephemeral_subagent",
+        model: "gemini-3.8-flash-high",
+        sessionId: "s1",
+        startedAt: 1000,
+        endedAt: 2000,
+        durationMs: 1000,
+        status: "completed",
+      },
+      historyPath,
+    );
+
+    const files = fs.readdirSync(tempDir);
+    // Only the target history file should exist, no .tmp files left
+    assert.ok(files.includes("dc-taxis-history.json"));
+    const tmpFiles = files.filter((f) => f.endsWith(".tmp"));
+    assert.equal(tmpFiles.length, 0);
+
+    const history = loadTaxiTripHistory(10, historyPath);
+    assert.equal(history.length, 1);
+    assert.equal(history[0].tripId, "t-atomic-1");
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("dc-taxi-logger: appends structured logs and retrieves recent lines", () => {
   const tempDir = createTempDir("logger");
   const logPath = path.join(tempDir, "dc-taxis.log");
@@ -653,6 +1013,187 @@ test("dc-ephemeral-tools: dc_ephemeral_agent_run unwraps real Pi NestedToolOutco
   // Verificar que el archivo temporal del agente fue eliminado
   const agentPath = path.join(os.homedir(), ".pi", "agent", "agents", `${executedAgentName}.md`);
   assert.equal(fs.existsSync(agentPath), false);
+});
+
+test("dc-ephemeral-tools: mode background does not destroy agent file nor release taxi prematurely", async () => {
+  const registered: any[] = [];
+  const fakePi = {
+    registerTool(toolDef: any) {
+      registered.push(toolDef);
+    },
+  } as any;
+
+  registerDcEphemeralTools(fakePi);
+  const tool = registered[0];
+
+  let executedAgentName = "";
+  const testSessionId = `sess-bg-isolation-${Date.now()}`;
+  const fakeCtx = {
+    sessionManager: { getSessionId: () => testSessionId },
+    model: { provider: "cpam", id: "ac02/gemini-3.8-flash-high" },
+    executeTool: async (name: string, args: any) => {
+      assert.equal(name, "subagent_run");
+      assert.equal(args.mode, "background");
+      executedAgentName = args.agent;
+      return {
+        toolCall: { id: "call-bg", name: "subagent_run", arguments: args },
+        result: {
+          content: [{ type: "text", text: "Background worker started in background." }],
+          details: { background: true, agent: args.agent },
+        },
+      };
+    },
+  } as any;
+
+  const outcome = await tool.execute(
+    "call-bg-1",
+    { task: "Proceso asincrono largo", mode: "background", role: "bg-worker" },
+    undefined,
+    undefined,
+    fakeCtx,
+  );
+
+  assert.ok(executedAgentName.startsWith("dc-ephem-"));
+  assert.ok(outcome.content[0].text.includes("Background worker started"));
+
+  const agentPath = path.join(os.homedir(), ".pi", "agent", "agents", `${executedAgentName}.md`);
+  try {
+    // 1. El archivo .md DEBE conservarse en disco mientras corre en background
+    assert.equal(fs.existsSync(agentPath), true, "Agent file must NOT be destroyed in background mode");
+
+    // 2. El Taxi arrendado debe permanecer 'ocupado' en la flota
+    const fleetState = loadFleetState();
+    const leasedAccount = Object.keys(fleetState.fleet).find(
+      (acc) => fleetState.fleet[acc].passenger?.agentName === executedAgentName,
+    );
+    assert.ok(leasedAccount, "A taxi must remain assigned to the background agent");
+    assert.equal(fleetState.fleet[leasedAccount].status, "ocupado");
+
+    // 3. Debe haberse registrado el log de delegación en background
+    const recentLogs = readRecentTaxiLogs(15);
+    const bgLog = recentLogs.find((l) => l.includes("EPHEMERAL_AGENT_BACKGROUND_DELEGATED"));
+    assert.ok(bgLog, "EPHEMERAL_AGENT_BACKGROUND_DELEGATED must be logged");
+    assert.ok(bgLog.includes(executedAgentName));
+  } finally {
+    // Limpieza manual post-test para no dejar rastro
+    if (fs.existsSync(agentPath)) {
+      fs.unlinkSync(agentPath);
+    }
+    const fleetState = loadFleetState();
+    const account = Object.keys(fleetState.fleet).find(
+      (acc) => fleetState.fleet[acc].passenger?.agentName === executedAgentName,
+    );
+    if (account) {
+      releaseTaxi(account, testSessionId);
+    }
+  }
+});
+
+test("dc-ephemeral-tools: token usage and costEstimated from subagent_run propagate to taxi history", async () => {
+  const registered: any[] = [];
+  const fakePi = {
+    registerTool(toolDef: any) {
+      registered.push(toolDef);
+    },
+  } as any;
+
+  registerDcEphemeralTools(fakePi);
+  const tool = registered[0];
+
+  let executedAgentName = "";
+  const testSessionId = `sess-tokens-test-${Date.now()}`;
+  const fakeCtx = {
+    sessionManager: { getSessionId: () => testSessionId },
+    model: { provider: "cpam", id: "ac03/gemini-3.8-flash-high" },
+    executeTool: async (name: string, args: any) => {
+      assert.equal(name, "subagent_run");
+      executedAgentName = args.agent;
+      return {
+        toolCall: { id: "call-tok", name: "subagent_run", arguments: args },
+        result: {
+          content: [{ type: "text", text: "Tarea de calculo finalizada." }],
+          details: {
+            tokens: {
+              input: 1250,
+              output: 320,
+              reasoning: 80,
+              total: 1650,
+            },
+            costEstimated: 0.00342,
+          },
+        },
+      };
+    },
+  } as any;
+
+  const outcome = await tool.execute(
+    "call-tok-1",
+    { task: "Auditar consumo de tokens", mode: "task", role: "token-auditor" },
+    undefined,
+    undefined,
+    fakeCtx,
+  );
+
+  assert.ok(executedAgentName.startsWith("dc-ephem-"));
+  assert.equal(outcome.content[0].text, "Tarea de calculo finalizada.");
+
+  // En modo task el archivo SI debe haber sido limpiado
+  const agentPath = path.join(os.homedir(), ".pi", "agent", "agents", `${executedAgentName}.md`);
+  assert.equal(fs.existsSync(agentPath), false, "Task mode must clean up agent file");
+
+  // El registro de viaje debe contener los tokens reales y el costo estimado
+  const history = loadTaxiTripHistory(10);
+  const matchedTrip = history.find(
+    (t) => t.sessionId === testSessionId || t.tokens?.total === 1650,
+  );
+
+  assert.ok(matchedTrip, "History trip must exist with recorded tokens");
+  assert.equal(matchedTrip?.tokens?.input, 1250);
+  assert.equal(matchedTrip?.tokens?.output, 320);
+  assert.equal(matchedTrip?.tokens?.reasoning, 80);
+  assert.equal(matchedTrip?.tokens?.total, 1650);
+  assert.equal(matchedTrip?.costEstimated, 0.00342);
+  assert.equal(matchedTrip?.status, "completed");
+});
+
+test("dc-ephemeral-tools: extractSubagentMetrics extracts tokens and cost from multiple candidate structures", () => {
+  // 1. Caso estándar de Pi: rawOutcome.result.details.tokens
+  const res1 = extractSubagentMetrics({
+    result: {
+      details: {
+        tokens: { input: 100, output: 50, reasoning: 20, total: 170 },
+        costEstimated: 0.0015,
+      },
+    },
+  });
+  assert.deepEqual(res1.tokens, { input: 100, output: 50, reasoning: 20, total: 170 });
+  assert.equal(res1.costEstimated, 0.0015);
+
+  // 2. Caso usage en raíz (promptTokens/completionTokens)
+  const res2 = extractSubagentMetrics({
+    usage: { promptTokens: 80, completionTokens: 40, totalTokens: 120 },
+    cost: 0.0008,
+  });
+  assert.deepEqual(res2.tokens, { input: 80, output: 40, total: 120 });
+  assert.equal(res2.costEstimated, 0.0008);
+
+  // 3. Caso unwrapped.details.tokens con snake_case
+  const res3 = extractSubagentMetrics(
+    {},
+    {
+      details: {
+        tokens: { prompt_tokens: 300, completion_tokens: 150, reasoning_tokens: 25 },
+        costEstimated: 0.004,
+      },
+    },
+  );
+  assert.deepEqual(res3.tokens, { input: 300, output: 150, reasoning: 25, total: 475 });
+  assert.equal(res3.costEstimated, 0.004);
+
+  // 4. Caso vacío / undefined
+  const res4 = extractSubagentMetrics(undefined, undefined);
+  assert.equal(res4.tokens, undefined);
+  assert.equal(res4.costEstimated, undefined);
 });
 
 test("dc-ephemeral-manager: isolateSpecializedToolsForOrchestrator removes heavy tools from active set while keeping dc_ephemeral_agent_run", () => {

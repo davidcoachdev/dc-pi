@@ -233,6 +233,7 @@ export function prepareEphemeralAgent(
       type: "ephemeral_subagent",
       sessionId: contextMeta.sessionId,
       pid,
+      agentName,
       model: resolvedModel.baseModelName,
       taskLabel: options.label || options.role || options.archetype || options.task.slice(0, 40),
     },

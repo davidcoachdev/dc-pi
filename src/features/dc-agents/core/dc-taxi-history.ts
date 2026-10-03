@@ -17,8 +17,8 @@ import type {
 const HISTORY_FILE_PATH = path.join(os.homedir(), ".pi", "agent", "dc-studio", "dc-taxis-history.json");
 const MAX_HISTORY_RECORDS = 200;
 
-function ensureHistoryDirectory(): void {
-  const dir = path.dirname(HISTORY_FILE_PATH);
+function ensureHistoryDirectory(targetPath: string = HISTORY_FILE_PATH): void {
+  const dir = path.dirname(targetPath);
   if (!fs.existsSync(dir)) {
     fs.mkdirSync(dir, { recursive: true });
   }
@@ -35,8 +35,14 @@ export function loadTaxiTripHistory(
     return [];
   }
 
+  let raw = "";
   try {
-    const raw = fs.readFileSync(historyPath, "utf8");
+    raw = fs.readFileSync(historyPath, "utf8");
+  } catch {
+    return [];
+  }
+
+  try {
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed)) return [];
 
@@ -44,6 +50,12 @@ export function loadTaxiTripHistory(
     const sorted = parsed.sort((a, b) => (b.endedAt || 0) - (a.endedAt || 0));
     return sorted.slice(0, limit);
   } catch {
+    try {
+      const backupPath = `${historyPath}.corrupt.${Date.now()}.bak`;
+      fs.copyFileSync(historyPath, backupPath);
+    } catch {
+      /* defensive */
+    }
     return [];
   }
 }
@@ -55,8 +67,9 @@ export function recordTaxiTrip(
   trip: DcTaxiTripRecord,
   historyPath: string = HISTORY_FILE_PATH,
 ): void {
+  let tempPath: string | undefined;
   try {
-    ensureHistoryDirectory();
+    ensureHistoryDirectory(historyPath);
 
     let history: DcTaxiTripRecord[] = [];
     if (fs.existsSync(historyPath)) {
@@ -65,6 +78,12 @@ export function recordTaxiTrip(
         const parsed = JSON.parse(raw);
         if (Array.isArray(parsed)) history = parsed;
       } catch {
+        try {
+          const backupPath = `${historyPath}.corrupt.${Date.now()}.bak`;
+          fs.copyFileSync(historyPath, backupPath);
+        } catch {
+          /* defensive */
+        }
         history = [];
       }
     }
@@ -77,9 +96,20 @@ export function recordTaxiTrip(
       history = history.slice(0, MAX_HISTORY_RECORDS);
     }
 
-    fs.writeFileSync(historyPath, JSON.stringify(history, null, 2) + "\n", "utf8");
+    tempPath = `${historyPath}.${Date.now()}.${Math.random().toString(36).slice(2, 6)}.tmp`;
+    fs.writeFileSync(tempPath, JSON.stringify(history, null, 2) + "\n", "utf8");
+    fs.renameSync(tempPath, historyPath);
+    tempPath = undefined;
   } catch {
-    /* silent defensive */
+    if (tempPath) {
+      try {
+        if (fs.existsSync(tempPath)) {
+          fs.unlinkSync(tempPath);
+        }
+      } catch {
+        /* defensive */
+      }
+    }
   }
 }
 
