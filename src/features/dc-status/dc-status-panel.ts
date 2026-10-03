@@ -176,6 +176,25 @@ export class DcStatusPanel implements Component {
             continue;
           }
 
+          if (trimmed.toLowerCase().startsWith("warning:") || trimmed.toLowerCase().startsWith("no models available")) {
+            const cleanWarning = trimmed.replace(/^warning:\s*/i, "");
+            lines.push(`  ${t.bold(t.fg("accent", "◆"))} ${t.bold(t.fg("warning", "[Advertencia]"))}`);
+            const parts = wrapTextWithAnsi(t.fg("text", cleanWarning), wrapW);
+            for (const p of parts) {
+              lines.push(`    ${p}`);
+            }
+            continue;
+          }
+
+          if (trimmed.toLowerCase().startsWith("extension package") || trimmed.toLowerCase().startsWith("failed to load extension")) {
+            lines.push(`  ${t.bold(t.fg("accent", "◆"))} ${t.bold(t.fg("warning", "[Alerta de Extensión]"))}`);
+            const parts = wrapTextWithAnsi(t.fg("text", trimmed), wrapW);
+            for (const p of parts) {
+              lines.push(`    ${p}`);
+            }
+            continue;
+          }
+
           if (trimmed.startsWith("/") || trimmed.startsWith("./") || trimmed.startsWith("~/") || trimmed.includes("/docs/")) {
             const shortPath = trimmed.replace(/.*(\/node_modules\/@earendil-works\/pi-coding-agent\/docs\/.*)/, "...$1");
             const parts = wrapTextWithAnsi(`${t.fg("dim", "📄")} ${t.fg("text", shortPath)}`, Math.max(15, safeW - 10));
@@ -184,29 +203,31 @@ export class DcStatusPanel implements Component {
             continue;
           }
 
-          if (rawLine.startsWith("  ") || rawLine.startsWith("\t") || trimmed.includes(",")) {
-            if (trimmed.includes(",") && !trimmed.startsWith("http")) {
-              const items = trimmed.split(",").map((s) => s.trim()).filter(Boolean);
-              for (const item of items) {
-                const parts = wrapTextWithAnsi(`${t.fg("accent", "•")} ${t.fg("text", item)}`, Math.max(15, safeW - 8));
-                lines.push(`    ${parts[0]}`);
-                for (let j = 1; j < parts.length; j++) lines.push(`      ${parts[j]}`);
-              }
-            } else {
-              const parts = wrapTextWithAnsi(t.fg("dim", trimmed), Math.max(15, safeW - 8));
-              for (const p of parts) {
-                lines.push(`      ${p}`);
-              }
+          const isTagList = (str: string): boolean => {
+            if (!str.includes(",")) return false;
+            const parts = str.split(",").map((s) => s.trim()).filter(Boolean);
+            if (parts.length < 2) return false;
+            return parts.every((p) => p.length < 35 && !p.includes(".") && p.split(/\s+/).length <= 2);
+          };
+
+          if (isTagList(trimmed) && !trimmed.startsWith("http")) {
+            const items = trimmed.split(",").map((s) => s.trim()).filter(Boolean);
+            for (const item of items) {
+              const parts = wrapTextWithAnsi(`${t.fg("accent", "•")} ${t.fg("text", item)}`, Math.max(15, safeW - 8));
+              lines.push(`    ${parts[0]}`);
+              for (let j = 1; j < parts.length; j++) lines.push(`      ${parts[j]}`);
             }
             continue;
           }
 
-          if (trimmed.toLowerCase().startsWith("warning:") || trimmed.toLowerCase().startsWith("no models available")) {
-            const cleanWarning = trimmed.replace(/^warning:\s*/i, "");
-            lines.push(`  ${t.bold(t.fg("accent", "◆"))} ${t.bold(t.fg("warning", "[Advertencia]"))}`);
-            const parts = wrapTextWithAnsi(t.fg("text", cleanWarning), wrapW);
-            for (const p of parts) {
-              lines.push(`    ${p}`);
+          if (rawLine.startsWith("  ") || rawLine.startsWith("\t")) {
+            if (rawLine.startsWith("    ") || rawLine.startsWith("\t\t")) {
+              const parts = wrapTextWithAnsi(t.fg("text", trimmed), Math.max(15, safeW - 10));
+              for (const p of parts) {
+                lines.push(`        ${p}`);
+              }
+            } else {
+              lines.push(`    ${t.bold(t.fg("warning", "•"))} ${t.bold(t.fg("accent", trimmed))}`);
             }
             continue;
           }
