@@ -16,6 +16,7 @@ import {
   ProfileDuel,
   openProfilePicker,
   dcFaceExtension,
+  mapAgentStateToFaceMode,
 } from "../src/features/dc-face/index.ts";
 import {
   createSidebarFooter,
@@ -66,18 +67,18 @@ test("dc-face/art: mini faces have stable frames for all modes", () => {
   assert.ok(sleepFace.includes("zZ"));
 });
 
-test("dc-face/art: paintBigLine applies ANSI semantic colors", () => {
+test("dc-face/art: paintBigLine applies ANSI semantic colors with chunking", () => {
   const lineHeart = " │══║  ♥  ║═══║  ♥  ║══│ ";
   const fg = (role: string, text: string) => `[${role}:${text}]`;
   const paintedHeart = paintBigLine(lineHeart, fg);
 
   assert.ok(paintedHeart.includes("[error:♥]"));
-  assert.ok(paintedHeart.includes("[text:║]"));
+  assert.ok(paintedHeart.includes("[text:══║]"));
 
   const lineCubis = "│  ▲▲▲▲▲▲▲   ▲▲▲▲▲▲▲  │";
   const paintedCubis = paintBigLine(lineCubis, fg);
   assert.ok(paintedCubis.includes("[error:│]"));
-  assert.ok(paintedCubis.includes("[error:▲]"));
+  assert.ok(paintedCubis.includes("[error:▲▲▲▲▲▲▲]"));
 });
 
 test("dc-face/core: BIG_FACE_MIN_ROWS is 46 and prefs persist cleanly", () => {
@@ -226,3 +227,115 @@ test("openProfilePicker renders with DcWindow native footer and complete divider
   const renderedLines = capturedComponent.render(80);
   assert.ok(renderedLines.length >= 10);
 });
+
+test("dcFaceExtension: binds to agentVisualStateStore reactively and stays quiet at idle", async () => {
+  const events = new Map<string, Function[]>();
+  let registeredCommands = new Map<string, any>();
+  let registeredShortcuts = new Map<string, any>();
+
+  const mockPi: any = {
+    on: (evt: string, fn: Function) => {
+      if (!events.has(evt)) events.set(evt, []);
+      events.get(evt)!.push(fn);
+    },
+    registerCommand: (name: string, def: any) => {
+      registeredCommands.set(name, def);
+    },
+    registerShortcut: (name: string, def: any) => {
+      registeredShortcuts.set(name, def);
+    },
+  };
+
+  let workingIndicatorDef: any;
+  let widgetRegistered = false;
+
+  const mockCtx: any = {
+    hasUI: true,
+    ui: {
+      theme: { fg: (_r: string, t: string) => t },
+      setWorkingIndicator: (def: any) => {
+        workingIndicatorDef = def;
+      },
+      setWidget: (name: string, _factory: any, _opts: any) => {
+        if (name === "dc-face-anchor") widgetRegistered = true;
+      },
+      onTerminalInput: () => () => {},
+      notify: () => {},
+    },
+  };
+
+  // Register extension
+  dcFaceExtension(mockPi);
+  assert.ok(registeredCommands.has("dc-face"));
+  assert.ok(registeredCommands.has("dc-faces"));
+  assert.ok(registeredShortcuts.has("alt+c"));
+
+  // Fire session_start
+  const sessionStartHandlers = events.get("session_start") || [];
+  for (const handler of sessionStartHandlers) {
+    await handler({}, mockCtx);
+  }
+  assert.ok(widgetRegistered);
+
+  // Initial state should be idle (feliz)
+  const faceKey = Symbol.for("dc.face.mini");
+  let currentFace = (globalThis as any)[faceKey];
+  assert.ok(currentFace.includes("feliz"));
+
+  // Reactive state: Transition to thinking
+  agentVisualStateStore.setState("thinking");
+  currentFace = (globalThis as any)[faceKey];
+  assert.ok(currentFace.includes("pensando"));
+  assert.ok(workingIndicatorDef !== undefined);
+
+  // Reactive state: Transition to working
+  agentVisualStateStore.setState("working");
+  currentFace = (globalThis as any)[faceKey];
+  assert.ok(currentFace.includes("trabajando"));
+
+  // Reactive state: Transition to dormant (sleep)
+  agentVisualStateStore.setState("dormant");
+  currentFace = (globalThis as any)[faceKey];
+  assert.ok(currentFace.includes("dormido"));
+
+  // Reactive state: Back to idle
+  agentVisualStateStore.setState("idle");
+  currentFace = (globalThis as any)[faceKey];
+  assert.ok(currentFace.includes("feliz"));
+
+  // Shutdown cleans up listeners and timers
+  const shutdownHandlers = events.get("session_shutdown") || [];
+  for (const handler of shutdownHandlers) {
+    handler();
+  }
+});
+
+test("mapAgentStateToFaceMode maps all AgentState values accurately", () => {
+  assert.equal(mapAgentStateToFaceMode("idle"), "feliz");
+  assert.equal(mapAgentStateToFaceMode("thinking"), "pensando");
+  assert.equal(mapAgentStateToFaceMode("writing"), "escribiendo");
+  assert.equal(mapAgentStateToFaceMode("typing"), "escribiendo");
+  assert.equal(mapAgentStateToFaceMode("working"), "trabajando");
+  assert.equal(mapAgentStateToFaceMode("dormant"), "dormido");
+  assert.equal(mapAgentStateToFaceMode("compacting"), "compactando");
+  assert.equal(mapAgentStateToFaceMode("retying"), "reintentando");
+  assert.equal(mapAgentStateToFaceMode("talking"), "hablando");
+  assert.equal(mapAgentStateToFaceMode("prompting"), "pregunta");
+});
+
+test("paintBigLine uses run-length chunking for contiguous glyphs", () => {
+  const line = "╔═════╗";
+  const calls: string[] = [];
+  const fg = (role: string, text: string) => {
+    calls.push(`${role}:${text}`);
+    return text;
+  };
+
+  const painted = paintBigLine(line, fg);
+  assert.equal(painted, "╔═════╗");
+  // Con chunking, todos los glifos de rol 'text' (╔, ═════, ╗) se agrupan en una sola llamada continua
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0], "text:╔═════╗");
+});
+
+

@@ -7,6 +7,7 @@ import {
   DOT,
   type FaceMode,
   getFaceFrameIndex,
+  mapAgentStateToFaceMode,
 } from "../../dc-face/core/dc-face-types.ts";
 import { readFacePrefs, writeFacePrefs } from "../../dc-face/core/dc-face-prefs.ts";
 import {
@@ -19,7 +20,7 @@ import {
 import { agentVisualStateStore, type AgentState } from "../../../core/dc-agent-state/index.ts";
 import { ttsBridgeClient } from "../../dc-face/core/dc-face-bridge.ts";
 
-export { paintBigLine };
+export { paintBigLine, mapAgentStateToFaceMode };
 export { BIG_DEFAULT } from "../../dc-face/art/dcdev.ts";
 
 export interface SidebarFooterOptions {
@@ -43,32 +44,6 @@ export function getTerminalRows(tui?: any): number {
     return process.stdout.rows;
   }
   return 0;
-}
-
-export function mapAgentStateToFaceMode(state: AgentState): FaceMode {
-  switch (state) {
-    case "idle":
-      return "feliz";
-    case "thinking":
-      return "pensando";
-    case "writing":
-    case "typing":
-      return "escribiendo";
-    case "working":
-      return "trabajando";
-    case "dormant":
-      return "dormido";
-    case "compacting":
-      return "compactando";
-    case "retying":
-      return "reintentando";
-    case "talking":
-      return "hablando";
-    case "prompting":
-      return "pregunta";
-    default:
-      return "feliz";
-  }
 }
 
 /**

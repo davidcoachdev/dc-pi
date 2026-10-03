@@ -37,6 +37,7 @@ import dcStudioExtension, {
   dcSidebarExtension,
   dcPromptExtension,
   dcDialogsExtension,
+  dcStateMonitorExtension,
 } from "../src/index.ts";
 
 test("src/index.ts exports all public primitives, classes, and helpers", () => {
@@ -80,6 +81,7 @@ test("src/index.ts exports all public primitives, classes, and helpers", () => {
   assert.equal(typeof dcSidebarExtension, "function");
   assert.equal(typeof dcPromptExtension, "function");
   assert.equal(typeof dcDialogsExtension, "function");
+  assert.equal(typeof dcStateMonitorExtension, "function");
 
   // Default and named unified extension
   assert.equal(typeof dcStudioExtension, "function");
@@ -140,6 +142,7 @@ test("dcStudioExtension registers all canonical commands and keybindings", () =>
     "dc-sidebar",
     "dc-prompt",
     "dc-dialogs",
+    "dc-state-test",
   ];
 
   for (const cmd of expectedCanonicalCommands) {

@@ -1,3 +1,5 @@
+import type { AgentState } from "../../../core/dc-agent-state/dc-agent-state.ts";
+
 export type FaceMode =
   | "feliz"
   | "pensando"
@@ -16,9 +18,6 @@ export type ProfileId = string;
 export const BIG_FACE_MIN_ROWS = 46;
 
 export const ANIM_MS = 900;
-export const IDLE_TO_SLEEP_MS = 20000;
-export const TTS_GRACE_MS = 2500;
-export const RETRY_FLASH_MS = 2500;
 
 export const DOT: Record<FaceMode, string> = {
   feliz: "●",
@@ -32,6 +31,36 @@ export const DOT: Record<FaceMode, string> = {
   permiso: "!",
   pregunta: "?",
 };
+
+/**
+ * Traduce el estado canónico del agente (AgentVisualStateStore) al modo visual de la carita.
+ * Fuente única de verdad para dc-face, sidebar y widgets.
+ */
+export function mapAgentStateToFaceMode(state: AgentState): FaceMode {
+  switch (state) {
+    case "idle":
+      return "feliz";
+    case "thinking":
+      return "pensando";
+    case "writing":
+    case "typing":
+      return "escribiendo";
+    case "working":
+      return "trabajando";
+    case "dormant":
+      return "dormido";
+    case "compacting":
+      return "compactando";
+    case "retying":
+      return "reintentando";
+    case "talking":
+      return "hablando";
+    case "prompting":
+      return "pregunta";
+    default:
+      return "feliz";
+  }
+}
 
 export const G_FACE_FRAME = Symbol.for("dc.face.frame-idx");
 
