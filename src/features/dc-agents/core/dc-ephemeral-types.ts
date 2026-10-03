@@ -143,13 +143,17 @@ export const DC_TOOL_PRESETS: Record<DcEphemeralToolPreset, string[]> = {
   ],
   docs: [
     "dc_pdf_extract",
+    "dc_context7_status",
     "dc_context7_search",
     "dc_context7_get_context",
   ],
   research: [
     "dc_web_search",
+    "dc_web_fetch",
     "dc_discussion_search",
+    "dc_discussion_answers_get",
     "dc_github_code_search",
+    "dc_github_get",
     "dc_research_search",
   ],
   scout: [
@@ -204,8 +208,11 @@ export const DC_TOOL_BRICKS: Record<DcToolBrick, string[]> = {
   ],
   "web-search": [
     "dc_web_search",
+    "dc_web_fetch",
     "dc_discussion_search",
+    "dc_discussion_answers_get",
     "dc_github_code_search",
+    "dc_github_get",
     "dc_research_search",
   ],
   "browser": [
@@ -228,6 +235,7 @@ export const DC_TOOL_BRICKS: Record<DcToolBrick, string[]> = {
   ],
   "docs": [
     "dc_pdf_extract",
+    "dc_context7_status",
     "dc_context7_search",
     "dc_context7_get_context",
   ],

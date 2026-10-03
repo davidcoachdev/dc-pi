@@ -664,11 +664,14 @@ test("dc-ephemeral-manager: isolateSpecializedToolsForOrchestrator removes heavy
       "edit",
       "write",
       "todo",
+      "codegraph",
       "dc_youtube_search",
       "dc_youtube_video_get",
       "dc_browser_status",
       "dc_api_rest",
       "dc_services_list",
+      "dc_context7_status",
+      "dc_web_fetch",
     ],
     setActiveTools: (tools: string[]) => {
       appliedActiveTools = tools;
@@ -681,9 +684,12 @@ test("dc-ephemeral-manager: isolateSpecializedToolsForOrchestrator removes heavy
   assert.equal(appliedActiveTools.includes("read"), true);
   assert.equal(appliedActiveTools.includes("bash"), true);
   assert.equal(appliedActiveTools.includes("dc_ephemeral_agent_run"), true);
+  assert.equal(appliedActiveTools.includes("codegraph"), false);
   assert.equal(appliedActiveTools.includes("dc_youtube_search"), false);
   assert.equal(appliedActiveTools.includes("dc_browser_status"), false);
   assert.equal(appliedActiveTools.includes("dc_api_rest"), false);
+  assert.equal(appliedActiveTools.includes("dc_context7_status"), false);
+  assert.equal(appliedActiveTools.includes("dc_web_fetch"), false);
 });
 
 test("dc-taxis-panel: renders all 3 tabs cleanly without crashing", () => {
