@@ -17,7 +17,15 @@ import { openChangesViewer } from "../../dc-changes/dc-changes.ts";
 import { openGitGraphViewer } from "../../dc-git-graph/index.ts";
 import { openPreviewDirectionMenu } from "../../dc-preview/index.ts";
 import { openQuotaViewer } from "../../dc-quota/dc-quota.ts";
+import { openTaxisViewer } from "../../dc-agents/dc-agents.ts";
 import { openEngramExplorer, openEngramEnrollModal, openProjectDashboard } from "../../dc-engram/dc-engram.ts";
+import {
+  getSidebarTaxiFleet,
+  formatFleetSummaryText,
+  formatElapsedDuration,
+  formatPassengerRole,
+} from "../providers/dc-taxi-provider.ts";
+import type { DcTaxiUnit } from "../../dc-agents/core/dc-ephemeral-types.ts";
 import { dcNotifier } from "../../../integrations/dc-notify/dc-notifier.ts";
 import { getSidebarContext } from "../dc-sidebar.ts";
 
@@ -377,7 +385,150 @@ export function createStatusCard(reqRender: () => void): Component {
     requestRender: reqRender
   });
 
-  // --- Bloque 4: Profile (Desplegable y switch interactivo) ---
+  // --- Bloque 4: Taxis (Flota de subagentes y orquestador) ---
+  const createTaxiUnitRows = (unit: DcTaxiUnit) => {
+    if (unit.status === "ocupado" && unit.passenger) {
+      const p = unit.passenger;
+      const role = formatPassengerRole(p);
+      const rawTask = p.taskLabel || "tarea en ejecución";
+      const taskShort = rawTask.length > 20 ? rawTask.slice(0, 19) + "…" : rawTask;
+      const modelRaw = p.model || "gemini-3.8-flash";
+      const modelClean = modelRaw.split("/").pop() || modelRaw;
+      const elapsed = formatElapsedDuration(p.startedAt);
+      const pidStr = p.pid ? `PID ${p.pid}` : "PID -";
+
+      return [
+        new DcJustifiedRow(`      ${bloodSoft("Pasajero:")}`, `${bloodWhite(role)} `),
+        new DcJustifiedRow(`      ${bloodSoft("Tarea:")}`, `${bloodWhite(taskShort)} `),
+        new DcJustifiedRow(`      ${bloodSoft("Modelo:")}`, `${bloodSoft(modelClean)} `),
+        new DcJustifiedRow(`      ${bloodSoft("Proceso:")}`, `${dim(`${pidStr} · ${elapsed}`)} `),
+        new DcJustifiedRow(
+          `      ${dim("Telemetría en vivo")}`,
+          `${bloodBright("[Alt+Shift+T ↗]")} `,
+          () => {
+            const currentCtx = getSidebarContext();
+            if (currentCtx) void openTaxisViewer(currentCtx);
+          }
+        ),
+      ];
+    }
+
+    if (unit.status === "recargando") {
+      return [
+        new DcJustifiedRow(`      ${bloodSoft("Estado:")}`, `${bloodBright("cuota baja (<5%)")} `),
+        new DcJustifiedRow(`      ${bloodSoft("Recarga:")}`, `${dim("esperando cuota >=60%")} `),
+      ];
+    }
+
+    // Libre
+    return [
+      new DcJustifiedRow(`      ${bloodSoft("Estado:")}`, `${bloodWhite("disponible")} `),
+      new DcJustifiedRow(`      ${bloodSoft("Asignación:")}`, `${dim("sin pasajero activo")} `),
+    ];
+  };
+
+  class TaxiUnitList implements Component {
+    public children: DcCollapsible[] = [];
+    private stack = new DcVStack([]);
+    private unitsMap = new Map<string, {
+      collapsible: DcCollapsible;
+      rowsStack: DcVStack;
+    }>();
+
+    update(units: DcTaxiUnit[]) {
+      this.children = units.map((unit) => {
+        let entry = this.unitsMap.get(unit.account);
+        const rows = createTaxiUnitRows(unit);
+        
+        let titleBadge = bloodSoft("○ libre");
+        let titleExtra = dim("(libre)");
+        if (unit.status === "ocupado") {
+          const role = unit.passenger ? formatPassengerRole(unit.passenger) : "ocupado";
+          titleBadge = bloodBright("● ocupado");
+          titleExtra = bloodSoft(`[${role}]`);
+        } else if (unit.status === "recargando") {
+          titleBadge = bloodBright("◐ recarga");
+          titleExtra = dim("(<5%)");
+        }
+
+        const titleText = `   🚕 ${bloodWhite(bold(unit.account))} ${titleExtra}`;
+
+        if (!entry) {
+          const rowsStack = new DcVStack(rows);
+          const collapsible = new DcCollapsible({
+            title: titleText,
+            titleRight: titleBadge,
+            expanded: unit.status === "ocupado",
+            children: [rowsStack],
+            requestRender: reqRender,
+          });
+          entry = { collapsible, rowsStack };
+          this.unitsMap.set(unit.account, entry);
+        } else {
+          entry.rowsStack.children = rows;
+          entry.collapsible.options.title = titleText;
+          entry.collapsible.options.titleRight = titleBadge;
+        }
+
+        return entry.collapsible;
+      });
+      this.stack.children = this.children;
+    }
+
+    render(width: number) {
+      return this.stack.render(width);
+    }
+
+    handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
+      return this.stack.handleMouse(event);
+    }
+
+    invalidate() {
+      this.stack.invalidate();
+    }
+  }
+
+  const initialFleet = getSidebarTaxiFleet();
+  const taxiUnitList = new TaxiUnitList();
+  taxiUnitList.update(initialFleet.units);
+
+  class LiveTaxisCollapsible extends DcCollapsible {
+    render(width: number) {
+      const latestFleet = getSidebarTaxiFleet();
+      taxiUnitList.update(latestFleet.units);
+      this.options.collapsedInfo = bloodWhite(bold(latestFleet.summaryText));
+      return super.render(width);
+    }
+  }
+
+  const taxisCollapsible = new LiveTaxisCollapsible({
+    title: `🚕 ${bloodBright(bold("Taxis:"))}`,
+    collapsedInfo: bloodWhite(bold(initialFleet.summaryText)),
+    titleRight: dim("[↗]"),
+    onTitleRightClick: () => {
+      const ctx = getSidebarContext();
+      if (ctx) {
+        void openTaxisViewer(ctx);
+      }
+    },
+    expanded: false,
+    children: [
+      taxiUnitList,
+      new DcJustifiedRow(
+        `    ⚙️ ${dim("Gestor /dc-taxis")}`,
+        `${bloodBright("[Alt+Shift+T ↗]")} `,
+        () => {
+          const ctx = getSidebarContext();
+          if (ctx) {
+            void openTaxisViewer(ctx);
+          }
+        }
+      )
+    ],
+    requestRender: reqRender,
+  });
+
+  // --- Bloque 5: Profile (Desplegable y switch interactivo) ---
   const profilesInfo = readProfilesInfo();
   const profileRows = profilesInfo.profiles.map((p) => {
     if (p.isActive) {
@@ -421,7 +572,7 @@ export function createStatusCard(reqRender: () => void): Component {
     requestRender: reqRender
   });
 
-  // --- Bloque 5: MCP (Desplegable) ---
+  // --- Bloque 6: MCP (Desplegable) ---
   const mcpInfo = getMcpServersInfo();
   const mcpRows = mcpInfo.servers.map((s) => {
     if (s.disabled) {
@@ -472,6 +623,8 @@ export function createStatusCard(reqRender: () => void): Component {
     engramCollapsible,
     new DcText("─"),
     quotaCollapsible,
+    new DcText("─"),
+    taxisCollapsible,
     new DcText("─"),
     profileCollapsible,
     new DcText("─"),
