@@ -162,9 +162,55 @@ export function syncDcAgents(
 }
 
 /**
+ * Copia un directorio o archivo de forma recursiva e idempotente.
+ * Retorna true si se escribió o actualizó al menos un archivo.
+ */
+function syncDirectoryRecursive(src: string, dest: string): boolean {
+  let hadUpdates = false;
+
+  if (!fs.existsSync(dest)) {
+    fs.mkdirSync(dest, { recursive: true });
+    hadUpdates = true;
+  }
+
+  const entries = fs.readdirSync(src, { withFileTypes: true });
+
+  for (const entry of entries) {
+    const srcChild = path.join(src, entry.name);
+    const destChild = path.join(dest, entry.name);
+
+    if (entry.isDirectory()) {
+      if (syncDirectoryRecursive(srcChild, destChild)) {
+        hadUpdates = true;
+      }
+    } else if (entry.isFile()) {
+      const srcContent = fs.readFileSync(srcChild);
+      let needsWrite = true;
+
+      if (fs.existsSync(destChild)) {
+        const destStat = fs.statSync(destChild);
+        if (destStat.isFile() && destStat.size === srcContent.length) {
+          const destContent = fs.readFileSync(destChild);
+          if (destContent.equals(srcContent)) {
+            needsWrite = false;
+          }
+        }
+      }
+
+      if (needsWrite) {
+        fs.writeFileSync(destChild, srcContent);
+        hadUpdates = true;
+      }
+    }
+  }
+
+  return hadUpdates;
+}
+
+/**
  * Sincroniza de forma recursiva e idempotente las skills empaquetadas en dc-pi
  * hacia el directorio global de skills de Pi (~/.pi/agent/skills/).
- * Cada skill es un directorio que contiene SKILL.md y archivos accesorios.
+ * Cada skill es un directorio que contiene SKILL.md y archivos o subdirectorios accesorios.
  */
 export function syncDcSkills(
   sourceDir: string = getDcBundledSkillsDir(),
@@ -194,35 +240,7 @@ export function syncDcSkills(
       const destSkillPath = path.join(targetDir, skillName);
 
       try {
-        let skillHadUpdates = false;
-
-        if (!fs.existsSync(destSkillPath)) {
-          fs.mkdirSync(destSkillPath, { recursive: true });
-        }
-
-        const skillFiles = fs.readdirSync(srcSkillPath);
-
-        for (const file of skillFiles) {
-          const srcFilePath = path.join(srcSkillPath, file);
-          const destFilePath = path.join(destSkillPath, file);
-
-          const stat = fs.statSync(srcFilePath);
-          if (stat.isFile()) {
-            const srcContent = fs.readFileSync(srcFilePath, "utf8");
-            let needsWrite = true;
-            if (fs.existsSync(destFilePath)) {
-              const destContent = fs.readFileSync(destFilePath, "utf8");
-              if (destContent === srcContent) {
-                needsWrite = false;
-              }
-            }
-
-            if (needsWrite) {
-              fs.writeFileSync(destFilePath, srcContent, "utf8");
-              skillHadUpdates = true;
-            }
-          }
-        }
+        const skillHadUpdates = syncDirectoryRecursive(srcSkillPath, destSkillPath);
 
         if (skillHadUpdates) {
           result.synced.push(skillName);
