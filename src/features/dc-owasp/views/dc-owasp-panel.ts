@@ -4,9 +4,11 @@ import {
   Markdown,
   matchesKey,
   truncateToWidth,
+  visibleWidth,
   type Component,
 } from "@earendil-works/pi-tui";
 import { DcSearchInput } from "../../../ui/dc-search-input.ts";
+import { justifyRow } from "../../../ui/dc-row.ts";
 import { DcOwaspClient } from "../core/dc-owasp-client.ts";
 import { OWASP_CATALOG } from "../core/dc-owasp-catalog.ts";
 import type { OwaspSearchResult } from "../core/dc-owasp-types.ts";
@@ -55,25 +57,28 @@ export class OwaspPanel implements Component {
   private theme: Pick<Theme, "fg" | "bg" | "bold">;
   private requestRender: () => void;
   private client: DcOwaspClient;
-  private maxRows: number | (() => number);
+  private maxRowsOption?: number | (() => number);
 
   public searchInput: DcSearchInput;
   private results: OwaspSearchResult[] = [];
   private selectedIndex = 0;
+  private listScrollOffset = 0;
+  private detailScrollOffset = 0;
   private currentMarkdown = "";
   private currentTitle = "";
   private currentUrl = "";
   private loading = false;
-  private markdownScrollOffset = 0;
+  private readonly headerRows = 2;
 
   constructor(options: OwaspPanelOptions) {
     this.theme = options.theme;
     this.requestRender = options.requestRender;
     this.client = options.client || new DcOwaspClient();
-    this.maxRows = options.maxRows ?? 24;
+    this.maxRowsOption = options.maxRows;
 
     this.searchInput = new DcSearchInput({
-      placeholder: "Buscar en OWASP Cheat Sheets (ej: auth, jwt, sql, cors)...",
+      placeholder: "Buscar en OWASP...",
+      width: 28,
       theme: {
         fg: (c, text) => this.theme.fg(c as any, text),
         bold: (text) => this.theme.bold(text),
@@ -86,6 +91,13 @@ export class OwaspPanel implements Component {
     }
 
     this.doSearch(options.initialQuery || "");
+  }
+
+  private getMaxRows(): number {
+    if (typeof this.maxRowsOption === "function") {
+      return this.maxRowsOption();
+    }
+    return this.maxRowsOption ?? 22;
   }
 
   invalidate(): void {
@@ -102,11 +114,12 @@ export class OwaspPanel implements Component {
         score: 1,
       }));
     } else {
-      this.results = await this.client.search(q, 15);
+      this.results = await this.client.search(q, 25);
     }
 
     this.selectedIndex = 0;
-    this.markdownScrollOffset = 0;
+    this.listScrollOffset = 0;
+    this.detailScrollOffset = 0;
     await this.loadSelectedSheet();
     this.requestRender();
   }
@@ -139,11 +152,22 @@ export class OwaspPanel implements Component {
     this.requestRender();
   }
 
+  private adjustListScroll(rowsBudget: number): void {
+    if (this.selectedIndex < this.listScrollOffset) {
+      this.listScrollOffset = this.selectedIndex;
+    } else if (this.selectedIndex >= this.listScrollOffset + rowsBudget) {
+      this.listScrollOffset = this.selectedIndex - rowsBudget + 1;
+    }
+  }
+
   handleInput(data: string): boolean {
+    const availableRows = Math.max(8, this.getMaxRows() - this.headerRows);
+
     if (matchesKey(data, Key.up)) {
       if (this.selectedIndex > 0) {
         this.selectedIndex--;
-        this.markdownScrollOffset = 0;
+        this.detailScrollOffset = 0;
+        this.adjustListScroll(availableRows);
         this.loadSelectedSheet();
       }
       return true;
@@ -152,21 +176,37 @@ export class OwaspPanel implements Component {
     if (matchesKey(data, Key.down)) {
       if (this.selectedIndex < this.results.length - 1) {
         this.selectedIndex++;
-        this.markdownScrollOffset = 0;
+        this.detailScrollOffset = 0;
+        this.adjustListScroll(availableRows);
         this.loadSelectedSheet();
       }
       return true;
     }
 
-    if (matchesKey(data, Key.pageUp)) {
-      this.markdownScrollOffset = Math.max(0, this.markdownScrollOffset - 5);
+    // Scroll vertical del Markdown
+    const isScrollDown =
+      matchesKey(data, "ctrl+down") ||
+      matchesKey(data, Key.ctrl("down")) ||
+      matchesKey(data, Key.pageDown) ||
+      data === "\x1b[1;5B";
+
+    const isScrollUp =
+      matchesKey(data, "ctrl+up") ||
+      matchesKey(data, Key.ctrl("up")) ||
+      matchesKey(data, Key.pageUp) ||
+      data === "\x1b[1;5A";
+
+    if (isScrollDown) {
+      this.detailScrollOffset += 5;
       this.requestRender();
       return true;
     }
 
-    if (matchesKey(data, Key.pageDown)) {
-      this.markdownScrollOffset += 5;
-      this.requestRender();
+    if (isScrollUp) {
+      if (this.detailScrollOffset > 0) {
+        this.detailScrollOffset = Math.max(0, this.detailScrollOffset - 5);
+        this.requestRender();
+      }
       return true;
     }
 
@@ -200,63 +240,102 @@ export class OwaspPanel implements Component {
   }
 
   render(width: number): string[] {
+    const t = this.theme;
+    const safeW = Math.max(40, width);
+
+    // Reparto de ancho: 35% izquierda (min 28, max 42), resto derecha
+    const leftW = Math.max(26, Math.min(42, Math.floor(safeW * 0.35)));
+    const rightW = Math.max(20, safeW - leftW - 3);
+
+    const pad = (str: string, len: number) => {
+      const v = visibleWidth(str);
+      return v >= len ? truncateToWidth(str, len, "") : str + " ".repeat(len - v);
+    };
+
+    const headerLeft = ` 🛡️ ${t.bold(t.fg("accent", "Guías OWASP"))} ${t.fg("dim", `(${this.results.length})`)}`;
+    const searchWidth = Math.min(32, Math.max(14, rightW - 2));
+    const searchRender = this.searchInput.render(searchWidth);
+    const headerRight = justifyRow(
+      this.currentTitle ? ` 📖 ${t.bold(t.fg("accent", truncateToWidth(this.currentTitle, rightW - searchWidth - 6)))}` : " ",
+      searchRender + " ",
+      rightW,
+    );
+
     const lines: string[] = [];
-    const maxR = typeof this.maxRows === "function" ? this.maxRows() : this.maxRows;
-    const bodyHeight = Math.max(10, maxR - 4);
+    lines.push(`${pad(headerLeft, leftW)} ${t.fg("border", "│")} ${pad(headerRight, rightW)}`);
+    lines.push(`${t.fg("border", "─".repeat(leftW))}─┼─${t.fg("border", "─".repeat(rightW))}`);
 
-    // 1. Barra de Búsqueda
-    const searchLines = this.searchInput.render(width);
-    lines.push(...searchLines);
-    lines.push(this.theme.fg("border" as any, "─".repeat(width)));
+    const availableRows = Math.max(8, this.getMaxRows() - this.headerRows);
+    this.adjustListScroll(availableRows);
 
-    // 2. Panel Dividido en 2 columnas: Lista Izquierda (35%) | Markdown Derecho (65%)
-    const leftWidth = Math.max(26, Math.floor(width * 0.35));
-    const rightWidth = Math.max(20, width - leftWidth - 3);
-
-    const leftColLines: string[] = [];
-    const visibleResults = this.results.slice(0, bodyHeight);
-
-    for (let i = 0; i < bodyHeight; i++) {
-      const res = visibleResults[i];
-      if (!res) {
-        leftColLines.push(" ".repeat(leftWidth));
-        continue;
-      }
-
-      const isSelected = i === this.selectedIndex;
-      const titleTrunc = truncateToWidth(res.title, leftWidth - 4);
-      const prefix = isSelected ? this.theme.fg("accent" as any, "▶ ") : "  ";
-
-      if (isSelected) {
-        leftColLines.push(truncateToWidth(this.theme.bold(`${prefix}${titleTrunc}`), leftWidth));
-      } else {
-        leftColLines.push(truncateToWidth(`${prefix}${titleTrunc}`, leftWidth));
-      }
-    }
-
-    // 3. Render Markdown Derecho
-    let mdContent = this.currentMarkdown;
+    // 1. Preparar detalle derecho (Markdown)
+    const rightContent: string[] = [];
     if (this.loading) {
-      mdContent = "⏳ *Cargando hoja de OWASP...*";
+      rightContent.push(` ${t.fg("warning", "⏳ Descargando y procesando hoja de OWASP...")}`);
+    } else if (this.currentMarkdown) {
+      if (this.currentUrl) {
+        rightContent.push(` 🌐 ${t.fg("dim", "Oficial:")} ${t.fg("accent", this.currentUrl)}`);
+        rightContent.push(t.fg("border", "─".repeat(Math.max(1, rightW - 2))));
+      }
+      const mdTheme = createSafeMarkdownTheme(t);
+      const md = new Markdown(this.currentMarkdown, 0, 0, mdTheme);
+      const renderedLines = md.render(Math.max(20, rightW - 2));
+      for (const line of renderedLines) {
+        rightContent.push(` ${line}`);
+      }
+    } else {
+      rightContent.push(` ${t.fg("dim", "Selecciona una hoja para leer.")}`);
     }
 
-    const mdTheme = createSafeMarkdownTheme(this.theme);
-    const mdComp = new Markdown(mdContent, 0, 0, mdTheme);
-    const renderedMdLines = mdComp.render(rightWidth);
+    // Scroll vertical del detalle derecho
+    const maxDetailScroll = Math.max(0, rightContent.length - availableRows);
+    this.detailScrollOffset = Math.max(0, Math.min(this.detailScrollOffset, maxDetailScroll));
+    const visibleDetail = rightContent.slice(this.detailScrollOffset, this.detailScrollOffset + availableRows);
 
-    const scrolledMdLines = renderedMdLines.slice(this.markdownScrollOffset, this.markdownScrollOffset + bodyHeight);
-    while (scrolledMdLines.length < bodyHeight) {
-      scrolledMdLines.push(" ".repeat(rightWidth));
+    // 2. Columna izquierda con scroll vertical (Sliding Window)
+    const maxListScroll = Math.max(0, this.results.length - availableRows);
+    this.listScrollOffset = Math.max(0, Math.min(this.listScrollOffset, maxListScroll));
+    const visibleItems = this.results.slice(this.listScrollOffset, this.listScrollOffset + availableRows);
+
+    for (let r = 0; r < availableRows; r++) {
+      let leftRow = " ".repeat(leftW);
+      if (r < visibleItems.length) {
+        const absIndex = this.listScrollOffset + r;
+        const item = visibleItems[r]!;
+        const isSelected = absIndex === this.selectedIndex;
+
+        const contentW = maxListScroll > 0 ? leftW - 2 : leftW - 1;
+        const prefix = isSelected ? "▶ " : "  ";
+        const rowText = `${prefix}${item.title}`;
+        const truncated = truncateToWidth(rowText, contentW, "…");
+        const paddedContent = pad(` ${truncated}`, contentW);
+
+        let scrollbarChar = " ";
+        if (maxListScroll > 0) {
+          if (r === 0) {
+            scrollbarChar = this.listScrollOffset > 0 ? t.fg("accent", "▲") : t.fg("dim", "░");
+          } else if (r === availableRows - 1) {
+            scrollbarChar = this.listScrollOffset < maxListScroll ? t.fg("accent", "▼") : t.fg("dim", "░");
+          } else {
+            const trackH = availableRows - 2;
+            const thumbPos = Math.round((this.listScrollOffset / maxListScroll) * (trackH - 1));
+            scrollbarChar = (r - 1) === thumbPos ? t.fg("accent", "█") : t.fg("dim", "░");
+          }
+        }
+
+        const fullLeft = `${paddedContent}${scrollbarChar}`;
+        leftRow = isSelected
+          ? t.bg("selectedBg" as any, t.bold(t.fg("accent", fullLeft)))
+          : t.fg("text", fullLeft);
+      }
+
+      const rightRow = visibleDetail[r] !== undefined
+        ? pad(visibleDetail[r]!, rightW)
+        : " ".repeat(rightW);
+
+      lines.push(`${leftRow} ${t.fg("border", "│")} ${rightRow}`);
     }
 
-    // Combinar ambas columnas fila por fila con separador vertical │
-    for (let i = 0; i < bodyHeight; i++) {
-      const left = truncateToWidth(leftColLines[i] || " ".repeat(leftWidth), leftWidth);
-      const right = truncateToWidth(scrolledMdLines[i] || " ".repeat(rightWidth), rightWidth);
-      const sep = this.theme.fg("border" as any, " │ ");
-      lines.push(`${left}${sep}${right}`);
-    }
-
-    return lines;
+    return lines.map((l) => truncateToWidth(l, safeW, ""));
   }
 }
