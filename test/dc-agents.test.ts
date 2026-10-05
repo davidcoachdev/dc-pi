@@ -82,6 +82,7 @@ test("dc-skills: syncDcSkills copies bundled skills recursively and idempotently
       "acceptance-contract",
       "dc-anti-overengineering",
       "dc-artifact-contracts",
+      "dc-e2e-testing",
       "dc-pi-architecture",
       "dc-pi-extension-authoring",
       "dc-planned-workflow",
@@ -99,6 +100,14 @@ test("dc-skills: syncDcSkills copies bundled skills recursively and idempotently
       assert.ok(firstRun.synced.includes(skill), `First run should sync skill ${skill}`);
       assert.ok(fs.existsSync(path.join(tmpTarget, skill, "SKILL.md")), `SKILL.md should exist in ${skill}`);
     }
+
+    // Verify recursive sync of subdirectories (e.g. references in dc-project-documentation)
+    const docReferencesDir = path.join(tmpTarget, "dc-project-documentation", "references");
+    assert.ok(fs.existsSync(docReferencesDir), `references subdirectory should exist in dc-project-documentation`);
+    assert.ok(
+      fs.existsSync(path.join(docReferencesDir, "document-contract.md")),
+      `document-contract.md should exist inside references`,
+    );
 
     // 2nd sync: should skip all (content identical)
     const secondRun = syncDcSkills(bundledSkillsDir, tmpTarget);
