@@ -6,6 +6,8 @@ import {
   truncateToWidth,
   visibleWidth,
   type Component,
+  type TuiMouseEvent,
+  type TuiMouseEventResult,
 } from "@earendil-works/pi-tui";
 import { DcSearchInput } from "../../../ui/dc-search-input.ts";
 import { justifyRow } from "../../../ui/dc-row.ts";
@@ -69,6 +71,7 @@ export class OwaspPanel implements Component {
   private currentUrl = "";
   private loading = false;
   private readonly headerRows = 2;
+  private lastLeftW = 34;
 
   constructor(options: OwaspPanelOptions) {
     this.theme = options.theme;
@@ -239,12 +242,63 @@ export class OwaspPanel implements Component {
     return false;
   }
 
+  handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
+    const availableRows = Math.max(8, this.getMaxRows() - this.headerRows);
+
+    // 1. Rueda del mouse (Scroll)
+    if (event.type === "wheel") {
+      const delta = (event as any).wheelDelta ?? ((event as any).deltaY > 0 ? 1 : -1);
+
+      // Si el cursor está sobre la columna izquierda: scroll en la lista de guías
+      if (event.x !== undefined && event.x < this.lastLeftW && this.results.length > 0) {
+        const next = Math.max(0, Math.min(this.results.length - 1, this.selectedIndex + (delta > 0 ? 1 : -1)));
+        if (next !== this.selectedIndex) {
+          this.selectedIndex = next;
+          this.detailScrollOffset = 0;
+          this.adjustListScroll(availableRows);
+          this.loadSelectedSheet();
+          this.requestRender();
+          return { handled: true };
+        }
+      } else {
+        // Cursor sobre la columna derecha: scroll en el contenido Markdown
+        this.detailScrollOffset = Math.max(0, this.detailScrollOffset + (delta > 0 ? 4 : -4));
+        this.requestRender();
+        return { handled: true };
+      }
+      return undefined;
+    }
+
+    // 2. Clic del botón izquierdo
+    if (event.button !== "left" || (event.type !== "press" && event.type !== "click")) {
+      return undefined;
+    }
+
+    // Clic sobre un ítem de la lista izquierda
+    if (event.x !== undefined && event.x < this.lastLeftW && event.y !== undefined && event.y >= this.headerRows) {
+      const clickedRow = event.y - this.headerRows;
+      const clickedIndex = this.listScrollOffset + clickedRow;
+      if (clickedIndex >= 0 && clickedIndex < this.results.length) {
+        if (this.selectedIndex !== clickedIndex) {
+          this.selectedIndex = clickedIndex;
+          this.detailScrollOffset = 0;
+          this.loadSelectedSheet();
+          this.requestRender();
+        }
+        return { handled: true };
+      }
+    }
+
+    return undefined;
+  }
+
   render(width: number): string[] {
     const t = this.theme;
     const safeW = Math.max(40, width);
 
     // Reparto de ancho: 35% izquierda (min 28, max 42), resto derecha
     const leftW = Math.max(26, Math.min(42, Math.floor(safeW * 0.35)));
+    this.lastLeftW = leftW;
     const rightW = Math.max(20, safeW - leftW - 3);
 
     const pad = (str: string, len: number) => {
