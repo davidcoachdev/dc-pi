@@ -27,4 +27,16 @@ export default function dcOwaspExtension(pi: ExtensionAPI): void {
       await openOwaspModal(ctx, args);
     },
   });
+
+  // Atajo de teclado global: Alt+O / Alt+Shift+O
+  try {
+    pi.registerShortcut("alt+o" as never, {
+      description: "Explorador de seguridad OWASP Cheat Sheets",
+      handler: async (ctx: ExtensionContext) => {
+        await openOwaspModal(ctx);
+      },
+    });
+  } catch {
+    /* fallback si el host no soporta registerShortcut */
+  }
 }
