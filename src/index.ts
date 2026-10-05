@@ -66,6 +66,7 @@ import dcCheckpointExtension from "./features/dc-checkpoint/index.ts";
 import dcHandoffExtension from "./features/dc-handoff/index.ts";
 import dcGitGraphExtension from "./features/dc-git-graph/dc-git-graph.ts";
 import dcSentinelExtension from "./features/dc-sentinel/index.ts";
+import dcOwaspExtension from "./features/dc-owasp/index.ts";
 import dcStateMonitorExtension from "./core/dc-agent-state/index.ts";
 
 export const profileDuelExtension = dcFaceExtension;
@@ -117,6 +118,7 @@ export {
   dcHandoffExtension,
   dcGitGraphExtension,
   dcSentinelExtension,
+  dcOwaspExtension,
   dcStateMonitorExtension,
 };
 
@@ -139,6 +141,7 @@ export * from "./features/dc-scan-guard/index.ts";
 export * from "./features/dc-checkpoint/index.ts";
 export * from "./features/dc-handoff/index.ts";
 export * from "./features/dc-sentinel/index.ts";
+export * from "./features/dc-owasp/index.ts";
 
 /**
  * Unified DC Studio Extension.
@@ -188,6 +191,7 @@ export function dcStudioExtension(pi: ExtensionAPI, ctx?: ExtensionContext): voi
   dcHerdrAgentStateExtension(pi);
   dcEngramExtension(pi);
   dcSentinelExtension(pi);
+  dcOwaspExtension(pi);
   dcDialogsExtension(pi, ctx);
 }
 
