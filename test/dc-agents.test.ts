@@ -82,6 +82,7 @@ test("dc-skills: syncDcSkills copies bundled skills recursively and idempotently
       "acceptance-contract",
       "dc-anti-overengineering",
       "dc-artifact-contracts",
+      "dc-e2e-testing",
       "dc-pi-architecture",
       "dc-pi-extension-authoring",
       "dc-planned-workflow",
