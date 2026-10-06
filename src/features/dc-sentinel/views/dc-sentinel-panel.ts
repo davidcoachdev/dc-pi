@@ -29,8 +29,10 @@ import {
   type ChronicleFileItem,
 } from "../core/dc-sentinel-recorder.ts";
 import { SentinelDatabase } from "../core/dc-sentinel-db.ts";
+import { resolveMetroLine } from "../core/dc-sentinel-deterministic-extractor.ts";
+import { getProjectObservations, type EngramObservation } from "../../dc-engram/dc-engram-db.ts";
 
-export type SentinelViewMode = "metro" | "session" | "chronicle" | "procedures";
+export type SentinelViewMode = "metro" | "session" | "chronicle" | "procedures" | "engram";
 
 /**
  * Crea un tema seguro para el componente Markdown de pi-tui
@@ -93,6 +95,7 @@ export class SentinelPanel implements Component {
   private chronicleFiles: ChronicleFileItem[] = [];
   private notes: SentinelNote[] = [];
   private procedures: SentinelProcedure[] = [];
+  private engramObservations: EngramObservation[] = [];
 
   private selectedIndex = 0;
   private listScrollOffset = 0;
@@ -135,6 +138,11 @@ export class SentinelPanel implements Component {
     } catch {
       this.notes = [];
       this.procedures = [];
+    }
+    try {
+      this.engramObservations = getProjectObservations(50, this.projectName);
+    } catch {
+      this.engramObservations = [];
     }
   }
 
@@ -218,6 +226,20 @@ export class SentinelPanel implements Component {
         .map((p) => ({ id: p.id ?? p.name, label: p.title, raw: p }));
     }
 
+    if (this.mode === "engram") {
+      return this.engramObservations
+        .filter((obs) => {
+          if (!query) return true;
+          return (
+            obs.title.toLowerCase().includes(query) ||
+            obs.content.toLowerCase().includes(query) ||
+            obs.type.toLowerCase().includes(query) ||
+            (obs.scope && obs.scope.toLowerCase().includes(query))
+          );
+        })
+        .map((obs) => ({ id: obs.id, label: obs.title, raw: obs }));
+    }
+
     return this.chronicleFiles
       .filter((f) => {
         if (!query) return true;
@@ -246,6 +268,24 @@ export class SentinelPanel implements Component {
     }
   }
 
+  /**
+   * Encuentra otras notas conectadas por archivos tocados o conceptos compartidos (Estaciones de Transbordo).
+   */
+  public getTransferStations(currentNote: SentinelNote): SentinelNote[] {
+    const curFiles = new Set(currentNote.filesAffected || []);
+    const curConcepts = new Set(currentNote.concepts || []);
+    const curLine = resolveMetroLine(currentNote).code;
+
+    return this.notes.filter((other) => {
+      if (other.id === currentNote.id && other.title === currentNote.title) return false;
+      const sharedFile = (other.filesAffected || []).some((f) => curFiles.has(f));
+      if (sharedFile) return true;
+      const otherLine = resolveMetroLine(other).code;
+      const sharedConcept = otherLine !== curLine && (other.concepts || []).some((c) => curConcepts.has(c));
+      return sharedConcept;
+    });
+  }
+
   copyCurrentDetail(): void {
     const items = this.getFilteredItems();
     if (items.length === 0) return;
@@ -268,6 +308,13 @@ export class SentinelPanel implements Component {
     if (this.mode === "procedures") {
       const p = current.raw as SentinelProcedure;
       const text = `# ⚒ Procedimiento: ${p.title}\n\nSíntomas: ${p.symptoms}\n\nPasos:\n${p.steps.map((s, i) => `${i + 1}. ${s}`).join("\n")}`;
+      void dcClipboard.copy(text);
+      return;
+    }
+
+    if (this.mode === "engram") {
+      const obs = current.raw as EngramObservation;
+      const text = `# [${obs.type.toUpperCase()}] ${obs.title}\n\n${obs.content}`;
       void dcClipboard.copy(text);
       return;
     }
@@ -317,7 +364,12 @@ export class SentinelPanel implements Component {
         ? t.bold(t.fg("accent", `[4] Recetas`))
         : t.fg("dim", `[4]`);
 
-    const headerLeft = ` ⛩️ ${sessionTab} ${chronicleTab} ${metroTab} ${procTab}`;
+    const engramTab =
+      this.mode === "engram"
+        ? t.bold(t.fg("accent", `[5] Engram`))
+        : t.fg("dim", `[5]`);
+
+    const headerLeft = ` ⛩️ ${sessionTab} ${chronicleTab} ${metroTab} ${procTab} ${engramTab}`;
 
     const titleText =
       this.mode === "metro"
@@ -326,7 +378,9 @@ export class SentinelPanel implements Component {
           ? ` 📜 ${t.bold(t.fg("accent", "Registro de Vuelo (Turno)"))}`
           : this.mode === "procedures"
             ? ` ⚒️ ${t.bold(t.fg("accent", "Runbooks Ejecutables (Auto-Skills)"))}`
-            : ` 📁 ${t.bold(t.fg("accent", "Bitácora Markdown"))}`;
+            : this.mode === "engram"
+              ? ` 🧠 ${t.bold(t.fg("accent", "Espejo Aislado Engram"))}`
+              : ` 📁 ${t.bold(t.fg("accent", "Bitácora Markdown"))}`;
 
     const searchWidth = Math.min(36, Math.max(16, rightW - visibleWidth(" 🚇 Líneas") - 4));
     const searchRender = this.searchInput.render(searchWidth);
@@ -359,14 +413,15 @@ export class SentinelPanel implements Component {
 
     if (this.mode === "metro") {
       const note = current.raw as SentinelNote;
+      const metroLine = resolveMetroLine(note);
       const pinnedBadge = note.pinned ? ` ${t.fg("warning", "📌 FIJADA")}` : "";
       const scopeBadge = note.scope === "global" ? ` ${t.fg("success", "🌐 GLOBAL")}` : "";
 
       rightContent.push(
-        ` ${note.glyph} ${t.bold(t.fg("accent", note.title))}  ${t.fg("dim", `[${note.type.toUpperCase()}]`)}${pinnedBadge}${scopeBadge}`,
+        ` ${metroLine.icon} ${t.bold(t.fg("accent", `[${metroLine.code} ${metroLine.name}]`))}  ${t.fg("dim", "·")}  ${note.glyph} ${t.bold(t.fg("text", note.title))}${pinnedBadge}${scopeBadge}`,
       );
       rightContent.push(
-        ` 📅 ${t.fg("dim", note.createdAt?.slice(0, 16) || "reciente")}  ${t.fg("dim", "·")}  🔄 Rev #${note.revisionCount ?? 1}  ${t.fg("dim", "·")}  👥 Visto ${note.duplicateCount ?? 1}x`,
+        ` 📅 ${t.fg("dim", note.createdAt?.slice(0, 16) || "reciente")}  ${t.fg("dim", "·")}  🔄 Evoluciones: ${note.revisionCount ?? 1}  ${t.fg("dim", "·")}  👥 Refuerzo: ${note.duplicateCount ?? 1}x`,
       );
       rightContent.push(t.fg("border", "─".repeat(Math.max(1, rightW - 2))));
       rightContent.push("");
@@ -374,10 +429,11 @@ export class SentinelPanel implements Component {
       // Memory Chips activos
       rightContent.push(` 🧠 ${t.bold(t.fg("text", "Memory Chips & Señales:"))}`);
       const chips = [
+        `[${metroLine.code}]`,
         `[${note.glyph} ${note.type}]`,
         note.topicKey ? `[topic: ${note.topicKey}]` : null,
         note.proofCount && note.proofCount > 1 ? `[pruebas: ${note.proofCount}]` : null,
-        note.concepts?.map((c) => `[#${c}]`).join(" "),
+        note.concepts?.map((c) => `[${c}]`).join(" "),
       ]
         .filter(Boolean)
         .join(" ");
@@ -415,11 +471,22 @@ export class SentinelPanel implements Component {
         rightContent.push("");
       }
 
+      // Estaciones de Transbordo (notas conectadas por archivos o topicKey)
+      const transfers = this.getTransferStations(note);
+      if (transfers.length > 0) {
+        rightContent.push(` 🔀 ${t.bold(t.fg("accent", "Estaciones de Transbordo (Enter para saltar):"))}`);
+        for (const tr of transfers.slice(0, 3)) {
+          const trLine = resolveMetroLine(tr);
+          rightContent.push(`    • ${trLine.icon} [${trLine.code}] ${tr.glyph} ${tr.title}`);
+        }
+        rightContent.push("");
+      }
+
       // Atajos de acción
       rightContent.push(
         t.fg(
           "dim",
-          " [d] Olvidar/Descartar  ·  [p] Fijar/Desfijar  ·  [g] Graduar a Global  ·  [c] Copiar",
+          " [Enter] Transbordo  ·  [d] Olvidar  ·  [p] Fijar  ·  [g] Global  ·  [c] Copiar",
         ),
       );
     } else if (this.mode === "procedures") {
@@ -506,6 +573,22 @@ export class SentinelPanel implements Component {
           rightContent.push(`   ${sl}`);
         }
       }
+    } else if (this.mode === "engram") {
+      const obs = current.raw as EngramObservation;
+      rightContent.push(
+        ` 🧠 ${t.bold(t.fg("accent", obs.title))}  ${t.fg("dim", `[${obs.type.toUpperCase()}]`)}`,
+      );
+      rightContent.push(
+        ` 📅 ${t.fg("dim", obs.created_at?.slice(0, 16) || "reciente")}  ${t.fg("dim", "·")}  🎯 Scope: ${obs.scope || "project"}`,
+      );
+      rightContent.push(t.fg("border", "─".repeat(Math.max(1, rightW - 2))));
+      rightContent.push("");
+
+      const md = new Markdown(obs.content, 0, 0, mdTheme);
+      const renderedLines = md.render(Math.max(20, rightW - 4));
+      for (const line of renderedLines) {
+        rightContent.push(`   ${line}`);
+      }
     } else {
       const file = current.raw as ChronicleFileItem;
       rightContent.push(
@@ -545,14 +628,17 @@ export class SentinelPanel implements Component {
         let rowText = "";
         if (this.mode === "metro") {
           const note = item.raw as SentinelNote;
+          const mLine = resolveMetroLine(note);
           const pinGlyph = note.pinned ? "📌" : "";
-          rowText = ` ${pinGlyph}${note.glyph} ${note.title}`;
+          rowText = ` ${mLine.icon}[${mLine.code}] ${pinGlyph}${note.glyph} ${note.title}`;
         } else if (this.mode === "procedures") {
           const p = item.raw as SentinelProcedure;
           rowText = ` ⚒️ ${p.title}`;
+        } else if (this.mode === "engram") {
+          const obs = item.raw as EngramObservation;
+          rowText = ` 🧠 [${obs.type}] ${obs.title}`;
         } else if (this.mode === "session") {
           const turn = item.raw as SentinelTurnRecord;
-          const turnNum = this.turns.length - itemIdx;
           const time = turn.timestamp.slice(11, 16);
           const pClean = turn.userPrompt.replace(/\s+/g, " ");
 
@@ -561,7 +647,7 @@ export class SentinelPanel implements Component {
           if (turn.errorsDetected.length > 0) badges += "⚠️";
           if (turn.recallInjected) badges += "🧠";
 
-          rowText = ` #${turnNum} [${time}] ${badges ? `${badges} ` : ""}${pClean}`;
+          rowText = ` ⏱ [${time}] ${badges ? `${badges} ` : ""}${pClean}`;
         } else {
           const file = item.raw as ChronicleFileItem;
           rowText = ` 📄 ${file.name.replace(".md", "")}`;
@@ -633,6 +719,31 @@ export class SentinelPanel implements Component {
       if (data === "4") {
         this.setMode("procedures");
         return true;
+      }
+      if (data === "5") {
+        this.setMode("engram");
+        return true;
+      }
+
+      // Enter en modo Metro: saltar a la primera Estación de Transbordo conectada
+      if (this.mode === "metro" && matchesKey(data, Key.enter)) {
+        const current = filtered[this.selectedIndex];
+        if (current && current.raw) {
+          const transfers = this.getTransferStations(current.raw as SentinelNote);
+          if (transfers.length > 0) {
+            const target = transfers[0]!;
+            const nextIdx = filtered.findIndex(
+              (it) => (it.raw as SentinelNote).id === target.id && (it.raw as SentinelNote).title === target.title,
+            );
+            if (nextIdx >= 0) {
+              this.selectedIndex = nextIdx;
+              this.detailScrollOffset = 0;
+              this.adjustListScroll();
+              this.requestRender();
+              return true;
+            }
+          }
+        }
       }
 
       // Tecla 'd' para olvidar/descartar la nota actual (OpenHuman Pattern)

@@ -11,7 +11,11 @@ import {
   redactSkillResult,
   pruneToolOutput,
 } from "./core/dc-sentinel-defense.ts";
-import { extractDeterministicNotes } from "./core/dc-sentinel-deterministic-extractor.ts";
+import {
+  extractDeterministicNotes,
+  extractDeterministicProcedures,
+  extractSessionGitStats,
+} from "./core/dc-sentinel-deterministic-extractor.ts";
 import { globalLeaseManager } from "./core/dc-sentinel-lease.ts";
 
 /**
@@ -171,13 +175,14 @@ export default function dcSentinelExtension(
   });
 
   // Post-Flight Settlement: Cuando la respuesta se asienta y la terminal se libera
-  pi.on("agent_settled", () => {
+  pi.on("agent_settled", async () => {
     const completedTurn = recorder.endTurn(lastAssistantSnippet);
     if (!completedTurn || !enableJournal) return;
 
     const root = process.cwd();
     const db = getOrInitDb(root);
     const sessId = recorder.getSessionId();
+    const projName = path.basename(root) || "default";
 
     // 1. Registrar Smart Frame de la respuesta del Asistente
     try {
@@ -193,12 +198,18 @@ export default function dcSentinelExtension(
       /* best-effort */
     }
 
-    // 2. Extraer y persistir notas atómicas deterministas (Zettelkasten / Engram Topic Keys)
+    // 2. Extraer verdad empírica de Git + Notas Atómicas + Recetas Ejecutables (Procedures)
     try {
-      const projName = path.basename(root) || "default";
-      const notes = extractDeterministicNotes([completedTurn], projName);
+      const gitStats = await extractSessionGitStats(root);
+
+      const notes = extractDeterministicNotes([completedTurn], projName, gitStats);
       for (const n of notes) {
         db.saveNote(n);
+      }
+
+      const procedures = extractDeterministicProcedures([completedTurn], projName, gitStats);
+      for (const proc of procedures) {
+        db.saveProcedure(proc);
       }
     } catch {
       /* best-effort */
@@ -272,6 +283,13 @@ export default function dcSentinelExtension(
       if (action === "procedures" || action === "recetas") {
         if (ctx.hasUI && ctx.mode === "tui") {
           await openSentinelViewer(ctx, "procedures");
+          return;
+        }
+      }
+
+      if (action === "engram") {
+        if (ctx.hasUI && ctx.mode === "tui") {
+          await openSentinelViewer(ctx, "engram");
           return;
         }
       }
