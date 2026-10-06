@@ -72,8 +72,12 @@ export function tryAttachBodyFrame(tui: TUI): boolean {
   const root = host.layoutRoot;
   if (!root || typeof root[LAYOUT_NODE] !== "function") return false;
 
-  // Si ya fue envuelto por ESTA instancia vigente del módulo, no tocar:
-  if ((root as Record<symbol, unknown>)[G_BODY_REV] === BODY_MODULE_REV) {
+  // Si ya fue envuelto por ESTA instancia vigente del módulo y su función sigue activa, no tocar:
+  if (
+    (root as Record<symbol, unknown>)[G_BODY_REV] === BODY_MODULE_REV &&
+    typeof root[LAYOUT_NODE] === "function" &&
+    (root[LAYOUT_NODE] as any)[G_BODY_REV] === BODY_MODULE_REV
+  ) {
     return true;
   }
 
@@ -101,7 +105,7 @@ export function tryAttachBodyFrame(tui: TUI): boolean {
       const raw = prevFn.call(root) as { type?: string; entries?: Array<{ component?: Component }> } | undefined;
       if (!raw) return raw;
 
-      // 1. Caso hstack (con sidebar montado): entries[0] = contenedor izquierdo (left)
+      // 1. Caso hstack en la raíz (con sidebar montado): entries[0] = contenedor izquierdo (left)
       if (raw.type === "hstack" && Array.isArray(raw.entries) && raw.entries.length >= 1) {
         const leftEntry = raw.entries[0];
         if (leftEntry?.component) {
@@ -114,11 +118,44 @@ export function tryAttachBodyFrame(tui: TUI): boolean {
         }
       }
 
-      // 2. Caso vstack directo (Pi sin sidebar o terminal reducida): entries[0] = transcript
+      // 2. Caso vstack en la raíz (el viewport estándar de Pi):
       if (raw.type === "vstack" && Array.isArray(raw.entries) && raw.entries.length >= 1) {
         const first = raw.entries[0];
         if (first?.component) {
-          const pristine = extractUnframedContent(first.component);
+          const comp = first.component;
+          let innerNode: any = undefined;
+          try {
+            if (typeof (comp as any)[LAYOUT_NODE] === "function") {
+              innerNode = (comp as any)[LAYOUT_NODE]();
+            }
+          } catch {
+            /* noop */
+          }
+
+          // Si el contenedor principal tiene adentro un hstack (el chat a la izquierda y sidebar a la derecha):
+          if (innerNode && innerNode.type === "hstack" && Array.isArray(innerNode.entries) && innerNode.entries.length >= 1) {
+            const leftSubEntry = innerNode.entries[0];
+            if (leftSubEntry?.component) {
+              const pristine = extractUnframedContent(leftSubEntry.component);
+              const subEntries = innerNode.entries.slice();
+              subEntries[0] = {
+                ...leftSubEntry,
+                component: shouldFrameBody() ? framedBody(tui, pristine) : pristine,
+              };
+              const framedHStackComp = {
+                ...comp,
+                render: (w: number) => (comp.render ? comp.render(w) : []),
+                invalidate: () => comp.invalidate?.(),
+                [LAYOUT_NODE]: () => ({ ...innerNode, entries: subEntries }),
+              } as unknown as Component;
+              const entries = raw.entries.slice();
+              entries[0] = { ...first, component: framedHStackComp };
+              return { ...raw, entries };
+            }
+          }
+
+          // Caso vstack directo sin hstack interno (ej: terminal estrecha o sidebar oculto):
+          const pristine = extractUnframedContent(comp);
           const entries = raw.entries.slice();
           entries[0] = {
             ...first,
@@ -193,6 +230,17 @@ export function dcBodyExtension(pi: ExtensionAPI): void {
       /* noop */
     }
   });
+
+  // Re-asegurar el marco del body en eventos de ciclo de vida del agente
+  const reattachOnAgentEvent = () => {
+    if (activeTui) {
+      tryAttachBodyFrame(activeTui);
+    }
+  };
+  pi.on("agent_start", reattachOnAgentEvent);
+  pi.on("turn_start", reattachOnAgentEvent);
+  pi.on("agent_settled", reattachOnAgentEvent);
+  pi.on("agent_end", reattachOnAgentEvent);
 
   pi.on("session_shutdown", () => {
     if (resizeHandler) {
