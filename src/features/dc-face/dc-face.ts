@@ -23,7 +23,6 @@ function bumpCache(tui: any): void {
     const term = tui?.terminal as Record<symbol, { revision?: number }> | undefined;
     const cache = term?.[Symbol.for("gentle-pi.experimental-sidebar.cache")];
     if (cache) cache.revision = (cache.revision ?? 0) + 1;
-    tui?.layoutRoot?.invalidate?.();
   } catch {
     /* noop */
   }
