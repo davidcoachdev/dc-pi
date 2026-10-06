@@ -151,13 +151,15 @@ export function extractDeterministicNotes(
       });
     }
 
-    // 2. Detección de Decisión Arquitectónica
+    // 2. Detección de Decisión Arquitectónica o Merge
     if (
       promptLower.includes("arquitectura") ||
       promptLower.includes("decision") ||
       promptLower.includes("migr") ||
       promptLower.includes("reemplaz") ||
-      promptLower.includes("patron")
+      promptLower.includes("patron") ||
+      promptLower.includes("merge") ||
+      promptLower.includes("adopta")
     ) {
       const title = `Decisión: ${deriveSessionTitle(turn.userPrompt)}`;
       notes.push({
@@ -174,7 +176,53 @@ export function extractDeterministicNotes(
       });
     }
 
-    // 3. Detección de Refactor
+    // 3. Detección de Feature / Nueva Capacidad
+    if (
+      promptLower.includes("implement") ||
+      promptLower.includes("crear") ||
+      promptLower.includes("nueva") ||
+      promptLower.includes("nuevo") ||
+      promptLower.includes("agreg") ||
+      promptLower.includes("incorpor")
+    ) {
+      const title = `Feature: ${deriveSessionTitle(turn.userPrompt)}`;
+      notes.push({
+        project,
+        type: "feature",
+        glyph: "◆",
+        title,
+        content: `Capacidad implementada: "${turn.userPrompt}".`,
+        topicKey: `feat-${normalizeTextForHash(turn.userPrompt).slice(0, 8)}`,
+        concepts: ["how-it-works", "what-changed"],
+        filesAffected: filesList,
+        proofCount: 1,
+        status: "active",
+      });
+    }
+
+    // 4. Detección de Descubrimiento o Auditoría
+    if (
+      promptLower.includes("audit") ||
+      promptLower.includes("investig") ||
+      promptLower.includes("explor") ||
+      promptLower.includes("revis")
+    ) {
+      const title = `Discovery: ${deriveSessionTitle(turn.userPrompt)}`;
+      notes.push({
+        project,
+        type: "discovery",
+        glyph: "○",
+        title,
+        content: `Hallazgo o análisis: "${turn.userPrompt}".`,
+        topicKey: `disc-${normalizeTextForHash(turn.userPrompt).slice(0, 8)}`,
+        concepts: ["how-it-works"],
+        filesAffected: filesList,
+        proofCount: 1,
+        status: "active",
+      });
+    }
+
+    // 5. Detección de Refactor
     if (promptLower.includes("refactor") || promptLower.includes("limpi") || promptLower.includes("reestructur")) {
       const title = `Refactor: ${deriveSessionTitle(turn.userPrompt)}`;
       notes.push({
