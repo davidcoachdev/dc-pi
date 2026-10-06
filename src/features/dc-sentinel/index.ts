@@ -3,6 +3,11 @@ export * from "./core/dc-sentinel-types.ts";
 export * from "./core/dc-sentinel-prefs.ts";
 export * from "./core/dc-sentinel-recall.ts";
 export * from "./core/dc-sentinel-recorder.ts";
+export * from "./core/dc-sentinel-db.ts";
+export * from "./core/dc-sentinel-defense.ts";
+export * from "./core/dc-sentinel-deterministic-extractor.ts";
+export * from "./core/dc-sentinel-ephemeral.ts";
+export * from "./core/dc-sentinel-lease.ts";
 export * from "./views/dc-sentinel-panel.ts";
 export * from "./views/dc-sentinel-modal.ts";
 

@@ -11,6 +11,7 @@ import {
 import {
   SentinelPanel,
 } from "../src/features/dc-sentinel/views/dc-sentinel-panel.ts";
+import { SentinelDatabase } from "../src/features/dc-sentinel/core/dc-sentinel-db.ts";
 import dcSentinelExtension from "../src/features/dc-sentinel/dc-sentinel.ts";
 
 test("dc-sentinel-panel: renders 2-panel layout for session turns", () => {
@@ -251,4 +252,67 @@ test("dcSentinelExtension registers alt+shift+s shortcut and command /dc-sentine
 
   assert.ok(registeredCommands.has("dc-sentinel"));
   assert.ok(registeredShortcuts.has("alt+shift+s"));
+});
+
+test("dc-sentinel-panel: renders metro view with glyphs and procedures", () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "dc-sentinel-metro-test-"));
+  const db = new SentinelDatabase("metro-test", tmpDir, true);
+
+  db.saveNote({
+    project: "metro-test",
+    type: "decision",
+    glyph: "⚖",
+    title: "Elegir Fastify",
+    content: "Se adopta Fastify por baja latencia en endpoints de streaming",
+    topicKey: "auth-server",
+  });
+
+  db.saveProcedure({
+    project: "metro-test",
+    name: "fix-build",
+    title: "Fix build colgado",
+    triggerPattern: "port_4111",
+    symptoms: "Puerto tomado",
+    preconditions: "Node activo",
+    steps: ["pkill node", "npm test"],
+  });
+
+  const theme = {
+    fg: (_r: string, t: string) => t,
+    bg: (_r: string, t: string) => t,
+    bold: (t: string) => t,
+  };
+
+  const panel = new SentinelPanel({
+    theme,
+    projectRoot: tmpDir,
+    projectName: "metro-test",
+    requestRender: () => {},
+    initialMode: "metro",
+    db,
+  });
+
+  assert.equal(panel.getMode(), "metro");
+  const lines = panel.render(120);
+  assert.ok(lines[0]?.includes("[3] Metro"));
+  const fullText = lines.join("\n");
+  assert.ok(fullText.includes("⚖ Elegir Fastify"));
+  assert.ok(fullText.includes("Memory Chips"));
+
+  // Tecla '4' cambia a procedures
+  panel.handleInput("4");
+  assert.equal(panel.getMode(), "procedures");
+  const procLines = panel.render(120);
+  assert.ok(procLines.join("\n").includes("Fix build colgado"));
+
+  // Tecla '3' vuelve a metro
+  panel.handleInput("3");
+  assert.equal(panel.getMode(), "metro");
+
+  // Tecla 'd' descarta la nota (soft-delete)
+  panel.handleInput("d");
+  assert.equal(panel.getFilteredItems().length, 0);
+
+  db.close();
+  fs.rmSync(tmpDir, { recursive: true, force: true });
 });

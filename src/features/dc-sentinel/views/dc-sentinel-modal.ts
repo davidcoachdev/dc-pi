@@ -4,23 +4,24 @@ import { SentinelPanel, type SentinelViewMode } from "./dc-sentinel-panel.ts";
 import { globalSentinelRecorder } from "../core/dc-sentinel-recorder.ts";
 
 /**
- * Abre la ventana interactiva modal para explorar los registros de vuelo del Centinela.
+ * Abre la ventana interactiva modal para explorar las Líneas de Metro,
+ * registros de vuelo y procedimientos del Centinela 2.0.
  */
 export async function openSentinelViewer(
   ctx: ExtensionContext,
-  initialMode: SentinelViewMode = "session",
+  initialMode: SentinelViewMode = "metro",
 ): Promise<void> {
   const turns = globalSentinelRecorder.getTurns();
 
   await openDcModal(ctx, {
-    title: "Dc Studio - Bitácora de Vuelo & Centinela",
+    title: "Dc Studio - Bitácora & Centinela Soberano v2.0",
     glyph: "⛩ ",
     width: "92%",
     maxHeight: "88%",
     scrollable: false,
     showScrollbar: false,
     footer: (theme) => ({
-      left: ` ${theme.fg("accent", "↑↓")} elegir  ·  ${theme.fg("accent", "Tab")} cambiar vista  ·  ${theme.fg("accent", "Ctrl+↑↓/j/k")} detalle  ·  ${theme.fg("accent", "c")} copiar  ·  ${theme.fg("accent", "Esc")} salir`,
+      left: ` ${theme.fg("accent", "↑↓")} navegar  ·  ${theme.fg("accent", "Tab/1-4")} vista  ·  ${theme.fg("accent", "d")} olvidar  ·  ${theme.fg("accent", "p")} fijar  ·  ${theme.fg("accent", "g")} global  ·  ${theme.fg("accent", "c")} copiar  ·  ${theme.fg("accent", "Esc")} salir`,
       right: theme.fg("accent", `${turns.length} turnos auditados`),
     }),
     content: (_done, theme, tui) => {

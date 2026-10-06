@@ -362,3 +362,42 @@ test("Status sidebar Engram section wires click handlers to open Engram explorer
   await gestorRow.onClick();
   assert.equal(customCalls, 2, "Clicking Gestor /dc-engram row must trigger Engram explorer modal");
 });
+
+test("Status sidebar Centinela section wires click handlers to open Sentinel viewer", async () => {
+  let customCalls = 0;
+
+  const mockCtx = {
+    hasUI: true,
+    mode: "tui",
+    cwd: process.cwd(),
+    sessionManager: { getCwd: () => process.cwd() },
+    ui: {
+      custom: async () => {
+        customCalls++;
+        return undefined;
+      },
+      notify: () => {},
+    },
+  } as unknown as ExtensionContext;
+
+  (globalThis as any)[Symbol.for("dc.sidebar.ctx")] = mockCtx;
+
+  const card = createStatusCard(() => {});
+  const cardContent = (card as any).options.content;
+  const sentinelCollapsible = cardContent.children.find((c: any) => c?.options?.title?.includes("Centinela:"));
+  assert.ok(sentinelCollapsible, "Centinela collapsible must exist in Status card");
+
+  // Verificar onTitleRightClick
+  assert.equal(typeof sentinelCollapsible.options.onTitleRightClick, "function");
+  await sentinelCollapsible.options.onTitleRightClick();
+  assert.equal(customCalls, 1, "Clicking Centinela titleRight must trigger Sentinel viewer modal");
+
+  // Verificar filas internas
+  const rows = (sentinelCollapsible as any).childrenStack?.children || sentinelCollapsible.options.children;
+  const metroRow = rows.find((r: any) => typeof r.left === "string" && r.left.includes("Líneas de Metro"));
+  assert.ok(metroRow, "Líneas de Metro row must exist in Centinela section");
+  assert.equal(typeof metroRow.onClick, "function", "Líneas de Metro row must have onClick handler");
+
+  await metroRow.onClick();
+  assert.equal(customCalls, 2, "Clicking Líneas de Metro row must trigger Sentinel viewer modal");
+});
