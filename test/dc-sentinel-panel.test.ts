@@ -265,6 +265,17 @@ test("dc-sentinel-panel: renders metro view with glyphs and procedures", () => {
     title: "Elegir Fastify",
     content: "Se adopta Fastify por baja latencia en endpoints de streaming",
     topicKey: "auth-server",
+    filesAffected: ["src/core/server.ts"],
+  });
+
+  db.saveNote({
+    project: "metro-test",
+    type: "bugfix",
+    glyph: "●",
+    title: "Fix timeout en server",
+    content: "Se aumentó el keepAliveTimeout a 65s",
+    topicKey: "fix-server",
+    filesAffected: ["src/core/server.ts"],
   });
 
   db.saveProcedure({
@@ -295,9 +306,17 @@ test("dc-sentinel-panel: renders metro view with glyphs and procedures", () => {
   assert.equal(panel.getMode(), "metro");
   const lines = panel.render(120);
   assert.ok(lines[0]?.includes("[3] Metro"));
+  assert.ok(lines[0]?.includes("[5]")); // Pestaña aislada de Engram presente
   const fullText = lines.join("\n");
-  assert.ok(fullText.includes("⚖ Elegir Fastify"));
+  assert.ok(fullText.includes("[L5]") || fullText.includes("[L2]") || fullText.includes("[L1]"));
   assert.ok(fullText.includes("Memory Chips"));
+  assert.ok(fullText.includes("Estaciones de Transbordo"));
+  assert.ok(!fullText.includes("Rev #"), "No debe usar numeración con # estilo Engram");
+
+  // Enter salta a la estación de transbordo conectada (comparten src/core/server.ts)
+  const initialIdx = panel.getSelectedIndex();
+  panel.handleInput("\r");
+  assert.notEqual(panel.getSelectedIndex(), initialIdx, "Enter debe saltar a la estación de transbordo conectada");
 
   // Tecla '4' cambia a procedures
   panel.handleInput("4");
@@ -305,11 +324,16 @@ test("dc-sentinel-panel: renders metro view with glyphs and procedures", () => {
   const procLines = panel.render(120);
   assert.ok(procLines.join("\n").includes("Fix build colgado"));
 
+  // Tecla '5' cambia a la pestaña aislada de Engram
+  panel.handleInput("5");
+  assert.equal(panel.getMode(), "engram");
+
   // Tecla '3' vuelve a metro
   panel.handleInput("3");
   assert.equal(panel.getMode(), "metro");
 
-  // Tecla 'd' descarta la nota (soft-delete)
+  // Tecla 'd' descarta las notas (soft-delete)
+  panel.handleInput("d");
   panel.handleInput("d");
   assert.equal(panel.getFilteredItems().length, 0);
 

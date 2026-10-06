@@ -21,7 +21,7 @@ export async function openSentinelViewer(
     scrollable: false,
     showScrollbar: false,
     footer: (theme) => ({
-      left: ` ${theme.fg("accent", "↑↓")} navegar  ·  ${theme.fg("accent", "Tab/1-4")} vista  ·  ${theme.fg("accent", "d")} olvidar  ·  ${theme.fg("accent", "p")} fijar  ·  ${theme.fg("accent", "g")} global  ·  ${theme.fg("accent", "c")} copiar  ·  ${theme.fg("accent", "Esc")} salir`,
+      left: ` ${theme.fg("accent", "↑↓")} navegar  ·  ${theme.fg("accent", "Tab/1-5")} vista  ·  ${theme.fg("accent", "Enter")} transbordo  ·  ${theme.fg("accent", "d")} olvidar  ·  ${theme.fg("accent", "p")} fijar  ·  ${theme.fg("accent", "g")} global  ·  ${theme.fg("accent", "c")} copiar`,
       right: theme.fg("accent", `${turns.length} turnos auditados`),
     }),
     content: (_done, theme, tui) => {

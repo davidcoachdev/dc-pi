@@ -1,9 +1,13 @@
 import { execFile } from "node:child_process";
 import type {
   SentinelNote,
+  SentinelNoteType,
+  SentinelConcept,
   SentinelTurnRecord,
   SentinelBlastRadius,
+  SentinelProcedure,
 } from "./dc-sentinel-types.ts";
+import { SENTINEL_TYPE_GLYPHS } from "./dc-sentinel-types.ts";
 import { normalizeTextForHash } from "./dc-sentinel-db.ts";
 
 export interface SessionGitStats {
@@ -30,6 +34,161 @@ export interface DeterministicSessionSummary {
   blastRadius: SentinelBlastRadius;
   hasErrors: boolean;
   notesToPersist: SentinelNote[];
+}
+
+export interface MetroLineBadge {
+  code: "L1" | "L2" | "L3" | "L4" | "L5";
+  name: string;
+  icon: string;
+  ansiColor: string;
+}
+
+/**
+ * Asigna la Línea de Metro temática según los archivos afectados, el tipo de nota y su contenido
+ * (Documento #05 - La Metáfora del Metro de Emowe).
+ */
+export function resolveMetroLine(note: Pick<SentinelNote, "type" | "title" | "content" | "filesAffected">): MetroLineBadge {
+  const files = (note.filesAffected || []).join(" ").toLowerCase();
+  const text = `${note.title} ${note.content}`.toLowerCase();
+
+  // L2: Seguridad y Auth
+  if (
+    note.type === "security_alert" ||
+    note.type === "security_note" ||
+    note.type === "sensitive" ||
+    files.includes("owasp") ||
+    files.includes("scan-guard") ||
+    files.includes("security") ||
+    text.includes("owasp") ||
+    text.includes("seguridad") ||
+    text.includes("ssrf") ||
+    text.includes("auth")
+  ) {
+    return { code: "L2", name: "Seguridad & Auth", icon: "🟡", ansiColor: "\x1b[38;2;255;204;51m" };
+  }
+
+  // L3: Persistencia, Memoria y Storage
+  if (
+    files.includes("sentinel") ||
+    files.includes("engram") ||
+    files.includes("db") ||
+    files.includes("store") ||
+    files.includes("prefs") ||
+    text.includes("sqlite") ||
+    text.includes("memoria") ||
+    text.includes("persistencia") ||
+    text.includes("fts5")
+  ) {
+    return { code: "L3", name: "Persistencia & Storage", icon: "🟢", ansiColor: "\x1b[38;2;80;220;120m" };
+  }
+
+  // L4: Subagentes, Flota de Taxis y Tareas
+  if (
+    files.includes("dc-agents") ||
+    files.includes("taxi") ||
+    files.includes("ephemeral") ||
+    files.includes("dc-plan") ||
+    text.includes("subagente") ||
+    text.includes("taxi") ||
+    text.includes("flota") ||
+    text.includes("lego")
+  ) {
+    return { code: "L4", name: "Subagentes & Taxis", icon: "🟣", ansiColor: "\x1b[38;2;190;120;255m" };
+  }
+
+  // L5: Procedimientos, Fixes y UI
+  if (
+    note.type === "bugfix" ||
+    note.type === "procedure" ||
+    files.includes("src/ui/") ||
+    files.includes("dc-changes") ||
+    files.includes("dc-body") ||
+    files.includes("dc-sidebar") ||
+    files.includes("dc-prompt")
+  ) {
+    return { code: "L5", name: "UI & Fixes", icon: "🔵", ansiColor: "\x1b[38;2;90;180;255m" };
+  }
+
+  // L1: Arquitectura y Core (Default)
+  return { code: "L1", name: "Arquitectura & Core", icon: "🔴", ansiColor: "\x1b[38;2;255;85;85m" };
+}
+
+/**
+ * Compresión Gramatical Determinista Offline (Documento #20 - Cavemem).
+ * Elimina muletillas conversacionales y cortesías al inicio/medio de la prosa,
+ * preservando intactos bloques de código, inline code (`...`), rutas y versiones.
+ */
+export function compressCavememProse(text: string): string {
+  if (!text) return "";
+
+  // 1. Purgar bloques <private>...</private> en la frontera
+  let out = text.replace(/<private>[\s\S]*?<\/private>/gi, "[PRIVATE_REDACTED]");
+
+  // 2. Proteger inline code y bloques de código con placeholders temporales
+  const preserved: string[] = [];
+  out = out.replace(/```[\s\S]*?```|`[^`\n]+`/g, (match) => {
+    const idx = preserved.length;
+    preserved.push(match);
+    return `__CAVEMEM_TOKEN_${idx}__`;
+  });
+
+  // 3. Remover aperturas conversacionales y muletillas de cortesía
+  const fillerPatterns = [
+    /^(?:¡?listo[,!\s]+(?:che|papá|viejo|hermano)?[!.,\s]*)/i,
+    /^(?:¡?claro[,!\s]+(?:que sí)?[!.,\s]*)/i,
+    /^(?:¡?perfecto[,!\s]*|¡?excelente[,!\s]*|¡?dale[,!\s]*)/i,
+    /^(?:ya\s+ejecuté\s+|hecho[,:\s]+|arreglado\s+al\s+toque[,:\s]*)/i,
+    /\b(?:por favor tener en cuenta que|con el fin de proceder a|cabe destacar que|vale la pena mencionar que)\b/gi,
+  ];
+
+  for (const pat of fillerPatterns) {
+    out = out.replace(pat, "");
+  }
+
+  // Colapsar múltiples saltos de línea y espacios redundantes
+  out = out
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+
+  // 4. Restaurar tokens técnicos preservados byte a byte
+  out = out.replace(/__CAVEMEM_TOKEN_(\d+)__/g, (_m, idxStr) => {
+    const idx = Number.parseInt(idxStr, 10);
+    return preserved[idx] ?? "";
+  });
+
+  return out;
+}
+
+/**
+ * Directiva "When to Skip" (Documento #15 - Claude-Mem).
+ * Filtra saludos, confirmaciones cortas o turnos puramente conversacionales sin herramientas ni hallazgos.
+ */
+export function shouldSkipTurnExtraction(turn: SentinelTurnRecord, filesTouchedCount: number = 0): boolean {
+  const prompt = (turn.userPrompt || "").trim();
+  const lower = prompt.toLowerCase();
+
+  // Si hubo herramientas de mutación o errores o archivos tocados, NUNCA saltar
+  const hasMutationTool = turn.toolsExecuted.some((t) =>
+    t.toolName === "edit" ||
+    t.toolName === "write" ||
+    t.toolName === "dc_ephemeral_agent_run" ||
+    t.toolName === "subagent_run",
+  );
+  if (hasMutationTool || turn.errorsDetected.length > 0 || filesTouchedCount > 0) {
+    return false;
+  }
+
+  // Saludos o preguntas de estado triviales sin ejecución de herramientas relevantes
+  const trivialConversational = /^(hola|hola como vamos|que paso|oye que paso.*|ok|dale|gracias|buenas|test|ping)$/i;
+  if (trivialConversational.test(lower) && turn.toolsExecuted.length <= 2) {
+    return true;
+  }
+
+  if (prompt.length < 4 && turn.toolsExecuted.length === 0) {
+    return true;
+  }
+
+  return false;
 }
 
 /**
@@ -67,7 +226,6 @@ export async function extractSessionGitStats(projectRoot: string): Promise<Sessi
       for (const line of lines) {
         const filePart = line.slice(3).trim();
         if (filePart) {
-          // Manejar renombrados "orig -> dest"
           const cleanFile = filePart.includes("->") ? filePart.split("->")[1].trim() : filePart;
           changedFilesSet.add(cleanFile);
         }
@@ -105,23 +263,78 @@ export async function extractSessionGitStats(projectRoot: string): Promise<Sessi
 }
 
 /**
- * Deduce un título limpio y técnico a partir del primer prompt del usuario.
+ * Extrae la lista real de archivos modificados o creados en un turno a partir de los args de las tools (`edit`, `write`).
  */
-export function deriveSessionTitle(userPrompt: string): string {
-  if (!userPrompt || userPrompt.trim().length === 0) {
-    return "Sesión de Desarrollo y Mantenimiento";
+export function extractFilesFromTurnTools(turn: SentinelTurnRecord): string[] {
+  const files = new Set<string>();
+  for (const t of turn.toolsExecuted) {
+    if (t.toolName === "edit" || t.toolName === "write") {
+      const p = t.args?.path;
+      if (typeof p === "string" && p.trim().length > 0) {
+        files.add(p.trim());
+      }
+    }
   }
-  const clean = userPrompt
-    .replace(/^(\/|!)[a-z0-9_-]+\s*/i, "") // quitar slash commands
-    .replace(/\s+/g, " ")
-    .trim();
-
-  if (clean.length <= 60) return clean;
-  return `${clean.slice(0, 57)}...`;
+  return Array.from(files);
 }
 
 /**
- * Extrae notas atómicas preliminares de forma determinista a partir de los turnos de la sesión.
+ * Deduce un título limpio y técnico a partir de un texto (prompt o encabezado del asistente).
+ */
+export function deriveSessionTitle(rawText: string): string {
+  if (!rawText || rawText.trim().length === 0) {
+    return "Sesión de Desarrollo y Mantenimiento";
+  }
+  const clean = rawText
+    .replace(/^(\/|!)[a-z0-9_-]+\s*/i, "")
+    .replace(/^#+\s*/, "")
+    .replace(/\*\*/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  if (clean.length <= 64) return clean;
+  return `${clean.slice(0, 61)}...`;
+}
+
+/**
+ * Extrae el mejor resumen técnico de la respuesta del asistente (Experience Facts - Documento #02 y #19).
+ */
+function extractAssistantTechnicalDigest(assistantSummary?: string): { heading?: string; summary: string } {
+  if (!assistantSummary || assistantSummary.trim().length === 0) {
+    return { summary: "" };
+  }
+
+  const compressed = compressCavememProse(assistantSummary);
+  const lines = compressed
+    .split("\n")
+    .map((l) => l.trim())
+    .filter((l) => l.length > 0 && !l.startsWith("---"));
+
+  let heading: string | undefined;
+  const meaningfulLines: string[] = [];
+
+  for (const line of lines) {
+    if (line.startsWith("#")) {
+      if (!heading) {
+        heading = line.replace(/^#+\s*/, "").replace(/\*\*/g, "").trim();
+      }
+      continue;
+    }
+    if (line.startsWith("Risk:")) continue;
+    meaningfulLines.push(line);
+    if (meaningfulLines.join(" ").length >= 420) break;
+  }
+
+  const joined = meaningfulLines.join(" ").slice(0, 480);
+  return { heading, summary: joined };
+}
+
+/**
+ * Extrae notas atómicas autocontenidas de forma determinista combinando:
+ * 1. Intención del usuario (`[USER]`)
+ * 2. Hechos producidos por el asistente (`[ORCHESTRATOR]` - Experience Facts)
+ * 3. Superficie real de archivos editados (`[TOOL]` + `git status`)
+ * 4. Cálculo de Blast Radius y Topic Key evolutivo
  */
 export function extractDeterministicNotes(
   turns: SentinelTurnRecord[],
@@ -129,118 +342,214 @@ export function extractDeterministicNotes(
   gitStats?: SessionGitStats,
 ): SentinelNote[] {
   const notes: SentinelNote[] = [];
-  const filesList = gitStats?.filesChanged || [];
+  const gitFiles = gitStats?.filesChanged || [];
 
   for (const turn of turns) {
-    const promptLower = turn.userPrompt.toLowerCase();
+    const toolFiles = extractFilesFromTurnTools(turn);
+    const filesList = Array.from(new Set([...toolFiles, ...gitFiles]));
 
-    // 1. Detección de Bugfix
-    if (promptLower.includes("fix") || promptLower.includes("bug") || promptLower.includes("error") || promptLower.includes("arregl")) {
-      const title = `Fix: ${deriveSessionTitle(turn.userPrompt)}`;
-      notes.push({
-        project,
-        type: "bugfix",
-        glyph: "●",
-        title,
-        content: `Corrección solicitada: "${turn.userPrompt}". Archivos tocados: ${filesList.join(", ") || "inspección"}.`,
-        topicKey: `bugfix-${normalizeTextForHash(turn.userPrompt).slice(0, 8)}`,
-        concepts: ["problem-solution", "what-changed"],
-        filesAffected: filesList,
-        proofCount: 1,
-        status: "active",
-      });
+    // Aplicar directiva "When to Skip" (Claude-Mem)
+    if (shouldSkipTurnExtraction(turn, filesList.length)) {
+      continue;
     }
 
-    // 2. Detección de Decisión Arquitectónica o Merge
+    const promptLower = turn.userPrompt.toLowerCase();
+    const assistantLower = (turn.assistantSummary || "").toLowerCase();
+    const combinedText = `${promptLower} ${assistantLower}`;
+
+    const digest = extractAssistantTechnicalDigest(turn.assistantSummary);
+    const hasEdits = toolFiles.length > 0;
+
+    // Clasificación multi-señal (Prompt + Respuesta del Asistente + Herramientas)
+    let noteType: SentinelNoteType | null = null;
+    let prefix = "";
+    let concepts: SentinelConcept[] = [];
+
     if (
+      promptLower.includes("fix") ||
+      promptLower.includes("bug") ||
+      promptLower.includes("error") ||
+      promptLower.includes("arregl") ||
+      promptLower.includes("correg") ||
+      assistantLower.includes("causa del problema") ||
+      assistantLower.includes("solución aplicada") ||
+      turn.errorsDetected.length > 0
+    ) {
+      noteType = "bugfix";
+      prefix = "Fix";
+      concepts = ["problem-solution", "what-changed"];
+    } else if (
       promptLower.includes("arquitectura") ||
       promptLower.includes("decision") ||
       promptLower.includes("migr") ||
       promptLower.includes("reemplaz") ||
       promptLower.includes("patron") ||
       promptLower.includes("merge") ||
-      promptLower.includes("adopta")
+      promptLower.includes("adopta") ||
+      assistantLower.includes("decisión")
     ) {
-      const title = `Decisión: ${deriveSessionTitle(turn.userPrompt)}`;
-      notes.push({
-        project,
-        type: "decision",
-        glyph: "⚖",
-        title,
-        content: `Decisión técnica tomada en turno ${turn.turnId}: "${turn.userPrompt}".`,
-        topicKey: `arch-${normalizeTextForHash(turn.userPrompt).slice(0, 8)}`,
-        concepts: ["why-it-exists", "trade-off"],
-        filesAffected: filesList,
-        proofCount: 1,
-        status: "active",
-      });
-    }
-
-    // 3. Detección de Feature / Nueva Capacidad
-    if (
+      noteType = "decision";
+      prefix = "Decisión";
+      concepts = ["why-it-exists", "trade-off"];
+    } else if (
+      promptLower.includes("audit") ||
+      promptLower.includes("investig") ||
+      promptLower.includes("explor") ||
+      promptLower.includes("revis") ||
+      promptLower.includes("explic") ||
+      promptLower.includes("esplic") ||
+      assistantLower.includes("auditoría") ||
+      assistantLower.includes("diagnóstico")
+    ) {
+      noteType = "discovery";
+      prefix = "Discovery";
+      concepts = ["how-it-works", "gotcha"];
+    } else if (
+      promptLower.includes("refactor") ||
+      promptLower.includes("limpi") ||
+      promptLower.includes("reestructur") ||
+      combinedText.includes("refactor")
+    ) {
+      noteType = "refactor";
+      prefix = "Refactor";
+      concepts = ["what-changed", "pattern"];
+    } else if (
       promptLower.includes("implement") ||
       promptLower.includes("crear") ||
       promptLower.includes("nueva") ||
       promptLower.includes("nuevo") ||
       promptLower.includes("agreg") ||
-      promptLower.includes("incorpor")
+      promptLower.includes("incorpor") ||
+      promptLower.includes("document")
     ) {
-      const title = `Feature: ${deriveSessionTitle(turn.userPrompt)}`;
-      notes.push({
-        project,
-        type: "feature",
-        glyph: "◆",
-        title,
-        content: `Capacidad implementada: "${turn.userPrompt}".`,
-        topicKey: `feat-${normalizeTextForHash(turn.userPrompt).slice(0, 8)}`,
-        concepts: ["how-it-works", "what-changed"],
-        filesAffected: filesList,
-        proofCount: 1,
-        status: "active",
-      });
+      noteType = "feature";
+      prefix = "Feature";
+      concepts = ["how-it-works", "what-changed"];
+    } else if (hasEdits) {
+      // Si el usuario dio una instrucción directa ("dale 12 más", "ponelo en 86%") pero hubo edición real de código:
+      noteType = "change";
+      prefix = "Cambio";
+      concepts = ["what-changed"];
     }
 
-    // 4. Detección de Descubrimiento o Auditoría
-    if (
-      promptLower.includes("audit") ||
-      promptLower.includes("investig") ||
-      promptLower.includes("explor") ||
-      promptLower.includes("revis")
-    ) {
-      const title = `Discovery: ${deriveSessionTitle(turn.userPrompt)}`;
-      notes.push({
-        project,
-        type: "discovery",
-        glyph: "○",
-        title,
-        content: `Hallazgo o análisis: "${turn.userPrompt}".`,
-        topicKey: `disc-${normalizeTextForHash(turn.userPrompt).slice(0, 8)}`,
-        concepts: ["how-it-works"],
-        filesAffected: filesList,
-        proofCount: 1,
-        status: "active",
-      });
+    if (!noteType) continue;
+
+    const baseTitle = digest.heading || deriveSessionTitle(turn.userPrompt);
+    const title = baseTitle.toLowerCase().startsWith(prefix.toLowerCase())
+      ? deriveSessionTitle(baseTitle)
+      : `${prefix}: ${deriveSessionTitle(baseTitle)}`;
+
+    // Construir Hecho Atómico Autocontenido (Regla de los 10 años y Sin Pronombres - Documentos #04 y #15)
+    const contentParts: string[] = [];
+    contentParts.push(`**Contexto / Solicitud:** "${compressCavememProse(turn.userPrompt)}"`);
+    if (digest.summary) {
+      contentParts.push(`**Resolución Técnica:** ${digest.summary}`);
+    }
+    if (filesList.length > 0) {
+      contentParts.push(`**Superficies Afectadas:** ${filesList.map((f) => `\`${f}\``).join(", ")}`);
     }
 
-    // 5. Detección de Refactor
-    if (promptLower.includes("refactor") || promptLower.includes("limpi") || promptLower.includes("reestructur")) {
-      const title = `Refactor: ${deriveSessionTitle(turn.userPrompt)}`;
-      notes.push({
+    // Derivar topicKey estable basado en el primer archivo o módulo afectado para que evolucione (Engram Pattern #24)
+    const primaryFileSlug = filesList[0]
+      ? filesList[0].replace(/^src\/(?:features|core|ui|integrations)\//, "").replace(/[^a-zA-Z0-9_-]/g, "-").toLowerCase()
+      : normalizeTextForHash(turn.userPrompt).slice(0, 8);
+    const topicKey = `${noteType}-${primaryFileSlug}`.slice(0, 48);
+
+    const risk: "low" | "medium" | "high" =
+      filesList.length > 5 || turn.errorsDetected.length > 2 ? "high" : filesList.length > 2 ? "medium" : "low";
+
+    notes.push({
+      project,
+      type: noteType,
+      glyph: SENTINEL_TYPE_GLYPHS[noteType] || "•",
+      title,
+      content: contentParts.join("\n\n"),
+      topicKey,
+      concepts,
+      filesAffected: filesList,
+      blastRadius: {
+        filesCount: filesList.length,
+        callCount: turn.toolsExecuted.length,
+        risk,
+        summary: `${filesList.length} archivo(s) tocado(s), ${turn.toolsExecuted.length} tool(s) ejecutadas.`,
+      },
+      proofCount: 1,
+      status: "active",
+    });
+  }
+
+  return notes;
+}
+
+/**
+ * Extrae Procedimientos / Recetas ejecutables (Auto-Skills) de forma determinista
+ * a partir de turnos donde se modificó código y se verificó con comandos de test/build,
+ * o donde se diagnosticó y corrigió un error (Documentos #09 ReMe y #16 TencentDB).
+ */
+export function extractDeterministicProcedures(
+  turns: SentinelTurnRecord[],
+  project: string,
+  gitStats?: SessionGitStats,
+): SentinelProcedure[] {
+  const procedures: SentinelProcedure[] = [];
+
+  for (const turn of turns) {
+    const editedFiles = extractFilesFromTurnTools(turn);
+    const bashTools = turn.toolsExecuted.filter((t) => t.toolName === "bash");
+
+    // Comandos de verificación o compilación ejecutados en el turno
+    const verifyCommands = bashTools
+      .map((t) => String(t.args?.command || "").trim())
+      .filter((cmd) =>
+        cmd.includes("npm test") ||
+        cmd.includes("npm run typecheck") ||
+        cmd.includes("node --test") ||
+        cmd.includes("tsc"),
+      );
+
+    const hadError = turn.errorsDetected.length > 0 || bashTools.some((t) => t.isError);
+    const endedWithSuccess = bashTools.length > 0 && !bashTools[bashTools.length - 1]?.isError;
+
+    // Generar receta cuando:
+    // A) Se editaron archivos y se validó con un comando de verificación exitoso, o
+    // B) Ocurrió un error en el turno y luego se superó con éxito en el mismo turno
+    if ((editedFiles.length > 0 && verifyCommands.length > 0 && endedWithSuccess) || (hadError && endedWithSuccess && editedFiles.length > 0)) {
+      const digest = extractAssistantTechnicalDigest(turn.assistantSummary);
+      const rawTitle = digest.heading || deriveSessionTitle(turn.userPrompt);
+      const primaryModule = editedFiles[0]
+        ? editedFiles[0].split("/").slice(-2).join("-").replace(/\.[a-z]+$/i, "")
+        : normalizeTextForHash(turn.userPrompt).slice(0, 8);
+
+      const procName = `runbook-${primaryModule}`.toLowerCase().replace(/[^a-z0-9_-]/g, "-");
+      const symptoms = turn.errorsDetected.length > 0
+        ? turn.errorsDetected[0]!.slice(0, 180)
+        : `Requerimiento o ajuste sobre ${editedFiles.join(", ")}: "${deriveSessionTitle(turn.userPrompt)}"`;
+
+      const steps: string[] = [];
+      for (const f of editedFiles) {
+        steps.push(`Inspeccionar y aplicar cambios en \`${f}\`.`);
+      }
+      if (digest.summary) {
+        steps.push(`Criterio técnico aplicado: ${digest.summary.slice(0, 220)}`);
+      }
+      const lastVerifyCmd = verifyCommands[verifyCommands.length - 1] || "npm run typecheck && npm test";
+      steps.push(`Ejecutar verificación determinista: \`${lastVerifyCmd}\`.`);
+
+      procedures.push({
         project,
-        type: "refactor",
-        glyph: "↻",
-        title,
-        content: `Refactorización aplicada: "${turn.userPrompt}".`,
-        topicKey: `refactor-${normalizeTextForHash(turn.userPrompt).slice(0, 8)}`,
-        concepts: ["what-changed", "pattern"],
-        filesAffected: filesList,
-        proofCount: 1,
-        status: "active",
+        name: procName,
+        title: `Receta: ${rawTitle}`,
+        triggerPattern: editedFiles[0] || primaryModule,
+        symptoms,
+        preconditions: `Repositorio ${project} con dependencias instaladas.`,
+        steps,
+        verificationCmd: lastVerifyCmd,
+        successRate: 1.0,
       });
     }
   }
 
-  return notes;
+  return procedures;
 }
 
 /**

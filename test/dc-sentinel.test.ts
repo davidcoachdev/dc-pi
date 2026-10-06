@@ -220,3 +220,78 @@ test("dc-sentinel: dcSentinelExtension hooks lifecycle and ignores child session
     }
   }
 });
+
+test("dc-sentinel: scientific extraction captures assistant experience facts, edited files, procedures and skips noise", async () => {
+  const {
+    extractDeterministicNotes,
+    extractDeterministicProcedures,
+    compressCavememProse,
+    resolveMetroLine,
+  } = await import("../src/features/dc-sentinel/core/dc-sentinel-deterministic-extractor.ts");
+
+  // 1. Compresión Cavemem preserva código y elimina muletillas
+  const rawProse = "¡Listo, che! Por favor tener en cuenta que editamos `src/ui/dc-window.ts` con `minRows = 36`.";
+  const compressed = compressCavememProse(rawProse);
+  assert.ok(!compressed.toLowerCase().includes("listo, che"));
+  assert.ok(compressed.includes("`src/ui/dc-window.ts`"));
+  assert.ok(compressed.includes("`minRows = 36`"));
+
+  // 2. Turno trivial ("hola como vamos") se salta (When to Skip)
+  const trivialTurn = {
+    turnId: "turn-1",
+    timestamp: new Date().toISOString(),
+    userPrompt: "hola como vamos",
+    toolsExecuted: [],
+    subagentsLaunched: [],
+    errorsDetected: [],
+    assistantSummary: "Todo impecable.",
+  };
+  const skippedNotes = extractDeterministicNotes([trivialTurn], "dc-pi");
+  assert.equal(skippedNotes.length, 0, "No debe guardar notas para saludos triviales sin cambios");
+
+  // 3. Turno con instrucción corta pero edición real de código + verificación -> extrae Nota autocontenida y Receta
+  const workTurn = {
+    turnId: "turn-2",
+    timestamp: new Date().toISOString(),
+    userPrompt: "dale 12 mas para ver como se ve",
+    toolsExecuted: [
+      {
+        callId: "c1",
+        toolName: "edit",
+        args: { path: "src/features/dc-changes/dc-changes-panel.ts" },
+        startedAt: 100,
+        endedAt: 200,
+        isError: false,
+      },
+      {
+        callId: "c2",
+        toolName: "bash",
+        args: { command: "npm run typecheck && node --test .test-build/test/dc-changes.test.js" },
+        startedAt: 200,
+        endedAt: 500,
+        isError: false,
+      },
+    ],
+    subagentsLaunched: [],
+    errorsDetected: [],
+    assistantSummary: "### Ajuste de Altura en dc-changes\nSe incrementó `minRows` de 24 a 36 filas en `DcChangesPanel` para expandir el diff.",
+  };
+
+  const notes = extractDeterministicNotes([workTurn], "dc-pi");
+  assert.equal(notes.length, 1);
+  assert.equal(notes[0]!.type, "change");
+  assert.ok(notes[0]!.title.includes("Ajuste de Altura en dc-changes"));
+  assert.ok(notes[0]!.content.includes("Se incrementó `minRows` de 24 a 36 filas"));
+  assert.ok(notes[0]!.filesAffected?.includes("src/features/dc-changes/dc-changes-panel.ts"));
+
+  // Verificar clasificación de Línea de Metro
+  const metro = resolveMetroLine(notes[0]!);
+  assert.equal(metro.code, "L5");
+
+  // Verificar extracción de Receta (Procedure)
+  const procs = extractDeterministicProcedures([workTurn], "dc-pi");
+  assert.equal(procs.length, 1);
+  assert.ok(procs[0]!.title.includes("Ajuste de Altura en dc-changes"));
+  assert.ok(procs[0]!.verificationCmd?.includes("npm run typecheck"));
+  assert.ok(procs[0]!.steps.some((s) => s.includes("dc-changes-panel.ts")));
+});
