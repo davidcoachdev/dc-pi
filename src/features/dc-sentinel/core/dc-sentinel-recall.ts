@@ -1,5 +1,6 @@
 import { getProjectObservations, type EngramObservation } from "../../dc-engram/dc-engram-db.ts";
 import type { SentinelRecallItem, SentinelRecallResult } from "./dc-sentinel-types.ts";
+import { SentinelDatabase } from "./dc-sentinel-db.ts";
 
 const STOP_WORDS = new Set([
   // Español
@@ -103,6 +104,35 @@ export function performPreFlightRecall(
     return { prompt, keywords: [], items: [] };
   }
 
+  const maxItems = options.limit ?? 3;
+
+  // 1. Motor Soberano Local: Buscar primero en SentinelDatabase (SQLite FTS5 trigrams)
+  if (!options.observationsLoader) {
+    try {
+      const db = new SentinelDatabase(options.projectName, options.cwd);
+      const dbResults = db.searchNotes(prompt, { limit: maxItems });
+      db.close();
+
+      if (dbResults.length > 0) {
+        const topItems: SentinelRecallItem[] = dbResults.map((n) => ({
+          id: n.id ?? 0,
+          type: n.type,
+          title: n.title,
+          content: n.content,
+          scope: n.scope || "project",
+          score: 5,
+          createdAt: n.createdAt,
+        }));
+
+        const formattedBlock = formatRecallPromptSection(topItems);
+        return { prompt, keywords, items: topItems, formattedBlock };
+      }
+    } catch {
+      /* fallback a loader */
+    }
+  }
+
+  // 2. Fallback / Custom loader (compatibilidad)
   const loader = options.observationsLoader || (() => getProjectObservations(150, options.projectName, options.cwd));
   let observations: EngramObservation[] = [];
   try {
@@ -112,8 +142,6 @@ export function performPreFlightRecall(
   }
 
   const minScore = options.minScore ?? 3; // Al menos 1 match en título o 3 en contenido
-  const maxItems = options.limit ?? 3;
-
   const scoredItems: SentinelRecallItem[] = [];
 
   for (const obs of observations) {
