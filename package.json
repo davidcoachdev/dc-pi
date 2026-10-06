@@ -7,6 +7,7 @@
   "types": "./src/index.ts",
   "keywords": [
     "pi",
+    "pi-package",
     "pi-coding-agent",
     "tui",
     "dc-studio",
@@ -22,9 +23,13 @@
     "extensions": [
       "./src/index.ts"
     ],
-    "skills": [],
+    "skills": [
+      "./skills"
+    ],
     "prompts": [],
-    "themes": []
+    "themes": [
+      "./themes"
+    ]
   },
   "scripts": {
     "typecheck": "tsc --noEmit",

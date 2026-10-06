@@ -25,7 +25,7 @@ The `dc-pi` ecosystem is organized into four modular layers:
 - **`getGitChanges` / `parseGitStatus`**: Git status porcelain parser and diff extractor.
 
 ### 4. Features & Extensions (`src/features/` & `src/experimental/`)
-- 20 modular extensions delivering rich interactive dialogs, status monitors, retro editors, visual decorators, and workflow enhancements.
+- **38+ modular extensions** delivering rich interactive dialogs, status monitors, retro editors, visual decorators, background supervisors, developer tools, and workflow enhancements.
 
 ---
 
@@ -56,6 +56,33 @@ All extensions are unified under the canonical `dcStudioExtension` entrypoint.
 | `/dc-sidebar` | `Alt+Shift+B` | Marco retro, auditor de tokens y control del sidebar / Sidebar frame & context monitor | `dc-sidebar` |
 | `/dc-prompt` | — | Editor de prompt DOS marco doble con línea de estado / Retro DOS prompt editor | `dc-prompt` |
 | `/dc-dialogs` | — | *(Experimental)* Enmarca diálogos nativos de Pi en `DcWindow` / Modal overlay wrapper | `dc-dialogs-overlay` |
+| `/dc-taxis` | `Alt+Shift+T` | Flota de Taxis, arriendo de cuentas y monitoreo de tokens / Taxi Fleet manager | `dc-agents` |
+| `/agents` / `/dc-agents` | `Alt+A` | Visor interactivo de subagentes y ejecuciones / Subagents and task executions viewer | `dc-agents` |
+| `/git-graph` / `/dc-git-graph` | `Alt+H` | Visor visual de historial y diffs de Git / Visual Git commit graph & diff explorer | `dc-git-graph` |
+| `/owasp` / `/dc-owasp` | — | Catálogo oficial de seguridad OWASP y auditoría / OWASP security explorer & auditor | `dc-owasp` |
+| `/dc-sentinel` | `Alt+Shift+S` | Visor de turnos de sesión y recall de memoria / Sentinel session turns & recall viewer | `dc-sentinel` |
+| `/plan` / `/odd` | — | Visor interactivo de planificación ODD y tareas / ODD plan & tasks viewer | `dc-plan` |
+| `/dc-services` | — | Supervisor de servicios y procesos en background / Background services manager | `dc-services` |
+| `/dc-browser` | — | Estado y control de Chrome DevTools Protocol / Chrome CDP status & controls | `dc-browser` |
+| `/dc-checkpoint` | — | Snapshot del worktree (`diff.patch` + `restore.sh`) / Worktree checkpoint snapshot | `dc-checkpoint` |
+| `/dc-handoff` | — | Nota de handoff en `.pi/handoff.md` para reanudar / Handoff resume note generator | `dc-handoff` |
+| `/dc-engram` | — | Visor de memorias y enrolamiento en Engram / Engram persistent memory explorer | `dc-engram` |
+
+---
+
+## Specialized LLM Tools / Herramientas Especializadas para Agentes
+
+| Tool | Description |
+| :--- | :--- |
+| `dc_ephemeral_agent_run` | Ejecuta subagentes efímeros de un solo uso con Fresh Context Loop y arriendo de cuentas taxi. |
+| `dc_owasp_query` | Consulta directivas y snippets de seguridad de OWASP Cheat Sheets. |
+| `dc_owasp_audit` | Audita código fuente o git diffs contra vectores OWASP (SQLi, XSS, TLS, Secrets). |
+| `dc_browser_*` | Automatización de navegador vía Chrome CDP (navegación, capturas PNG, evaluación JS). |
+| `dc_services_*` | Control de procesos en background definidos en `.pi/services.json` (start, stop, logs, status). |
+| `dc_codegraph_*` | Análisis estático, AST y resolución de referencias de código fuente. |
+| `dc_pdf_extract` | Extracción estructurada de texto y metadatos de documentos PDF. |
+| `dc_youtube_*` | Descarga de subtítulos WEBVTT y análisis de videos de YouTube. |
+| `dc_audio_*` | Limpieza de markdown para síntesis de voz y renderizado de audio WAV vía TTS. |
 
 ---
 

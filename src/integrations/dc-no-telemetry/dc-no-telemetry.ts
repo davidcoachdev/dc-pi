@@ -2,6 +2,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { dcNotifier } from "../dc-notify/dc-notifier.ts";
 
 const SETTINGS = path.join(os.homedir(), ".pi/agent/settings.json");
 
@@ -41,8 +42,10 @@ export default function dcNoTelemetryExtension(pi: ExtensionAPI): void {
   pi.on("session_start", async (_event, ctx) => {
     try {
       const changed = enforce();
-      if (changed.length && ctx.hasUI) {
-        ctx.ui.notify(
+      if (changed.length) {
+        dcNotifier.notify(
+          ctx,
+          "Telemetría",
           `🛡️ telemetría re-cortada (${changed.join(", ")}).`,
           "info",
         );

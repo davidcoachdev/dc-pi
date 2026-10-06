@@ -1,10 +1,11 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { openDcModal } from "../../ui/dc-modal.ts";
+import { dcNotifier } from "../../integrations/dc-notify/dc-notifier.ts";
 import { DcPlanPanel } from "./views/dc-plan-panel.ts";
 
 export function openPlanViewer(ctx: ExtensionContext): void {
   if (!ctx.hasUI || ctx.mode !== "tui") {
-    ctx.ui.notify("Plan viewer solo disponible en modo TUI interactivo", "warning");
+    dcNotifier.notify(ctx, "Plan", "Plan viewer solo disponible en modo TUI interactivo", "warning");
     return;
   }
 

@@ -338,4 +338,77 @@ test("paintBigLine uses run-length chunking for contiguous glyphs", () => {
   assert.equal(calls[0], "text:╔═════╗");
 });
 
+test("dcFaceExtension: continuous animation in dormant mode does NOT invalidate layoutRoot (Zero-OOM)", async () => {
+  const events = new Map<string, Array<(...args: any[]) => any>>();
+  const mockPi: any = {
+    on: (evt: string, handler: any) => {
+      const arr = events.get(evt) || [];
+      arr.push(handler);
+      events.set(evt, arr);
+    },
+    registerCommand: () => {},
+    registerShortcut: () => {},
+  };
+
+  let layoutRootInvalidated = false;
+  let requestRenderCount = 0;
+  const mockTui = {
+    layoutRoot: {
+      invalidate: () => {
+        layoutRootInvalidated = true;
+      },
+    },
+    terminal: {
+      [Symbol.for("gentle-pi.experimental-sidebar.cache")]: { revision: 0 },
+    },
+    requestRender: () => {
+      requestRenderCount++;
+    },
+  };
+
+  const mockCtx: any = {
+    hasUI: true,
+    ui: {
+      theme: { fg: (_r: string, t: string) => t },
+      setWorkingIndicator: () => {},
+      setWidget: (name: string, factory: any) => {
+        if (name === "dc-face-anchor") {
+          factory(mockTui);
+        }
+      },
+      onTerminalInput: () => () => {},
+      notify: () => {},
+    },
+  };
+
+  dcFaceExtension(mockPi);
+
+  const sessionStartHandlers = events.get("session_start") || [];
+  for (const handler of sessionStartHandlers) {
+    await handler({}, mockCtx);
+  }
+
+  // Set agent state to dormant (sleeping)
+  agentVisualStateStore.setState("dormant");
+  const faceKey = Symbol.for("dc.face.mini");
+  const currentFace = (globalThis as any)[faceKey];
+  assert.ok(currentFace.includes("dormido"));
+
+  // Verificaciones clave Anti-OOM:
+  // 1. requestRender DEBE ser llamado para repintar la carita en pantalla
+  assert.ok(requestRenderCount > 0, "requestRender must be called to update the face");
+  // 2. layoutRoot.invalidate NUNCA debe ser llamado (evita re-parsear Markdown del transcript)
+  assert.equal(layoutRootInvalidated, false, "layoutRoot.invalidate must NEVER be called by face animation");
+  // 3. gentle-pi sidebar cache revision DEBE ser incrementado para repintado granular del rail
+  const cache = mockTui.terminal[Symbol.for("gentle-pi.experimental-sidebar.cache")];
+  assert.ok(cache.revision > 0, "sidebar cache revision must be bumped for localized rail repaint");
+
+  // Shutdown cleans up
+  const shutdownHandlers = events.get("session_shutdown") || [];
+  for (const handler of shutdownHandlers) {
+    handler();
+  }
+});
+
+
 

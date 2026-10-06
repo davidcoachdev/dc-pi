@@ -73,7 +73,6 @@ export function createSidebarBody(tui: any): Component {
     try {
       const cache = tui?.terminal?.[Symbol.for("gentle-pi.experimental-sidebar.cache")];
       if (cache) cache.revision = (cache.revision ?? 0) + 1;
-      tui?.layoutRoot?.invalidate?.();
       tui?.requestRender?.(); 
     } catch {}
   };

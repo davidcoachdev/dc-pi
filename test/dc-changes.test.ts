@@ -46,10 +46,11 @@ test("DcChangesPanel renders two panels and handles navigation", () => {
   });
 
   const lines = panel.render(80);
-  assert.ok(lines.length > 5);
+  assert.equal(lines.length, 36); // Altura mínima de 36 filas (+12 adicionales)
   assert.ok(lines.some((l) => l.includes("src/file1.ts")));
   assert.ok(lines.some((l) => l.includes("│"))); // divider
   assert.ok(lines.some((l) => l.includes("diff for src/file1.ts")));
+  assert.ok(lines.some((l) => l.includes("╭─") && l.includes("📄"))); // Formato dc-code box con título y bordes redondeados
 
   // Down to file 2
   assert.equal(panel.handleInput("\x1b[B"), true);

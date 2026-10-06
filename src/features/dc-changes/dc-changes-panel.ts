@@ -10,6 +10,7 @@ import {
 } from "@earendil-works/pi-tui";
 import type { GitFileChange, GitWorktreeItem } from "../../integrations/dc-git/dc-git.ts";
 import { listGitWorktrees } from "../../integrations/dc-git/dc-git.ts";
+import { renderDcCodeBox } from "../dc-git-graph/core/dc-git-diff-formatter.ts";
 
 export interface DcChangesPanelOptions {
   cwd: string;
@@ -19,6 +20,7 @@ export interface DcChangesPanelOptions {
   listWorktreesFn?: (cwd: string) => GitWorktreeItem[];
   onOpenEditor?: (file: string, worktreePath?: string) => void;
   requestRender: () => void;
+  minRows?: number;
 }
 
 export class DcChangesPanel implements Component {
@@ -37,6 +39,7 @@ export class DcChangesPanel implements Component {
   private readonly listWorktreesFn: (cwd: string) => GitWorktreeItem[];
   private readonly onOpenEditor?: (file: string, worktreePath?: string) => void;
   private readonly requestRender: () => void;
+  private readonly minRows: number;
 
   constructor(options: DcChangesPanelOptions) {
     this.cwd = options.cwd;
@@ -46,6 +49,7 @@ export class DcChangesPanel implements Component {
     this.listWorktreesFn = options.listWorktreesFn ?? listGitWorktrees;
     this.onOpenEditor = options.onOpenEditor;
     this.requestRender = options.requestRender;
+    this.minRows = Math.max(12, options.minRows ?? 36);
 
     this.initWorktrees();
     this.refresh();
@@ -137,14 +141,23 @@ export class DcChangesPanel implements Component {
     if (this.files.length === 0) {
       lines.push("");
       lines.push(`  ${t.fg("success", "✔")} ${t.fg("text", "No hay cambios modificados ni untracked en este worktree.")}`);
-      lines.push("");
+      for (let i = 0; i < this.minRows - 2; i++) {
+        lines.push("");
+      }
       return lines.map((l) => truncateToWidth(l, safeW, ""));
     }
 
-    const rowsCount = Math.max(this.files.length, 12);
+    const rowsCount = Math.max(this.files.length, this.minRows);
     this.lastHeight = rowsCount;
 
-    const visibleDiff = this.currentDiff.slice(this.diffScrollOffset, this.diffScrollOffset + rowsCount);
+    const selected = this.getSelectedFile();
+    const codeBox = renderDcCodeBox({
+      title: selected?.file ?? "diff",
+      lines: this.currentDiff,
+      width: rightW,
+      maxRows: rowsCount,
+      scrollOffset: this.diffScrollOffset,
+    });
 
     const pad = (str: string, len: number) => {
       const v = visibleWidth(str);
@@ -176,20 +189,8 @@ export class DcChangesPanel implements Component {
           : t.fg("text", padded);
       }
 
-      // 2. Columna derecha: Líneas de Diff con syntax coloring
-      const diffLine = visibleDiff[i] ?? "";
-      let formattedDiff = diffLine;
-      if (diffLine.startsWith("+") && !diffLine.startsWith("+++")) {
-        formattedDiff = t.fg("success", diffLine);
-      } else if (diffLine.startsWith("-") && !diffLine.startsWith("---")) {
-        formattedDiff = t.fg("error", diffLine);
-      } else if (diffLine.startsWith("@@")) {
-        formattedDiff = t.fg("accent", diffLine);
-      } else {
-        formattedDiff = t.fg("dim", diffLine);
-      }
-
-      const rightCell = truncateToWidth(formattedDiff, rightW, "");
+      // 2. Columna derecha: Renderizada dentro de la caja de código estilizada de DC Studio (dc-code)
+      const rightCell = codeBox[i] ?? " ".repeat(rightW);
       lines.push(`${leftCell}${t.fg("dim", " │ ")}${rightCell}`);
     }
 
