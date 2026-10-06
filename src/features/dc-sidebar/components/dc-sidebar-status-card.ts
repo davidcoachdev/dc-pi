@@ -19,6 +19,9 @@ import { openPreviewDirectionMenu } from "../../dc-preview/index.ts";
 import { openQuotaViewer } from "../../dc-quota/dc-quota.ts";
 import { openTaxisViewer } from "../../dc-agents/dc-agents.ts";
 import { openEngramExplorer, openEngramEnrollModal, openProjectDashboard } from "../../dc-engram/dc-engram.ts";
+import { openSentinelViewer } from "../../dc-sentinel/views/dc-sentinel-modal.ts";
+import { SentinelDatabase } from "../../dc-sentinel/core/dc-sentinel-db.ts";
+import type { SentinelStats, SentinelNote } from "../../dc-sentinel/core/dc-sentinel-types.ts";
 import {
   getSidebarTaxiFleet,
   formatFleetSummaryText,
@@ -256,6 +259,137 @@ export function createStatusCard(reqRender: () => void): Component {
       localCollapsible,
       cloudCollapsible,
     ],
+    requestRender: reqRender,
+  });
+
+  // --- Bloque 2.5: Centinela Soberano v2.0 (Líneas de Metro, Smart Frames y Procedimientos) ---
+  const createSentinelRows = (projName: string, projCwd?: string) => {
+    let db: SentinelDatabase | null = null;
+    let stats: SentinelStats = {
+      framesCount: 0,
+      notesCount: 0,
+      proceduresCount: 0,
+      relationsCount: 0,
+      activeProjects: [],
+      dbPath: "",
+    };
+    let recentNotes: SentinelNote[] = [];
+
+    try {
+      db = new SentinelDatabase(projName, projCwd);
+      stats = db.getStats(projName);
+      recentNotes = db.listNotes({ project: projName, limit: 3 });
+      db.close();
+    } catch {
+      /* fallback limpio */
+    }
+
+    const rows: DcJustifiedRow[] = [
+      new DcJustifiedRow(
+        `     ${bloodSoft("Motor:")} ${bloodBright("node:sqlite")}`,
+        `${dim("WAL · soberano")} `
+      ),
+      new DcJustifiedRow(
+        `     ${bloodSoft("Memoria:")}`,
+        `${bloodWhite(`${stats.notesCount} notas`)} ${dim("·")} ${bloodSoft(`${stats.framesCount} frames`)} `,
+        () => {
+          const ctx = getSidebarContext();
+          if (ctx) void openSentinelViewer(ctx, "metro");
+        }
+      ),
+    ];
+
+    if (recentNotes.length === 0) {
+      rows.push(
+        new DcJustifiedRow(
+          `     ${dim("•")} ${dim("(sin notas guardadas)")}`,
+          `${dim("[abrir ↗]")} `,
+          () => {
+            const ctx = getSidebarContext();
+            if (ctx) void openSentinelViewer(ctx, "metro");
+          }
+        )
+      );
+    } else {
+      for (const n of recentNotes.slice(0, 2)) {
+        const glyph = n.glyph || "•";
+        const tShort = n.title.length > 18 ? n.title.slice(0, 17) + "…" : n.title;
+        rows.push(
+          new DcJustifiedRow(
+            `     ${glyph} ${bloodWhite(tShort)}`,
+            `${dim(`[${n.type}]`)} `,
+            () => {
+              const ctx = getSidebarContext();
+              if (ctx) void openSentinelViewer(ctx, "metro");
+            }
+          )
+        );
+      }
+    }
+
+    if (stats.proceduresCount > 0) {
+      rows.push(
+        new DcJustifiedRow(
+          `     ${bloodSoft("Recetas:")} ${bloodWhite(`${stats.proceduresCount} auto-skills`)}`,
+          `${bloodBright("[ver ↗]")} `,
+          () => {
+            const ctx = getSidebarContext();
+            if (ctx) void openSentinelViewer(ctx, "procedures");
+          }
+        )
+      );
+    }
+
+    rows.push(
+      new DcJustifiedRow(
+        `    🚇 ${dim("Líneas de Metro")}`,
+        `${bloodBright("[Alt+Shift+S ↗]")} `,
+        () => {
+          const ctx = getSidebarContext();
+          if (ctx) void openSentinelViewer(ctx, "metro");
+        }
+      ),
+      new DcJustifiedRow(
+        `    📜 ${dim("Registro de Vuelo")}`,
+        `${bloodBright("[turno ↗]")} `,
+        () => {
+          const ctx = getSidebarContext();
+          if (ctx) void openSentinelViewer(ctx, "session");
+        }
+      )
+    );
+
+    return { rows, stats };
+  };
+
+  class LiveSentinelCollapsible extends DcCollapsible {
+    render(width: number) {
+      const liveCwd = getProjectInfo().cwd;
+      const liveProject = path.basename(liveCwd) || "default";
+      const freshData = createSentinelRows(liveProject, liveCwd);
+
+      (this as any).childrenStack.children = freshData.rows;
+      this.options.titleRight = (expanded) =>
+        expanded ? dim("[↗]") : bloodSoft(`${freshData.stats.notesCount} notas · ${freshData.stats.framesCount} frames`);
+      this.options.collapsedInfo = `${bloodWhite(bold(liveProject))} ${bloodBright(`✓ ${freshData.stats.notesCount} notas`)}`;
+
+      return super.render(width);
+    }
+  }
+
+  const initialSentinelData = createSentinelRows(currentProjectName, proj.cwd);
+
+  const sentinelCollapsible = new LiveSentinelCollapsible({
+    title: `⛩️ ${bloodBright(bold("Centinela:"))}`,
+    collapsedInfo: `${bloodWhite(bold(currentProjectName))} ${bloodBright(`✓ ${initialSentinelData.stats.notesCount} notas`)}`,
+    titleRight: (expanded) =>
+      expanded ? dim("[↗]") : bloodSoft(`${initialSentinelData.stats.notesCount} notas · ${initialSentinelData.stats.framesCount} frames`),
+    onTitleRightClick: () => {
+      const ctx = getSidebarContext();
+      if (ctx) void openSentinelViewer(ctx, "metro");
+    },
+    expanded: true,
+    children: initialSentinelData.rows,
     requestRender: reqRender,
   });
 
@@ -621,6 +755,8 @@ export function createStatusCard(reqRender: () => void): Component {
     ...projectRows,
     new DcText("─"),
     engramCollapsible,
+    new DcText("─"),
+    sentinelCollapsible,
     new DcText("─"),
     quotaCollapsible,
     new DcText("─"),

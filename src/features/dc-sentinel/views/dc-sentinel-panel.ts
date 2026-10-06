@@ -1,3 +1,4 @@
+import * as path from "node:path";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import {
   Key,
@@ -12,15 +13,24 @@ import {
 import { DcSearchInput } from "../../../ui/dc-search-input.ts";
 import { justifyRow } from "../../../ui/dc-row.ts";
 import { dcClipboard } from "../../../integrations/dc-clipboard/dc-clipboard.ts";
-import type { SentinelTurnRecord, SentinelSubagentLaunch, SentinelToolExecution } from "../core/dc-sentinel-types.ts";
+import type {
+  SentinelTurnRecord,
+  SentinelSubagentLaunch,
+  SentinelToolExecution,
+  SentinelNote,
+  SentinelProcedure,
+  SentinelNoteType,
+} from "../core/dc-sentinel-types.ts";
+import { SENTINEL_TYPE_GLYPHS } from "../core/dc-sentinel-types.ts";
 import {
   type SentinelRecorder,
   globalSentinelRecorder,
   listChronicleFiles,
   type ChronicleFileItem,
 } from "../core/dc-sentinel-recorder.ts";
+import { SentinelDatabase } from "../core/dc-sentinel-db.ts";
 
-export type SentinelViewMode = "session" | "chronicle";
+export type SentinelViewMode = "metro" | "session" | "chronicle" | "procedures";
 
 /**
  * Crea un tema seguro para el componente Markdown de pi-tui
@@ -63,20 +73,26 @@ export interface SentinelPanelOptions {
   requestRender: () => void;
   recorder?: SentinelRecorder;
   projectRoot?: string;
+  projectName?: string;
   maxRows?: number | (() => number);
   initialMode?: SentinelViewMode;
+  db?: SentinelDatabase;
 }
 
 export class SentinelPanel implements Component {
   private theme: Pick<Theme, "fg" | "bg" | "bold">;
   private recorder: SentinelRecorder;
   private projectRoot: string;
+  private projectName: string;
   private requestRender: () => void;
   private maxRowsOption?: number | (() => number);
+  private db: SentinelDatabase;
 
-  private mode: SentinelViewMode = "session";
+  private mode: SentinelViewMode = "metro";
   private turns: SentinelTurnRecord[] = [];
   private chronicleFiles: ChronicleFileItem[] = [];
+  private notes: SentinelNote[] = [];
+  private procedures: SentinelProcedure[] = [];
 
   private selectedIndex = 0;
   private listScrollOffset = 0;
@@ -92,11 +108,13 @@ export class SentinelPanel implements Component {
     this.requestRender = options.requestRender;
     this.recorder = options.recorder || globalSentinelRecorder;
     this.projectRoot = options.projectRoot || process.cwd();
+    this.projectName = options.projectName || path.basename(this.projectRoot) || "default";
     this.maxRowsOption = options.maxRows;
     this.mode = options.initialMode || "session";
+    this.db = options.db || new SentinelDatabase(this.projectName, this.projectRoot);
 
     this.searchInput = new DcSearchInput({
-      placeholder: "Buscar (#tag, prompt, subagente)...",
+      placeholder: "Buscar (#tag, decisión, error, proc)...",
       width: 32,
       theme: {
         fg: (c, text) => this.theme.fg(c as any, text),
@@ -109,8 +127,15 @@ export class SentinelPanel implements Component {
   }
 
   reload(): void {
-    this.turns = [...this.recorder.getTurns()].reverse(); // Más recientes primero
+    this.turns = [...this.recorder.getTurns()].reverse();
     this.chronicleFiles = listChronicleFiles(this.projectRoot);
+    try {
+      this.notes = this.db.listNotes({ project: this.projectName });
+      this.procedures = this.db.listProcedures(this.projectName);
+    } catch {
+      this.notes = [];
+      this.procedures = [];
+    }
   }
 
   invalidate(): void {
@@ -143,8 +168,23 @@ export class SentinelPanel implements Component {
     this.requestRender();
   }
 
-  public getFilteredItems(): Array<{ id: string; label: string; raw: any }> {
+  public getFilteredItems(): Array<{ id: string | number; label: string; raw: any }> {
     const query = this.searchInput.getQuery().trim().toLowerCase();
+
+    if (this.mode === "metro") {
+      return this.notes
+        .filter((n) => {
+          if (!query) return true;
+          return (
+            n.title.toLowerCase().includes(query) ||
+            n.content.toLowerCase().includes(query) ||
+            (n.topicKey && n.topicKey.toLowerCase().includes(query)) ||
+            (n.concepts && n.concepts.some((c) => c.toLowerCase().includes(query))) ||
+            n.type.toLowerCase().includes(query)
+          );
+        })
+        .map((n) => ({ id: n.id ?? n.title, label: n.title, raw: n }));
+    }
 
     if (this.mode === "session") {
       return this.turns
@@ -153,7 +193,10 @@ export class SentinelPanel implements Component {
           return (
             t.userPrompt.toLowerCase().includes(query) ||
             t.turnId.toLowerCase().includes(query) ||
-            t.subagentsLaunched.some((s: SentinelSubagentLaunch) => s.agent.toLowerCase().includes(query) || s.task.toLowerCase().includes(query)) ||
+            t.subagentsLaunched.some(
+              (s: SentinelSubagentLaunch) =>
+                s.agent.toLowerCase().includes(query) || s.task.toLowerCase().includes(query),
+            ) ||
             (t.recalledTitles && t.recalledTitles.some((r: string) => r.toLowerCase().includes(query))) ||
             t.errorsDetected.some((e: string) => e.toLowerCase().includes(query))
           );
@@ -161,13 +204,24 @@ export class SentinelPanel implements Component {
         .map((t) => ({ id: t.turnId, label: t.userPrompt, raw: t }));
     }
 
+    if (this.mode === "procedures") {
+      return this.procedures
+        .filter((p) => {
+          if (!query) return true;
+          return (
+            p.title.toLowerCase().includes(query) ||
+            p.name.toLowerCase().includes(query) ||
+            p.symptoms.toLowerCase().includes(query) ||
+            p.steps.some((st) => st.toLowerCase().includes(query))
+          );
+        })
+        .map((p) => ({ id: p.id ?? p.name, label: p.title, raw: p }));
+    }
+
     return this.chronicleFiles
       .filter((f) => {
         if (!query) return true;
-        return (
-          f.name.toLowerCase().includes(query) ||
-          f.content.toLowerCase().includes(query)
-        );
+        return f.name.toLowerCase().includes(query) || f.content.toLowerCase().includes(query);
       })
       .map((f) => ({ id: f.name, label: f.name, raw: f }));
   }
@@ -198,9 +252,23 @@ export class SentinelPanel implements Component {
     const current = items[this.selectedIndex];
     if (!current) return;
 
+    if (this.mode === "metro") {
+      const note = current.raw as SentinelNote;
+      const text = `# ${note.glyph} [${note.type.toUpperCase()}] ${note.title}\n\n${note.content}\n\nTopic: ${note.topicKey || "none"}`;
+      void dcClipboard.copy(text);
+      return;
+    }
+
     if (this.mode === "session") {
       const turn = current.raw as SentinelTurnRecord;
       void dcClipboard.copy(this.recorder.formatTurnMarkdown(turn));
+      return;
+    }
+
+    if (this.mode === "procedures") {
+      const p = current.raw as SentinelProcedure;
+      const text = `# ⚒ Procedimiento: ${p.title}\n\nSíntomas: ${p.symptoms}\n\nPasos:\n${p.steps.map((s, i) => `${i + 1}. ${s}`).join("\n")}`;
+      void dcClipboard.copy(text);
       return;
     }
 
@@ -212,8 +280,8 @@ export class SentinelPanel implements Component {
     const t = this.theme;
     const safeW = Math.max(50, width);
 
-    // 1/3 (36%) izquierda para índice, 2/3 (64%) derecha para detalle
-    const leftW = Math.max(28, Math.min(44, Math.floor(safeW * 0.36)));
+    // 1/3 (38%) izquierda para índice, 2/3 (62%) derecha para detalle
+    const leftW = Math.max(32, Math.min(52, Math.floor(safeW * 0.40)));
     this.lastLeftW = leftW;
     const rightW = Math.max(20, safeW - leftW - 3);
 
@@ -223,28 +291,44 @@ export class SentinelPanel implements Component {
     };
 
     const filtered = this.getFilteredItems();
-    const total = this.mode === "session" ? this.turns.length : this.chronicleFiles.length;
 
     if (this.selectedIndex >= filtered.length) {
       this.selectedIndex = Math.max(0, filtered.length - 1);
     }
 
-    // Cabecera Fila 0: Tabs [1] Sesión | [2] Bitácora en disco
-    const sessionTab = this.mode === "session"
-      ? t.bold(t.fg("accent", `[1] Sesión Activa (${this.turns.length})`))
-      : t.fg("dim", `[1] Sesión (${this.turns.length})`);
+    // Cabecera Fila 0: Tabs compactos dinámicos
+    const sessionTab =
+      this.mode === "session"
+        ? t.bold(t.fg("accent", `[1] Sesión Activa`))
+        : t.fg("dim", `[1]`);
 
-    const chronicleTab = this.mode === "chronicle"
-      ? t.bold(t.fg("accent", `[2] Bitácora Disco (${this.chronicleFiles.length})`))
-      : t.fg("dim", `[2] Disco (${this.chronicleFiles.length})`);
+    const chronicleTab =
+      this.mode === "chronicle"
+        ? t.bold(t.fg("accent", `[2] Disco`))
+        : t.fg("dim", `[2]`);
 
-    const headerLeft = ` ⛩️ ${sessionTab} ${t.fg("dim", "·")} ${chronicleTab}`;
+    const metroTab =
+      this.mode === "metro"
+        ? t.bold(t.fg("accent", `[3] Metro`))
+        : t.fg("dim", `[3]`);
 
-    const titleText = this.mode === "session"
-      ? ` 📜 ${t.bold(t.fg("accent", "Registro de Vuelo (Turno)"))}`
-      : ` 📁 ${t.bold(t.fg("accent", "Bitácora Markdown"))}`;
+    const procTab =
+      this.mode === "procedures"
+        ? t.bold(t.fg("accent", `[4] Recetas`))
+        : t.fg("dim", `[4]`);
 
-    const searchWidth = Math.min(36, Math.max(16, rightW - visibleWidth(" 📜 Registro de Vuelo") - 4));
+    const headerLeft = ` ⛩️ ${sessionTab} ${chronicleTab} ${metroTab} ${procTab}`;
+
+    const titleText =
+      this.mode === "metro"
+        ? ` 🚇 ${t.bold(t.fg("accent", "Líneas de Conocimiento & Transbordos"))}`
+        : this.mode === "session"
+          ? ` 📜 ${t.bold(t.fg("accent", "Registro de Vuelo (Turno)"))}`
+          : this.mode === "procedures"
+            ? ` ⚒️ ${t.bold(t.fg("accent", "Runbooks Ejecutables (Auto-Skills)"))}`
+            : ` 📁 ${t.bold(t.fg("accent", "Bitácora Markdown"))}`;
+
+    const searchWidth = Math.min(36, Math.max(16, rightW - visibleWidth(" 🚇 Líneas") - 4));
     const searchRender = this.searchInput.render(searchWidth);
     const headerRight = justifyRow(titleText, searchRender + " ", rightW);
 
@@ -254,12 +338,8 @@ export class SentinelPanel implements Component {
 
     // Si no hay datos en general o tras el filtro
     if (filtered.length === 0) {
-      const emptyMsg = total === 0
-        ? `  ${t.fg("dim", "(sin turnos registrados en esta sesión)")}`
-        : `  ${t.fg("warning", "(sin coincidencias de búsqueda)")}`;
-      const emptyDetail = total === 0
-        ? `  ${t.fg("dim", "El Centinela registra automáticamente al asentarse cada turno.")}`
-        : `  ${t.fg("dim", "Probá con otro término o presioná Esc para limpiar el filtro.")}`;
+      const emptyMsg = `  ${t.fg("dim", "(sin registros que coincidan)")}`;
+      const emptyDetail = `  ${t.fg("dim", "Probá con otro término o presioná Esc para limpiar el filtro.")}`;
 
       lines.push(`${pad(emptyMsg, leftW)} ${t.fg("border", "│")} ${pad(emptyDetail, rightW)}`);
       for (let i = 0; i < 10; i++) {
@@ -275,13 +355,104 @@ export class SentinelPanel implements Component {
     // 1. Preparar detalle derecho
     const current = filtered[this.selectedIndex] || filtered[0]!;
     const rightContent: string[] = [];
+    const mdTheme = createSafeMarkdownTheme(t);
 
-    if (this.mode === "session") {
-      const turn = current.raw as SentinelTurnRecord;
-      rightContent.push(` 📌 ${t.bold(t.fg("accent", turn.turnId))}  ${t.fg("dim", "·")}  📅 ${t.fg("dim", turn.timestamp.slice(11, 19))}`);
+    if (this.mode === "metro") {
+      const note = current.raw as SentinelNote;
+      const pinnedBadge = note.pinned ? ` ${t.fg("warning", "📌 FIJADA")}` : "";
+      const scopeBadge = note.scope === "global" ? ` ${t.fg("success", "🌐 GLOBAL")}` : "";
+
+      rightContent.push(
+        ` ${note.glyph} ${t.bold(t.fg("accent", note.title))}  ${t.fg("dim", `[${note.type.toUpperCase()}]`)}${pinnedBadge}${scopeBadge}`,
+      );
+      rightContent.push(
+        ` 📅 ${t.fg("dim", note.createdAt?.slice(0, 16) || "reciente")}  ${t.fg("dim", "·")}  🔄 Rev #${note.revisionCount ?? 1}  ${t.fg("dim", "·")}  👥 Visto ${note.duplicateCount ?? 1}x`,
+      );
       rightContent.push(t.fg("border", "─".repeat(Math.max(1, rightW - 2))));
+      rightContent.push("");
 
-      const mdTheme = createSafeMarkdownTheme(t);
+      // Memory Chips activos
+      rightContent.push(` 🧠 ${t.bold(t.fg("text", "Memory Chips & Señales:"))}`);
+      const chips = [
+        `[${note.glyph} ${note.type}]`,
+        note.topicKey ? `[topic: ${note.topicKey}]` : null,
+        note.proofCount && note.proofCount > 1 ? `[pruebas: ${note.proofCount}]` : null,
+        note.concepts?.map((c) => `[#${c}]`).join(" "),
+      ]
+        .filter(Boolean)
+        .join(" ");
+      rightContent.push(`   ${t.fg("accent", chips)}`);
+      rightContent.push("");
+
+      // Contenido atómico
+      rightContent.push(` 📌 ${t.bold(t.fg("text", "Hecho Atómico Autocontenido:"))}`);
+      const contentMd = new Markdown(note.content, 0, 0, mdTheme).render(Math.max(20, rightW - 4));
+      for (const cl of contentMd) {
+        rightContent.push(`   ${cl}`);
+      }
+      rightContent.push("");
+
+      // Blast Radius si existe
+      if (note.blastRadius) {
+        rightContent.push(
+          ` 💥 ${t.bold(t.fg("warning", `Blast Radius AST (${note.blastRadius.risk.toUpperCase()}):`))}`,
+        );
+        rightContent.push(
+          `   • Archivos: ${note.blastRadius.filesCount}  ·  Llamadas: ${note.blastRadius.callCount}`,
+        );
+        if (note.blastRadius.summary) {
+          rightContent.push(`   • ${note.blastRadius.summary}`);
+        }
+        rightContent.push("");
+      }
+
+      // Archivos tocados
+      if (note.filesAffected && note.filesAffected.length > 0) {
+        rightContent.push(` 📁 ${t.bold(t.fg("dim", "Superficies Afectadas:"))}`);
+        for (const f of note.filesAffected) {
+          rightContent.push(`    - \`${f}\``);
+        }
+        rightContent.push("");
+      }
+
+      // Atajos de acción
+      rightContent.push(
+        t.fg(
+          "dim",
+          " [d] Olvidar/Descartar  ·  [p] Fijar/Desfijar  ·  [g] Graduar a Global  ·  [c] Copiar",
+        ),
+      );
+    } else if (this.mode === "procedures") {
+      const proc = current.raw as SentinelProcedure;
+      rightContent.push(` ⚒️ ${t.bold(t.fg("accent", proc.title))}  ${t.fg("dim", `[${proc.name}]`)}`);
+      rightContent.push(
+        ` 🎯 Patrón: \`${proc.triggerPattern}\`  ·  Éxito: ${(proc.successRate ? proc.successRate * 100 : 100).toFixed(0)}%`,
+      );
+      rightContent.push(t.fg("border", "─".repeat(Math.max(1, rightW - 2))));
+      rightContent.push("");
+
+      if (proc.symptoms) {
+        rightContent.push(` ⚠️ ${t.bold(t.fg("warning", "Síntomas y Error:"))}`);
+        rightContent.push(`   ${proc.symptoms}`);
+        rightContent.push("");
+      }
+
+      rightContent.push(` 📋 ${t.bold(t.fg("text", "Pasos de Ejecución Deterministas:"))}`);
+      proc.steps.forEach((step, idx) => {
+        rightContent.push(`   ${idx + 1}. ${step}`);
+      });
+      rightContent.push("");
+
+      if (proc.verificationCmd) {
+        rightContent.push(` 🧪 ${t.bold(t.fg("success", "Comando de Verificación:"))}`);
+        rightContent.push(`   \`${proc.verificationCmd}\``);
+      }
+    } else if (this.mode === "session") {
+      const turn = current.raw as SentinelTurnRecord;
+      rightContent.push(
+        ` 📌 ${t.bold(t.fg("accent", turn.turnId))}  ${t.fg("dim", "·")}  📅 ${t.fg("dim", turn.timestamp.slice(11, 19))}`,
+      );
+      rightContent.push(t.fg("border", "─".repeat(Math.max(1, rightW - 2))));
 
       rightContent.push(` 💬 ${t.bold(t.fg("text", "Prompt:"))}`);
       const promptMd = new Markdown(turn.userPrompt, 0, 0, mdTheme).render(Math.max(20, rightW - 4));
@@ -291,7 +462,7 @@ export class SentinelPanel implements Component {
       rightContent.push("");
 
       if (turn.recallInjected && turn.recalledTitles && turn.recalledTitles.length > 0) {
-        rightContent.push(` 🧠 ${t.bold(t.fg("accent", "Pre-Flight Recall Activo (Engram):"))}`);
+        rightContent.push(` 🧠 ${t.bold(t.fg("accent", "Pre-Flight Recall Activo:"))}`);
         for (const r of turn.recalledTitles) {
           rightContent.push(`    • ${t.fg("accent", r)}`);
         }
@@ -304,13 +475,6 @@ export class SentinelPanel implements Component {
           const duration = s.endedAt ? `${((s.endedAt - s.startedAt) / 1000).toFixed(1)}s` : "activo";
           const status = s.isError ? t.fg("error", "❌ FALLÓ") : t.fg("success", "✅ OK");
           rightContent.push(`    • ${t.bold(s.agent)} (${s.mode || "task"} · ${duration}): ${status}`);
-          if (s.task) {
-            const taskSnippet = s.task.length > 200 ? `${s.task.slice(0, 197)}...` : s.task;
-            rightContent.push(`      ${t.fg("dim", "Tarea:")} ${taskSnippet.replace(/\n+/g, " ")}`);
-          }
-          if (s.resultSnippet) {
-            rightContent.push(`      ${t.fg("dim", "Resultado:")} ${s.resultSnippet}`);
-          }
         }
         rightContent.push("");
       }
@@ -344,11 +508,12 @@ export class SentinelPanel implements Component {
       }
     } else {
       const file = current.raw as ChronicleFileItem;
-      rightContent.push(` 📄 ${t.bold(t.fg("accent", file.name))}  ${t.fg("dim", "·")}  💾 ${(file.sizeBytes / 1024).toFixed(1)} KB  ${t.fg("dim", "·")}  📅 ${file.updatedAt}`);
+      rightContent.push(
+        ` 📄 ${t.bold(t.fg("accent", file.name))}  ${t.fg("dim", "·")}  💾 ${(file.sizeBytes / 1024).toFixed(1)} KB  ${t.fg("dim", "·")}  📅 ${file.updatedAt}`,
+      );
       rightContent.push(t.fg("border", "─".repeat(Math.max(1, rightW - 2))));
       rightContent.push("");
 
-      const mdTheme = createSafeMarkdownTheme(t);
       const md = new Markdown(file.content, 0, 0, mdTheme);
       const renderedLines = md.render(Math.max(20, rightW - 2));
       for (const line of renderedLines) {
@@ -358,25 +523,36 @@ export class SentinelPanel implements Component {
 
     // Scroll vertical del detalle derecho
     const maxDetailScroll = Math.max(0, rightContent.length - availableRows);
-    this.detailScrollOffset = Math.max(0, Math.min(this.detailScrollOffset, maxDetailScroll));
+    if (this.detailScrollOffset > maxDetailScroll) {
+      this.detailScrollOffset = maxDetailScroll;
+    }
     const visibleDetail = rightContent.slice(this.detailScrollOffset, this.detailScrollOffset + availableRows);
 
-    // 2. Columna izquierda con scroll vertical (Sliding Window)
+    // 2. Renderizar filas izquierda y derecha
     const maxListScroll = Math.max(0, filtered.length - availableRows);
-    this.listScrollOffset = Math.max(0, Math.min(this.listScrollOffset, maxListScroll));
-    const visibleItems = filtered.slice(this.listScrollOffset, this.listScrollOffset + availableRows);
+    if (this.listScrollOffset > maxListScroll) {
+      this.listScrollOffset = maxListScroll;
+    }
 
     for (let r = 0; r < availableRows; r++) {
+      const itemIdx = this.listScrollOffset + r;
       let leftRow = " ".repeat(leftW);
-      if (r < visibleItems.length) {
-        const absIndex = this.listScrollOffset + r;
-        const item = visibleItems[r]!;
-        const isSelected = absIndex === this.selectedIndex;
+
+      if (itemIdx < filtered.length) {
+        const item = filtered[itemIdx]!;
+        const isSelected = itemIdx === this.selectedIndex;
 
         let rowText = "";
-        if (this.mode === "session") {
+        if (this.mode === "metro") {
+          const note = item.raw as SentinelNote;
+          const pinGlyph = note.pinned ? "📌" : "";
+          rowText = ` ${pinGlyph}${note.glyph} ${note.title}`;
+        } else if (this.mode === "procedures") {
+          const p = item.raw as SentinelProcedure;
+          rowText = ` ⚒️ ${p.title}`;
+        } else if (this.mode === "session") {
           const turn = item.raw as SentinelTurnRecord;
-          const turnNum = this.turns.length - absIndex;
+          const turnNum = this.turns.length - itemIdx;
           const time = turn.timestamp.slice(11, 16);
           const pClean = turn.userPrompt.replace(/\s+/g, " ");
 
@@ -404,7 +580,7 @@ export class SentinelPanel implements Component {
           } else {
             const trackH = availableRows - 2;
             const thumbPos = Math.round((this.listScrollOffset / maxListScroll) * (trackH - 1));
-            scrollbarChar = (r - 1) === thumbPos ? t.fg("accent", "█") : t.fg("dim", "░");
+            scrollbarChar = r - 1 === thumbPos ? t.fg("accent", "█") : t.fg("dim", "░");
           }
         }
 
@@ -414,9 +590,8 @@ export class SentinelPanel implements Component {
           : t.fg("text", fullLeft);
       }
 
-      const rightRow = visibleDetail[r] !== undefined
-        ? pad(visibleDetail[r]!, rightW)
-        : " ".repeat(rightW);
+      const rightRow =
+        visibleDetail[r] !== undefined ? pad(visibleDetail[r]!, rightW) : " ".repeat(rightW);
 
       lines.push(`${leftRow} ${t.fg("border", "│")} ${rightRow}`);
     }
@@ -427,33 +602,86 @@ export class SentinelPanel implements Component {
   handleInput(data: string): boolean {
     const filtered = this.getFilteredItems();
 
-    // Tab: Alternar modo sesión / crónica
+    // Tab: Alternar modos principales
     if (matchesKey(data, Key.tab)) {
-      this.setMode(this.mode === "session" ? "chronicle" : "session");
+      if (this.mode === "session") {
+        this.setMode("chronicle");
+      } else if (this.mode === "chronicle") {
+        this.setMode("session");
+      } else if (this.mode === "metro") {
+        this.setMode("procedures");
+      } else {
+        this.setMode("metro");
+      }
       return true;
     }
 
-    // Tecla 1 o 2 para cambiar de pestaña directamente (cuando no se está tipeando en búsqueda)
-    if (this.searchInput.isEmpty() && data === "1") {
-      this.setMode("session");
-      return true;
-    }
-    if (this.searchInput.isEmpty() && data === "2") {
-      this.setMode("chronicle");
-      return true;
-    }
+    // Teclas 1 a 4 para cambiar de pestaña directamente
+    if (this.searchInput.isEmpty()) {
+      if (data === "1") {
+        this.setMode("session");
+        return true;
+      }
+      if (data === "2") {
+        this.setMode("chronicle");
+        return true;
+      }
+      if (data === "3") {
+        this.setMode("metro");
+        return true;
+      }
+      if (data === "4") {
+        this.setMode("procedures");
+        return true;
+      }
 
-    // Tecla 'c' para copiar el detalle
-    if (this.searchInput.isEmpty() && (data === "c" || data === "C")) {
-      this.copyCurrentDetail();
-      return true;
-    }
+      // Tecla 'd' para olvidar/descartar la nota actual (OpenHuman Pattern)
+      if (this.mode === "metro" && (data === "d" || data === "D")) {
+        const current = filtered[this.selectedIndex];
+        if (current && current.raw?.id) {
+          this.db.softDeleteNote(current.raw.id);
+          this.reload();
+          this.requestRender();
+          return true;
+        }
+      }
 
-    // Tecla 'r' para refrescar datos
-    if (this.searchInput.isEmpty() && (data === "r" || data === "R")) {
-      this.reload();
-      this.requestRender();
-      return true;
+      // Tecla 'p' para fijar/desfijar nota (Pin)
+      if (this.mode === "metro" && (data === "p" || data === "P")) {
+        const current = filtered[this.selectedIndex];
+        if (current && current.raw?.id) {
+          const note = current.raw as SentinelNote;
+          this.db.pinNote(note.id!, !note.pinned);
+          this.reload();
+          this.requestRender();
+          return true;
+        }
+      }
+
+      // Tecla 'g' para graduar nota a Global (Hub Tecnológico)
+      if (this.mode === "metro" && (data === "g" || data === "G")) {
+        const current = filtered[this.selectedIndex];
+        if (current && current.raw?.id) {
+          const note = current.raw as SentinelNote;
+          this.db.saveNote({ ...note, scope: "global" });
+          this.reload();
+          this.requestRender();
+          return true;
+        }
+      }
+
+      // Tecla 'c' para copiar
+      if (data === "c" || data === "C") {
+        this.copyCurrentDetail();
+        return true;
+      }
+
+      // Tecla 'r' para refrescar
+      if (data === "r" || data === "R") {
+        this.reload();
+        this.requestRender();
+        return true;
+      }
     }
 
     // Navegación con flechas
@@ -497,7 +725,7 @@ export class SentinelPanel implements Component {
     }
 
     // Home / End
-    if (matchesKey(data, Key.home)) {
+    if (matchesKey(data, Key.home) || data === "\x1b[H") {
       if (filtered.length > 0) {
         this.selectedIndex = 0;
         this.listScrollOffset = 0;
@@ -506,7 +734,7 @@ export class SentinelPanel implements Component {
       }
       return true;
     }
-    if (matchesKey(data, Key.end)) {
+    if (matchesKey(data, Key.end) || data === "\x1b[F") {
       if (filtered.length > 0) {
         this.selectedIndex = filtered.length - 1;
         this.adjustListScroll();
@@ -516,7 +744,7 @@ export class SentinelPanel implements Component {
       return true;
     }
 
-    // Ctrl+Up / Ctrl+Down o j / k para scroll en panel derecho
+    // Ctrl+Up / Ctrl+Down para scroll de detalle
     const isScrollDown =
       matchesKey(data, "ctrl+down") ||
       matchesKey(data, Key.ctrl("down")) ||
@@ -556,7 +784,7 @@ export class SentinelPanel implements Component {
       return false;
     }
 
-    // Backspace en búsqueda
+    // Backspace
     if (matchesKey(data, Key.backspace)) {
       if (this.searchInput.backspace()) {
         this.selectedIndex = 0;
@@ -568,7 +796,7 @@ export class SentinelPanel implements Component {
       return true;
     }
 
-    // Caracteres imprimibles para búsqueda
+    // Caracteres para búsqueda
     if (data.length === 1 && data >= " " && data <= "~") {
       this.searchInput.append(data);
       this.selectedIndex = 0;
@@ -584,7 +812,6 @@ export class SentinelPanel implements Component {
   handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
     const filtered = this.getFilteredItems();
 
-    // Rueda del mouse
     if (event.type === "wheel") {
       const delta = (event as any).wheelDelta ?? ((event as any).deltaY > 0 ? 1 : -1);
       if (event.x !== undefined && event.x < this.lastLeftW && filtered.length > 0) {
@@ -608,18 +835,17 @@ export class SentinelPanel implements Component {
       return undefined;
     }
 
-    // Clic en la cabecera para alternar tabs
+    // Clic en la cabecera (y === 0) para alternar tab
     if (event.y === 0 && event.x !== undefined && event.x < this.lastLeftW) {
       this.setMode(this.mode === "session" ? "chronicle" : "session");
       return { handled: true };
     }
 
-    // Clic en la lista izquierda
     if (event.x !== undefined && event.x < this.lastLeftW && event.y !== undefined && event.y >= this.headerRows) {
       const clickedRow = event.y - this.headerRows;
-      const clickedIndex = this.listScrollOffset + clickedRow;
-      if (clickedIndex >= 0 && clickedIndex < filtered.length) {
-        this.selectedIndex = clickedIndex;
+      const targetIndex = this.listScrollOffset + clickedRow;
+      if (targetIndex >= 0 && targetIndex < filtered.length) {
+        this.selectedIndex = targetIndex;
         this.detailScrollOffset = 0;
         this.requestRender();
         return { handled: true };
