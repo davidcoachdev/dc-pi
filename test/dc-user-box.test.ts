@@ -70,6 +70,30 @@ test("installUserBoxPatch wraps UserMessageComponent.prototype.render", () => {
   setUserBoxVerticalPadding(false);
 });
 
+test("installUserBoxPatch trims extraneous empty Box padding from native Pi", () => {
+  const mockInstance: any = Object.create(UserMessageComponent.prototype);
+  mockInstance.message = {
+    role: "user",
+    content: "Clean prompt without extra pad.",
+  };
+  // Simular las líneas vacías que inyecta el Box nativo de Pi en los extremos
+  mockInstance[Symbol.for("dc.user-message.orig-render")] = () => [
+    "\x1b[48;2;26;26;26m          \x1b[49m",
+    "Clean prompt without extra pad.",
+    "\x1b[48;2;26;26;26m          \x1b[49m",
+  ];
+
+  setUserBoxEnabled(true);
+  setUserBoxVerticalPadding(false);
+
+  const lines = mockInstance.render(60);
+  // Debe contener exactamente 3 filas: topBorder, la línea de contenido y bottomBorder
+  assert.equal(lines.length, 3);
+  assert.ok(lines[0].includes("╭") && lines[0].includes("⛩"));
+  assert.ok(lines[1].includes("Clean prompt without extra pad."));
+  assert.ok(lines[2].includes("╰") && lines[2].includes("📋"));
+});
+
 test("dcUserBoxExtension registers only single command /dc-user-box", async () => {
   const commands = new Map<string, { description?: string; handler: Function }>();
 

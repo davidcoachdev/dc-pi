@@ -62,7 +62,7 @@ export function installUserBoxPatch(): boolean {
       return orig.call(this, width);
     }
 
-    const marginW = width > 40 ? 2 : (width > 20 ? 1 : 0);
+    const marginW = width > 40 ? 1 : 0;
     const cardW = Math.max(8, width - marginW * 2);
     const innerW = Math.max(4, cardW - 4);
     const leftMargin = " ".repeat(marginW);
@@ -120,7 +120,22 @@ export function installUserBoxPatch(): boolean {
     let hasOsc133Start = false;
     let hasOsc133End = false;
 
-    for (let line of rawLines) {
+    // Limpiar líneas de padding vacías producidas por el Box nativo de Pi
+    let start = 0;
+    while (start < rawLines.length) {
+      const stripped = rawLines[start]!.replace(/\x1b\[[0-9;]*m/g, "").trim();
+      if (stripped.length > 0) break;
+      start++;
+    }
+    let end = rawLines.length - 1;
+    while (end >= start) {
+      const stripped = rawLines[end]!.replace(/\x1b\[[0-9;]*m/g, "").trim();
+      if (stripped.length > 0) break;
+      end--;
+    }
+    const cleanLines = start <= end ? rawLines.slice(start, end + 1) : (rawLines.length > 0 ? [rawLines[0]!] : [""]);
+
+    for (let line of cleanLines) {
       if (line.includes(OSC133_ZONE_START)) {
         hasOsc133Start = true;
         line = line.replace(OSC133_ZONE_START, "");
@@ -150,15 +165,15 @@ export function installUserBoxPatch(): boolean {
     }
 
     (this as any)[LAST_COPY_REGION] = {
-      y: 1 + processedBody.length,
+      y: processedBody.length + 1,
       startX: marginW + cardW - 1 - bottomBorderRightDashes - copyBadgeLen,
       endX: marginW + cardW,
     };
 
-    const out: string[] = ["", topRow, ...processedBody, bottomRow];
+    const out: string[] = [topRow, ...processedBody, bottomRow];
 
-    if (hasOsc133Start && out[1]) {
-      out[1] = OSC133_ZONE_START + out[1];
+    if (hasOsc133Start && out[0]) {
+      out[0] = OSC133_ZONE_START + out[0];
     }
     if (hasOsc133End && out[out.length - 1]) {
       out[out.length - 1] = out[out.length - 1] + OSC133_ZONE_END;

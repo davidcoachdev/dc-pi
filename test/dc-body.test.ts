@@ -74,3 +74,76 @@ test("dc-body: shouldFrameBody respects G_BANNER_ACTIVE state", () => {
   (globalThis as unknown as Record<symbol, boolean>)[G_BANNER_ACTIVE] = false;
   assert.equal(shouldFrameBody(), true, "Should frame body when banner is inactive");
 });
+
+test("dc-body: tryAttachBodyFrame reattaches if layoutRoot[LAYOUT_NODE] was replaced", async () => {
+  const { tryAttachBodyFrame } = await import("../src/features/dc-body/dc-body.ts");
+  const tui = createMockTui();
+
+  let nativeCallCount = 0;
+  const mockChatComp: Component = { render: () => ["chat"], invalidate: () => {} };
+  const mockRailComp: Component = { render: () => ["rail"], invalidate: () => {} };
+  const mockDockComp: Component = { render: () => ["dock"], invalidate: () => {} };
+
+  const contentAreaComp = {
+    render: () => ["content"],
+    invalidate: () => {},
+    [LAYOUT_NODE]: () => ({
+      type: "hstack",
+      entries: [
+        { component: mockChatComp, grow: 1, shrink: 1 },
+        { component: mockRailComp, basis: 34, grow: 0, shrink: 0 },
+      ],
+    }),
+  };
+
+  const initialLayoutNode = () => {
+    nativeCallCount++;
+    return {
+      type: "vstack",
+      entries: [
+        { component: contentAreaComp, grow: 1, shrink: 1 },
+        { component: mockDockComp, basis: "auto", grow: 0, shrink: 0 },
+      ],
+    };
+  };
+
+  const host: any = tui;
+  host.layoutRoot = {
+    render: () => [],
+    invalidate: () => {},
+    [LAYOUT_NODE]: initialLayoutNode,
+  };
+
+  // 1. Primer adjunto
+  const attached1 = tryAttachBodyFrame(tui);
+  assert.equal(attached1, true);
+
+  // Ejecutar el layout envuelto
+  const layout1 = host.layoutRoot[LAYOUT_NODE]();
+  assert.equal(layout1.type, "vstack");
+  const nestedHStack = layout1.entries[0].component[LAYOUT_NODE]();
+  assert.equal(nestedHStack.type, "hstack");
+  // El chat (entry 0) debe estar enmarcado con framedBody
+  assert.equal(nestedHStack.entries[0].component[BODY_FRAMED], true);
+  // El rail (entry 1) debe quedar intacto sin ser envuelto por framedBody
+  assert.equal(nestedHStack.entries[1].component, mockRailComp);
+
+  // 2. Simular que otra extensión reemplaza layoutRoot[LAYOUT_NODE]
+  const alienLayoutNode = () => ({
+    type: "vstack",
+    entries: [
+      { component: contentAreaComp, grow: 1, shrink: 1 },
+      { component: mockDockComp, basis: "auto", grow: 0, shrink: 0 },
+    ],
+  });
+  host.layoutRoot[LAYOUT_NODE] = alienLayoutNode;
+
+  // 3. tryAttachBodyFrame debe detectar que la función no tiene BODY_MODULE_REV y re-adjuntarse
+  const attached2 = tryAttachBodyFrame(tui);
+  assert.equal(attached2, true);
+  assert.notEqual(host.layoutRoot[LAYOUT_NODE], alienLayoutNode);
+
+  const layout2 = host.layoutRoot[LAYOUT_NODE]();
+  const nestedHStack2 = layout2.entries[0].component[LAYOUT_NODE]();
+  assert.equal(nestedHStack2.entries[0].component[BODY_FRAMED], true);
+});
