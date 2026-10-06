@@ -1,4 +1,5 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { dcNotifier } from "../../integrations/dc-notify/dc-notifier.ts";
 import { createCheckpoint } from "./dc-checkpoint.ts";
 
 export function dcCheckpointExtension(pi: ExtensionAPI): void {
@@ -8,7 +9,7 @@ export function dcCheckpointExtension(pi: ExtensionAPI): void {
       const name = args.trim() || "snapshot";
       const result = createCheckpoint(name, ctx.cwd);
       if (!result.ok) {
-        ctx.ui.notify(`dc-checkpoint error: ${result.message}`, "error");
+        dcNotifier.notify(ctx, "Checkpoint", `dc-checkpoint error: ${result.message}`, "error");
         return;
       }
 
@@ -20,7 +21,7 @@ export function dcCheckpointExtension(pi: ExtensionAPI): void {
         `   Para restaurar: bash "${result.dir}/restore.sh"`,
       ].filter(Boolean).join("\n");
 
-      ctx.ui.notify(msg, "info");
+      dcNotifier.notify(ctx, "Checkpoint", msg, "info");
     },
   });
 }

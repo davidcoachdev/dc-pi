@@ -1091,6 +1091,20 @@ export function installDialogsPatch(): void {
         let countdownSeconds: number | undefined = opts?.timeout ? Math.ceil(opts.timeout / 1000) : undefined;
         let timer: NodeJS.Timeout | null = null;
 
+        const clearTimer = () => {
+          if (timer) {
+            clearInterval(timer);
+            timer = null;
+          }
+        };
+
+        if (opts?.signal) {
+          opts.signal.addEventListener("abort", () => {
+            clearTimer();
+            resolve(undefined);
+          }, { once: true });
+        }
+
         void this.showExtensionCustom(
           (tui: any, rawTheme: Theme, _kb: any, done: (val: string | undefined) => void) => {
             const theme = resolveSafeTheme(rawTheme, this);
@@ -1100,24 +1114,25 @@ export function installDialogsPatch(): void {
                   countdownSeconds--;
                   tui.requestRender?.();
                   if (countdownSeconds === 0) {
-                    if (timer) clearInterval(timer);
+                    clearTimer();
                     done(undefined);
                     resolve(undefined);
                   }
                 }
               }, 1000);
+              timer.unref?.();
             }
 
             const panel = new CleanExtensionSelectPanel(
               options,
               theme,
               (option: string) => {
-                if (timer) clearInterval(timer);
+                clearTimer();
                 done(option);
                 resolve(option);
               },
               () => {
-                if (timer) clearInterval(timer);
+                clearTimer();
                 done(undefined);
                 resolve(undefined);
               },
@@ -1134,7 +1149,7 @@ export function installDialogsPatch(): void {
               content: panel,
               footer: `${theme.fg("accent", "↑/↓ / Clic")} elegir   ${theme.fg("accent", "Enter")} aplicar   ${theme.fg("accent", "esc/q")} cancelar`,
               onClose: () => {
-                if (timer) clearInterval(timer);
+                clearTimer();
                 done(undefined);
                 resolve(undefined);
               },

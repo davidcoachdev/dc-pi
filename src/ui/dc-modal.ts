@@ -98,17 +98,29 @@ export async function openDcModal<T = void>(
   try {
     const result = await ctx.ui.custom<T | undefined>(
       (tui, theme, _kb, done) => {
+        let resolvedContent: DcWindowContent;
+
         const close = (val?: T) => {
           if (!settled) {
             settled = true;
             isAnyDcModalOpen = false;
             finalResult = val;
+            try {
+              if (resolvedContent && typeof (resolvedContent as any).destroy === "function") {
+                (resolvedContent as any).destroy();
+              }
+              if (resolvedContent && typeof (resolvedContent as any).dispose === "function") {
+                (resolvedContent as any).dispose();
+              }
+            } catch {
+              /* defensive */
+            }
             options.onClose?.(val);
             done(val);
           }
         };
 
-        const resolvedContent: DcWindowContent =
+        resolvedContent =
           typeof options.content === "function"
             ? (options.content as DcModalContentFactory<T>)(close, theme, tui)
             : options.content;

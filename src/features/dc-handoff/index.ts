@@ -9,6 +9,7 @@
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { dcNotifier } from "../../integrations/dc-notify/dc-notifier.ts";
 
 export function ensurePiDirProtected(cwd: string): string {
   const dir = join(cwd, ".pi");
@@ -78,9 +79,9 @@ export function dcHandoffExtension(pi: ExtensionAPI): void {
     handler: async (_args: string, ctx: ExtensionContext) => {
       const path = writeHandoffNote(ctx);
       if (path) {
-        ctx.ui.notify(`Nota de handoff guardada en ${path}`, "info");
+        dcNotifier.notify(ctx, "Handoff", `Nota de handoff guardada en ${path}`, "info");
       } else {
-        ctx.ui.notify("No se pudo generar la nota de handoff", "error");
+        dcNotifier.notify(ctx, "Handoff", "No se pudo generar la nota de handoff", "error");
       }
     },
   });

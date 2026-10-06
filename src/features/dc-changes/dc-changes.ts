@@ -23,8 +23,8 @@ export async function openChangesViewer(ctx: ExtensionContext): Promise<void> {
     glyph: "⛩ ",
     frame: "double",
     paddingX: 0,
-    width: "57%",
-    maxHeight: "85%",
+    width: "86%",
+    maxHeight: "86%",
     footer: (theme) => ({
       left: theme.fg("accent", footerLeft),
       right: `${theme.fg("accent", "[ o / Enter editar ]")}  `,
