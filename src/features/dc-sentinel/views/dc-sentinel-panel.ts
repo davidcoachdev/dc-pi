@@ -70,6 +70,53 @@ export function createSafeMarkdownTheme(theme?: Pick<Theme, "fg" | "bg" | "bold"
   };
 }
 
+/**
+ * Formatea una observación de Engram estructurando sus bloques (What/Why/Where/Learned, etc.)
+ * en Markdown limpio con viñetas e iconos semánticos antes de pasarlo al componente Markdown.
+ */
+export function formatEngramMarkdownLines(
+  rawContent: string,
+  width: number,
+  theme?: Pick<Theme, "fg" | "bg" | "bold">,
+): string[] {
+  const mdTheme = createSafeMarkdownTheme(theme);
+  const safeW = Math.max(20, width - 4);
+  const raw = (rawContent || "(Sin contenido)").trim();
+
+  // Normalizar secciones clásicas de Engram (What:, Why:, Where:, Learned:, etc.) para que tengan saltos de párrafo y badges claros
+  const normalized = raw
+    .split("\n")
+    .map((line) => {
+      const trimmed = line.trim();
+      const m = trimmed.match(/^(?:\*\*)?(What|Why|Where|Learned|Goal|Instructions|Discoveries|Accomplished|Next Steps|Relevant Files)(?:\*\*)?:\s*(.*)$/i);
+      if (m) {
+        const key = m[1]!;
+        const rest = m[2]!;
+        const iconMap: Record<string, string> = {
+          what: "🎯 **Qué (What):**",
+          why: "💡 **Por qué (Why):**",
+          where: "📁 **Dónde (Where):**",
+          learned: "🧠 **Aprendido (Learned):**",
+          goal: "🏁 **Objetivo (Goal):**",
+          instructions: "📋 **Instrucciones:**",
+          discoveries: "🔍 **Hallazgos:**",
+          accomplished: "✅ **Logrado:**",
+          "next steps": "⏭️ **Próximos Pasos:**",
+          "relevant files": "📂 **Archivos Relevantes:**",
+        };
+        const label = iconMap[key.toLowerCase()] || `▸ **${key}:**`;
+        return `\n${label} ${rest}\n`;
+      }
+      return line;
+    })
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+
+  const md = new Markdown(normalized, 0, 0, mdTheme);
+  return md.render(safeW).map((l) => `   ${l}`);
+}
+
 export interface SentinelPanelOptions {
   theme: Pick<Theme, "fg" | "bg" | "bold">;
   requestRender: () => void;
@@ -255,8 +302,8 @@ export class SentinelPanel implements Component {
     if (typeof this.maxRowsOption === "number") {
       return Math.max(12, this.maxRowsOption);
     }
-    const termRows = process.stdout?.rows ?? 35;
-    return Math.max(12, Math.floor(termRows * 0.85) - 6);
+    // Alto fijo constante de 34 filas totales (32 de cuerpo + 2 de cabecera)
+    return 34;
   }
 
   private adjustListScroll(): void {
@@ -390,20 +437,21 @@ export class SentinelPanel implements Component {
     lines.push(`${pad(headerLeft, leftW)} ${t.fg("border", "│")} ${pad(headerRight, rightW)}`);
     lines.push(`${t.fg("border", "─".repeat(leftW))}─┼─${t.fg("border", "─".repeat(rightW))}`);
 
-    // Si no hay datos en general o tras el filtro
+    const availableRows = Math.max(10, this.getMaxRows() - this.headerRows);
+    this.lastRowsCount = availableRows;
+
+    // Si no hay datos en general o tras el filtro: mantener SIEMPRE el mismo alto fijo (availableRows)
     if (filtered.length === 0) {
       const emptyMsg = `  ${t.fg("dim", "(sin registros que coincidan)")}`;
       const emptyDetail = `  ${t.fg("dim", "Probá con otro término o presioná Esc para limpiar el filtro.")}`;
 
       lines.push(`${pad(emptyMsg, leftW)} ${t.fg("border", "│")} ${pad(emptyDetail, rightW)}`);
-      for (let i = 0; i < 10; i++) {
+      for (let i = 1; i < availableRows; i++) {
         lines.push(`${" ".repeat(leftW)} ${t.fg("border", "│")} ${" ".repeat(rightW)}`);
       }
       return lines.map((l) => truncateToWidth(l, safeW, ""));
     }
 
-    const availableRows = Math.max(10, this.getMaxRows() - this.headerRows);
-    this.lastRowsCount = availableRows;
     this.adjustListScroll();
 
     // 1. Preparar detalle derecho
@@ -584,10 +632,9 @@ export class SentinelPanel implements Component {
       rightContent.push(t.fg("border", "─".repeat(Math.max(1, rightW - 2))));
       rightContent.push("");
 
-      const md = new Markdown(obs.content, 0, 0, mdTheme);
-      const renderedLines = md.render(Math.max(20, rightW - 4));
-      for (const line of renderedLines) {
-        rightContent.push(`   ${line}`);
+      const formattedLines = formatEngramMarkdownLines(obs.content, rightW, t);
+      for (const line of formattedLines) {
+        rightContent.push(line);
       }
     } else {
       const file = current.raw as ChronicleFileItem;
@@ -653,24 +700,10 @@ export class SentinelPanel implements Component {
           rowText = ` 📄 ${file.name.replace(".md", "")}`;
         }
 
-        const contentW = maxListScroll > 0 ? leftW - 2 : leftW - 1;
+        // Sin barra de scroll visual (scroll limpio invisible ocupando todo el ancho de la columna)
+        const contentW = leftW - 1;
         const truncated = truncateToWidth(rowText, contentW, "…");
-        const paddedContent = pad(` ${truncated}`, contentW);
-
-        let scrollbarChar = " ";
-        if (maxListScroll > 0) {
-          if (r === 0) {
-            scrollbarChar = this.listScrollOffset > 0 ? t.fg("accent", "▲") : t.fg("dim", "░");
-          } else if (r === availableRows - 1) {
-            scrollbarChar = this.listScrollOffset < maxListScroll ? t.fg("accent", "▼") : t.fg("dim", "░");
-          } else {
-            const trackH = availableRows - 2;
-            const thumbPos = Math.round((this.listScrollOffset / maxListScroll) * (trackH - 1));
-            scrollbarChar = r - 1 === thumbPos ? t.fg("accent", "█") : t.fg("dim", "░");
-          }
-        }
-
-        const fullLeft = `${paddedContent}${scrollbarChar}`;
+        const fullLeft = pad(` ${truncated}`, leftW);
         leftRow = isSelected
           ? t.bg("selectedBg", t.bold(t.fg("accent", fullLeft)))
           : t.fg("text", fullLeft);
@@ -855,21 +888,21 @@ export class SentinelPanel implements Component {
       return true;
     }
 
-    // Ctrl+Up / Ctrl+Down para scroll de detalle
+    // Ctrl+Up / Ctrl+Down o j / k o [ / ] para scroll de detalle sin límite artificial
     const isScrollDown =
       matchesKey(data, "ctrl+down") ||
       matchesKey(data, Key.ctrl("down")) ||
       data === "\x1b[1;5B" ||
-      (this.searchInput.isEmpty() && data === "j");
+      (this.searchInput.isEmpty() && (data === "j" || data === "]"));
 
     const isScrollUp =
       matchesKey(data, "ctrl+up") ||
       matchesKey(data, Key.ctrl("up")) ||
       data === "\x1b[1;5A" ||
-      (this.searchInput.isEmpty() && data === "k");
+      (this.searchInput.isEmpty() && (data === "k" || data === "["));
 
     if (isScrollDown) {
-      this.detailScrollOffset = Math.min(200, this.detailScrollOffset + 4);
+      this.detailScrollOffset += 4;
       this.requestRender();
       return true;
     }

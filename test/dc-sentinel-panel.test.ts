@@ -337,6 +337,22 @@ test("dc-sentinel-panel: renders metro view with glyphs and procedures", () => {
   panel.handleInput("d");
   assert.equal(panel.getFilteredItems().length, 0);
 
+  // Aunque quede vacío, el alto debe mantenerse fijo (34 filas por defecto) y sin caracteres de scrollbar visual
+  const emptyLines = panel.render(120);
+  assert.equal(emptyLines.length, 34, "El alto debe mantenerse fijo en 34 filas incluso cuando la lista está vacía");
+  assert.ok(!emptyLines.join("\n").includes("░"), "No debe mostrar barra visual de scroll");
+
   db.close();
   fs.rmSync(tmpDir, { recursive: true, force: true });
+});
+
+test("dc-sentinel-panel: formatEngramMarkdownLines formats What/Why/Where/Learned cleanly", async () => {
+  const { formatEngramMarkdownLines } = await import("../src/features/dc-sentinel/views/dc-sentinel-panel.ts");
+  const raw = "**What**: Se creó el motor SQLite.\n**Why**: Soberanía local.\n**Where**: `src/core/db.ts`\n**Learned**: WAL evita bloqueos.";
+  const formatted = formatEngramMarkdownLines(raw, 80);
+  const joined = formatted.join("\n");
+  assert.ok(joined.includes("🎯"));
+  assert.ok(joined.includes("💡"));
+  assert.ok(joined.includes("📁"));
+  assert.ok(joined.includes("🧠"));
 });
