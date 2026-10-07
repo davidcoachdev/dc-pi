@@ -22,7 +22,7 @@ Do not use for initial PR creation (use `branch-pr` or `chained-pr`).
 
 - **On-Demand Only**: Never run continuous polling or background daemon loops. Execute once per invocation.
 - **Fast-Path Bailout**: Check for comments first using `gh pr view --json comments,reviews`. If there are zero unresolved comments, report clean status immediately without spawning a subagent.
-- **Context Isolation**: When comments exist, delegate parsing, diff cross-checking, and report synthesis to subagent `dc-pr-comment-analyst`. Never dump raw GitHub API JSON into the parent session context.
+- **Context Isolation**: When comments exist, delegate parsing, diff cross-checking, and report synthesis to ephemeral subagent via `dc_ephemeral_agent_run` with `archetype: "dc-pr-comment-analyst"`. Never dump raw GitHub API JSON into the parent session context.
 - **Auditor Does Not Fix**: The analyst produces an actionable triage report. It never modifies code. Bounded implementation fixes must be explicitly approved by the user before dispatching `gentle-ai-worker`.
 - **Preserve Human Control**: Never auto-resolve threads or auto-commit fixes without human review of the plan.
 
@@ -32,7 +32,7 @@ Do not use for initial PR creation (use `branch-pr` or `chained-pr`).
 | --- | --- |
 | No active PR or `gh` CLI not authenticated | Report requirement to user; stop. |
 | PR exists but has 0 comments / review threads | Return instant clean report (0 tokens overhead); stop. |
-| Comments exist (bot or human) | Run subagent `dc-pr-comment-analyst` with PR number and branch context. |
+| Comments exist (bot or human) | Run ephemeral subagent `dc_ephemeral_agent_run` with `archetype: "dc-pr-comment-analyst"`, PR number, and branch context. |
 | User approves the triage action plan | Dispatch `gentle-ai-worker` with exact `Allowed edit surfaces`. |
 | PR feedback requires clarification/discussion | Draft polite response using `comment-writer` tone guidelines. |
 
@@ -45,7 +45,7 @@ Do not use for initial PR creation (use `branch-pr` or `chained-pr`).
    - Count total comments and review threads.
    - If empty: report `"PR #<number> has no review comments pending."` and exit.
 3. **Delegate Analysis**:
-   - Call `subagent_run` with `agent: "dc-pr-comment-analyst"` and label `"triage pr comments"`.
+   - Call `dc_ephemeral_agent_run` with `archetype: "dc-pr-comment-analyst"`, `role: "dc-pr-comment-analyst"` and label `"triage pr comments"`.
    - Pass PR number, URL, and target branch in `task`.
 4. **Present Triage Report**:
    - Render the structured table and prioritized action plan returned by the analyst.

@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
+import { DC_AGENT_ARCHETYPES } from "./dc-ephemeral-types.ts";
 
 export interface SubagentExecutionTask {
   id: string;
@@ -204,6 +205,26 @@ export function loadAvailableAgents(): AvailableAgentInfo[] {
     }
   } catch {
     /* skip unreadable */
+  }
+
+  // Incorporar los arquetipos efímeros canónicos de DC Studio (Fresh Context Loop)
+  const existingNames = new Set(agents.map((a) => a.name));
+  for (const [name, arch] of Object.entries(DC_AGENT_ARCHETYPES)) {
+    if (!existingNames.has(name)) {
+      let role = "dc-ephemeral";
+      if (name.startsWith("dc-phase-")) {
+        role = name.replace("dc-phase-", "fase-");
+      }
+      agents.push({
+        name,
+        role,
+        model: arch.recommendedModel,
+        effort: arch.defaultEffort,
+        description: arch.description,
+        filePath: "(efímero: dc_ephemeral_agent_run)",
+      });
+      existingNames.add(name);
+    }
   }
 
   // Ordenar: primero los dc-*, luego gentle-*, luego el resto

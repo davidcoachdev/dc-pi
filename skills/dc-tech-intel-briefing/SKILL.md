@@ -20,7 +20,14 @@ Investigar, compilar y entregar informes ejecutivos de alta fidelidad sobre nove
    - Formato requerido: Texto narrativo, audio (.wav) o ambos.
 
 2. **Delegación a `dc-news-to-day`**:
-   - Invocar al subagente `dc-news-to-day` con la consigna de investigación.
+   - Invocar al subagente efímero vía `dc_ephemeral_agent_run` con `archetype: "dc-news-to-day"`:
+     ```json
+     {
+       "archetype": "dc-news-to-day",
+       "role": "dc-news-to-day",
+       "task": "Investigar novedades tecnológicas de las últimas 24 horas y generar report.md y sources.md en ./noticias/YYYY-MM-DD-<tema>/"
+     }
+     ```
    - El subagente consulta Hacker News, GitHub releases y YouTube con `dc_websearch` y `dc_youtube_*`.
    - Genera dos artefactos en `./noticias/YYYY-MM-DD-<tema>/`:
      - `report.md`: Redacción fluida en español, estilo narrativo, sin tablas complejas ni bullets excesivos.

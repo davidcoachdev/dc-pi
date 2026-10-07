@@ -40,16 +40,36 @@ Cuando el orquestador necesita ejecutar una tarea especializada:
 3. En modo `task` (síncrono), mantiene un *heartbeat* cada 45 segundos y, en el bloque `finally`, **autodestruye el archivo `.md`**, libera el taxi y registra las métricas de tokens/costo en el historial.
 4. En modo `background`, preserva el archivo `.md` y el arriendo del taxi hasta que el proceso en segundo plano concluya o venza su TTL.
 
-#### Los 8 Arquetipos Canónicos (`archetype`)
+#### El Catálogo Canónico de Arquetipos (`archetype`)
 
+> ⚠️ **Regla Estricta de Nomenclatura:** Todos los arquetipos en el ecosistema DC Studio llevan obligatoriamente el prefijo `dc-`. Los nombres legados (`odd-*`) se conservan únicamente como alias de compatibilidad automática.
+
+##### A. Mini SDD de DC Studio (Planned Workflow Formal)
 | Arquetipo | Tool Bricks Incluidos | Behavior Bricks Incluidos | Modelo Recomendado | Effort |
 | :--- | :--- | :--- | :--- | :--- |
-| **`odd-scout`** | `fs-read`, `code-intel` | `read-only-analyst`, `artifact-contract`, `non-empty-response` | `gemini-3.8-flash-high` | `high` |
-| **`odd-worker`** | `fs-read`, `fs-write`, `terminal` | `bounded-worker`, `strict-tdd`, `artifact-contract`, `non-empty-response` | `gemini-3.8-flash-high` | `high` |
-| **`odd-verifier`** | `fs-read`, `terminal` | `read-only-analyst`, `artifact-contract`, `non-empty-response` | `gemini-3.8-flash-high` | `high` |
+| **`dc-phase-discovery`** | `fs-read`, `code-intel`, `docs` | `read-only-analyst`, `artifact-contract`, `non-empty-response` | `gemini-3.8-flash-high` | `high` |
+| **`dc-phase-planning`** | `fs-read`, `code-intel`, `docs` | `read-only-analyst`, `dag-planning`, `artifact-contract`, `non-empty-response` | `gemini-3.8-flash-high` | `high` |
+| **`dc-phase-apply`** | `fs-read`, `fs-write`, `terminal`, `code-intel` | `bounded-worker`, `strict-tdd`, `artifact-contract`, `non-empty-response` | `gemini-3.8-flash-high` | `high` |
+| **`dc-phase-verify`** | `fs-read`, `terminal`, `code-intel` | `read-only-analyst`, `verify-independent`, `artifact-contract`, `non-empty-response` | `gemini-3.8-flash-high` | `high` |
+
+##### B. Flujo ODD de DC Studio (Organic Driven Development)
+| Arquetipo | Tool Bricks Incluidos | Behavior Bricks Incluidos | Modelo Recomendado | Effort |
+| :--- | :--- | :--- | :--- | :--- |
+| **`dc-odd-scout`** | `fs-read`, `code-intel` | `read-only-analyst`, `artifact-contract`, `non-empty-response` | `gemini-3.8-flash-high` | `high` |
+| **`dc-odd-worker`** | `fs-read`, `fs-write`, `terminal` | `bounded-worker`, `strict-tdd`, `artifact-contract`, `non-empty-response` | `gemini-3.8-flash-high` | `high` |
+| **`dc-odd-verifier`** | `fs-read`, `terminal` | `read-only-analyst`, `artifact-contract`, `non-empty-response` | `gemini-3.8-flash-high` | `high` |
+| **`dc-odd-planner`** | `fs-read`, `code-intel` | `read-only-analyst`, `dag-planning`, `artifact-contract`, `non-empty-response` | `gemini-3.8-flash-high` | `high` |
+
+##### C. Auxiliares Especializados y Herramientas
+| Arquetipo | Tool Bricks Incluidos | Behavior Bricks Incluidos | Modelo Recomendado | Effort |
+| :--- | :--- | :--- | :--- | :--- |
 | **`dc-researcher`** | `web-search`, `docs`, `fs-read` | `source-verification`, `artifact-contract`, `non-empty-response` | `gemini-3.8-flash-high` | `high` |
+| **`dc-news-to-day`** | `web-search`, `youtube`, `audio`, `fs-read` | `source-verification`, `artifact-contract`, `non-empty-response` | `gemini-3.8-flash-high` | `high` |
+| **`dc-ui-visual-inspector`** | `fs-read`, `browser`, `terminal` | `read-only-analyst`, `artifact-contract`, `non-empty-response` | `gemini-3.8-flash-high` | `medium` |
+| **`dc-browser-inspector`**| `browser` | `artifact-contract`, `non-empty-response` | `gemini-3.8-flash-high` | `medium` |
+| **`dc-pr-comment-analyst`** | `fs-read`, `terminal` | `read-only-analyst`, `artifact-contract`, `non-empty-response` | `gemini-3.8-flash-high` | `medium` |
+| **`dc-sentinel`** | `fs-read` | `read-only-analyst`, `artifact-contract`, `non-empty-response` | `gemini-3.8-flash-high` | `high` |
 | **`dc-media`** | `youtube`, `audio` | `artifact-contract`, `non-empty-response` | `gemini-3-flash` | `low` |
-| **`dc-browser-inspector`**| `browser` | `artifact-contract`, `non-empty-response` | `gemini-3.8-flash-high` | `medium`|
 | **`dc-service-ops`** | `services` | `artifact-contract`, `non-empty-response` | `gemini-3-flash` | `low` |
 | **`dc-smoke`** | `fs-read` | `artifact-contract`, `non-empty-response` | `gemini-3-flash` | `low` |
 
@@ -75,6 +95,8 @@ Cuando el orquestador necesita ejecutar una tarea especializada:
 | `strict-tdd` | Exige observar RED antes de implementar, GREEN tras el cambio mínimo y REFACTOR con checks focalizados. |
 | `read-only-analyst` | Prohíbe toda mutación de código y exige citar evidencia con formato `archivo:línea`. |
 | `bounded-worker` | Obliga a respetar estrictamente las rutas declaradas en `## Allowed edit surfaces` sin hacer commits ni pushes. |
+| `dag-planning` | Diseña el plan como un DAG acíclico y topológicamente ejecutable, con tareas atómicas de ~150 líneas y dependencias explícitas. |
+| `verify-independent` | Auditoría independiente de tests y calidad de aserciones; rechaza pruebas con tautologías o tipos vacíos. |
 | `source-verification`| Exige atribuir cada afirmación técnica a URLs oficiales o líneas exactas del repositorio local. |
 | `artifact-contract` | Exige cerrar con un Resumen Ejecutivo, Archivos Creados/Modificados y Herramientas Usadas. |
 | `non-empty-response` | Garantiza que la respuesta final siempre contenga texto visible para el usuario y nunca termine solo con bloques de thinking. |

@@ -253,7 +253,9 @@ export type DcBehaviorBrick =
   | "artifact-contract"
   | "non-empty-response"
   | "source-verification"
-  | "bounded-worker";
+  | "bounded-worker"
+  | "dag-planning"
+  | "verify-independent";
 
 export const DC_BEHAVIOR_BRICKS: Record<DcBehaviorBrick, string> = {
   "strict-tdd":
@@ -268,17 +270,43 @@ export const DC_BEHAVIOR_BRICKS: Record<DcBehaviorBrick, string> = {
     "Atribuye cada afirmación técnica relevante a su fuente primaria (URLs oficiales de documentación o archivos y líneas del repositorio local).",
   "bounded-worker":
     "Respeta estrictamente las superficies de edición autorizadas en '## Allowed edit surfaces'. No toques ningún archivo fuera de ese alcance. No realices commits ni pushes.",
+  "dag-planning":
+    "Diseña el plan como un Grafo Acíclico Dirigido (DAG) acíclico y topológicamente ejecutable. Define 'Allowed edit surfaces' explícitas sin '.' ni rutas absolutas. Asigna dependencias explícitas por tarea (T1, T2...) sin referencias circulares ni hacia adelante. Limita cada tarea a un presupuesto de revisión razonable (~150 líneas).",
+  "verify-independent":
+    "Opera como auditor independiente sin asumir que los reportes previos son ciertos. Ejecuta personalmente los tests y aserciones. Audita la disciplina TDD y rechaza tajantemente pruebas con tautologías (assert.ok(true)), tests que solo comprueben tipos sin comportamiento, o suites vacías.",
 };
 
 export type DcAgentArchetype =
-  | "odd-scout"
-  | "odd-worker"
-  | "odd-verifier"
+  // DC Studio Mini SDD (Planned Workflow)
+  | "dc-phase-discovery"
+  | "dc-phase-planning"
+  | "dc-phase-apply"
+  | "dc-phase-verify"
+  // DC Studio ODD Workflow
+  | "dc-odd-scout"
+  | "dc-odd-worker"
+  | "dc-odd-verifier"
+  | "dc-odd-planner"
+  // DC Studio Specialized Auxiliaries
   | "dc-researcher"
-  | "dc-media"
+  | "dc-news-to-day"
+  | "dc-ui-visual-inspector"
   | "dc-browser-inspector"
-  | "dc-service-ops"
-  | "dc-smoke";
+  | "dc-pr-comment-analyst"
+  | "dc-sentinel"
+  | "dc-smoke"
+  | "dc-media"
+  | "dc-service-ops";
+
+export const DC_ARCHETYPE_ALIASES: Record<string, DcAgentArchetype> = {
+  "odd-scout": "dc-odd-scout",
+  "odd-worker": "dc-odd-worker",
+  "odd-verifier": "dc-odd-verifier",
+  "odd-planner": "dc-odd-planner",
+  "dc-smoke-subagent": "dc-smoke",
+  "ui-visual-inspector": "dc-ui-visual-inspector",
+  "pr-comment-analyst": "dc-pr-comment-analyst",
+};
 
 export interface DcArchetypeDefinition {
   name: DcAgentArchetype;
@@ -291,35 +319,120 @@ export interface DcArchetypeDefinition {
 }
 
 export const DC_AGENT_ARCHETYPES: Record<DcAgentArchetype, DcArchetypeDefinition> = {
-  "odd-scout": {
-    name: "odd-scout",
+  // --- DC Studio Mini SDD (Planned Workflow) ---
+  "dc-phase-discovery": {
+    name: "dc-phase-discovery",
+    description: "Fase 0 del Mini SDD de DC Studio: explora el problema en solo lectura y genera discovery.md.",
+    toolBricks: ["fs-read", "code-intel", "docs"],
+    behaviorBricks: ["read-only-analyst", "artifact-contract", "non-empty-response"],
+    recommendedModel: "gemini-3.8-flash-high",
+    defaultEffort: "high",
+  },
+  "dc-phase-planning": {
+    name: "dc-phase-planning",
+    description: "Fase 1 del Mini SDD de DC Studio: diseña solución técnica, superficies y tareas DAG en plan.md.",
+    toolBricks: ["fs-read", "code-intel", "docs"],
+    behaviorBricks: ["read-only-analyst", "dag-planning", "artifact-contract", "non-empty-response"],
+    recommendedModel: "gemini-3.8-flash-high",
+    defaultEffort: "high",
+  },
+  "dc-phase-apply": {
+    name: "dc-phase-apply",
+    description: "Fase 2 del Mini SDD de DC Studio: implementa código bajo TDD estricto y registra apply.md.",
+    toolBricks: ["fs-read", "fs-write", "terminal", "code-intel"],
+    behaviorBricks: ["bounded-worker", "strict-tdd", "artifact-contract", "non-empty-response"],
+    recommendedModel: "gemini-3.8-flash-high",
+    defaultEffort: "high",
+  },
+  "dc-phase-verify": {
+    name: "dc-phase-verify",
+    description: "Fase 3 del Mini SDD de DC Studio: auditoría independiente de tests y calidad TDD en verify.md.",
+    toolBricks: ["fs-read", "terminal", "code-intel"],
+    behaviorBricks: ["read-only-analyst", "verify-independent", "artifact-contract", "non-empty-response"],
+    recommendedModel: "gemini-3.8-flash-high",
+    defaultEffort: "high",
+  },
+
+  // --- DC Studio ODD Workflow ---
+  "dc-odd-scout": {
+    name: "dc-odd-scout",
     description: "Mapeo y exploración de blast radius en solo lectura para ODD.",
     toolBricks: ["fs-read", "code-intel"],
     behaviorBricks: ["read-only-analyst", "artifact-contract", "non-empty-response"],
     recommendedModel: "gemini-3.8-flash-high",
     defaultEffort: "high",
   },
-  "odd-worker": {
-    name: "odd-worker",
+  "dc-odd-worker": {
+    name: "dc-odd-worker",
     description: "Implementación acotada con TDD estricto y verificación en primer plano para ODD.",
     toolBricks: ["fs-read", "fs-write", "terminal"],
     behaviorBricks: ["bounded-worker", "strict-tdd", "artifact-contract", "non-empty-response"],
     recommendedModel: "gemini-3.8-flash-high",
     defaultEffort: "high",
   },
-  "odd-verifier": {
-    name: "odd-verifier",
+  "dc-odd-verifier": {
+    name: "dc-odd-verifier",
     description: "Verificación técnica independiente ejecutando comandos de test/build sin mutar código.",
     toolBricks: ["fs-read", "terminal"],
     behaviorBricks: ["read-only-analyst", "artifact-contract", "non-empty-response"],
     recommendedModel: "gemini-3.8-flash-high",
     defaultEffort: "high",
   },
+  "dc-odd-planner": {
+    name: "dc-odd-planner",
+    description: "Planificación y descomposición de tareas ODD con superficies acotadas.",
+    toolBricks: ["fs-read", "code-intel"],
+    behaviorBricks: ["read-only-analyst", "dag-planning", "artifact-contract", "non-empty-response"],
+    recommendedModel: "gemini-3.8-flash-high",
+    defaultEffort: "high",
+  },
+
+  // --- DC Studio Specialized Auxiliaries ---
   "dc-researcher": {
     name: "dc-researcher",
     description: "Investigación técnica profunda en documentación, repositorios y web con contraste de fuentes.",
     toolBricks: ["web-search", "docs", "fs-read"],
     behaviorBricks: ["source-verification", "artifact-contract", "non-empty-response"],
+    recommendedModel: "gemini-3.8-flash-high",
+    defaultEffort: "high",
+  },
+  "dc-news-to-day": {
+    name: "dc-news-to-day",
+    description: "Investiga noticias tecnológicas, lanzamientos y genera informe narrativo y fuentes.",
+    toolBricks: ["web-search", "youtube", "audio", "fs-read"],
+    behaviorBricks: ["source-verification", "artifact-contract", "non-empty-response"],
+    recommendedModel: "gemini-3.8-flash-high",
+    defaultEffort: "high",
+  },
+  "dc-ui-visual-inspector": {
+    name: "dc-ui-visual-inspector",
+    description: "Auditoría visual de layout, DOM, CSS/Tailwind y breakpoints con Chrome CDP y lectura.",
+    toolBricks: ["fs-read", "browser", "terminal"],
+    behaviorBricks: ["read-only-analyst", "artifact-contract", "non-empty-response"],
+    recommendedModel: "gemini-3.8-flash-high",
+    defaultEffort: "medium",
+  },
+  "dc-browser-inspector": {
+    name: "dc-browser-inspector",
+    description: "Inspección de UI y navegación en vivo con Chrome DevTools Protocol (CDP).",
+    toolBricks: ["browser"],
+    behaviorBricks: ["artifact-contract", "non-empty-response"],
+    recommendedModel: "gemini-3.8-flash-high",
+    defaultEffort: "medium",
+  },
+  "dc-pr-comment-analyst": {
+    name: "dc-pr-comment-analyst",
+    description: "Triage y clasificación de comentarios de GitHub Pull Requests en solo lectura.",
+    toolBricks: ["fs-read", "terminal"],
+    behaviorBricks: ["read-only-analyst", "artifact-contract", "non-empty-response"],
+    recommendedModel: "gemini-3.8-flash-high",
+    defaultEffort: "medium",
+  },
+  "dc-sentinel": {
+    name: "dc-sentinel",
+    description: "Síntesis arquitectónica, bitácora y consolidación de memoria en Engram/SQLite.",
+    toolBricks: ["fs-read"],
+    behaviorBricks: ["read-only-analyst", "artifact-contract", "non-empty-response"],
     recommendedModel: "gemini-3.8-flash-high",
     defaultEffort: "high",
   },
@@ -330,14 +443,6 @@ export const DC_AGENT_ARCHETYPES: Record<DcAgentArchetype, DcArchetypeDefinition
     behaviorBricks: ["artifact-contract", "non-empty-response"],
     recommendedModel: "gemini-3-flash",
     defaultEffort: "low",
-  },
-  "dc-browser-inspector": {
-    name: "dc-browser-inspector",
-    description: "Inspección de UI y navegación en vivo con Chrome DevTools Protocol (CDP).",
-    toolBricks: ["browser"],
-    behaviorBricks: ["artifact-contract", "non-empty-response"],
-    recommendedModel: "gemini-3.8-flash-high",
-    defaultEffort: "medium",
   },
   "dc-service-ops": {
     name: "dc-service-ops",

@@ -1406,9 +1406,30 @@ test("dc-ephemeral-types: Tool Bricks, Behavior Bricks, and Canonical Archetypes
   assert.ok(DC_BEHAVIOR_BRICKS["artifact-contract"].includes("Contrato de Artefacto"));
   assert.ok(DC_BEHAVIOR_BRICKS["non-empty-response"].includes("texto visible"));
 
-  // 3. Catálogo de Arquetipos Canónicos
-  const archetypes = ["odd-scout", "odd-worker", "odd-verifier", "dc-researcher", "dc-media", "dc-browser-inspector", "dc-service-ops", "dc-smoke"] as const;
-  for (const name of archetypes) {
+  // 3. Catálogo de Arquetipos Canónicos — TODOS con prefijo estricto dc-
+  const canonicalArchetypes = [
+    "dc-phase-discovery",
+    "dc-phase-planning",
+    "dc-phase-apply",
+    "dc-phase-verify",
+    "dc-odd-scout",
+    "dc-odd-worker",
+    "dc-odd-verifier",
+    "dc-odd-planner",
+    "dc-researcher",
+    "dc-news-to-day",
+    "dc-ui-visual-inspector",
+    "dc-browser-inspector",
+    "dc-pr-comment-analyst",
+    "dc-sentinel",
+    "dc-smoke",
+    "dc-media",
+    "dc-service-ops",
+  ] as const;
+
+  for (const name of canonicalArchetypes) {
+    // REGLA ESTRICTA: Ningún nombre sin el prefijo dc-
+    assert.ok(name.startsWith("dc-"), `El arquetipo ${name} debe comenzar estrictamente con el prefijo dc-`);
     const arch = DC_AGENT_ARCHETYPES[name];
     assert.ok(arch, `Archetype ${name} must exist`);
     assert.equal(arch.name, name);
@@ -1417,7 +1438,12 @@ test("dc-ephemeral-types: Tool Bricks, Behavior Bricks, and Canonical Archetypes
     assert.ok(arch.recommendedModel?.includes("gemini"), `${name} must recommend Gemini model`);
   }
 
-  // 4. Presets retrocompatibles worker y verifier
+  // 4. Comprobar que en DC_AGENT_ARCHETYPES no haya NINGUNA clave sin prefijo dc-
+  for (const key of Object.keys(DC_AGENT_ARCHETYPES)) {
+    assert.ok(key.startsWith("dc-"), `La clave ${key} en DC_AGENT_ARCHETYPES debe tener prefijo dc-`);
+  }
+
+  // 5. Presets retrocompatibles worker y verifier
   assert.ok(DC_TOOL_PRESETS.worker.includes("edit"));
   assert.ok(DC_TOOL_PRESETS.worker.includes("bash"));
   assert.ok(DC_TOOL_PRESETS.verifier.includes("read"));
@@ -1426,12 +1452,12 @@ test("dc-ephemeral-types: Tool Bricks, Behavior Bricks, and Canonical Archetypes
 });
 
 test("dc-ephemeral-manager: assembleLegoAgentPlan builds archetypes and custom lego compositions", () => {
-  // 1. Arquetipo canónico odd-worker
+  // 1. Arquetipo canónico dc-odd-worker y alias odd-worker
   const workerPlan = assembleLegoAgentPlan({
     task: "Implementar parser TDD",
-    archetype: "odd-worker",
+    archetype: "dc-odd-worker",
   });
-  assert.equal(workerPlan.archetype, "odd-worker");
+  assert.equal(workerPlan.archetype, "dc-odd-worker");
   assert.equal(workerPlan.recommendedModel, "gemini-3.8-flash-high");
   assert.equal(workerPlan.defaultEffort, "high");
   assert.ok(workerPlan.tools.includes("read"));
@@ -1443,16 +1469,58 @@ test("dc-ephemeral-manager: assembleLegoAgentPlan builds archetypes and custom l
   assert.ok(workerPlan.directives.some((d) => d.includes("Contrato de Artefacto")));
   assert.ok(workerPlan.directives.some((d) => d.includes("texto visible")));
 
-  // 2. Arquetipo canónico odd-verifier (solo lectura + tests)
+  // Alias retrocompatible odd-worker -> dc-odd-worker
+  const aliasWorkerPlan = assembleLegoAgentPlan({
+    task: "Implementar parser TDD con alias",
+    archetype: "odd-worker" as any,
+  });
+  assert.equal(aliasWorkerPlan.archetype, "dc-odd-worker");
+
+  // 2. Arquetipo canónico dc-odd-verifier (solo lectura + tests)
   const verifierPlan = assembleLegoAgentPlan({
     task: "Verificar suite de tests",
-    archetype: "odd-verifier",
+    archetype: "dc-odd-verifier",
   });
   assert.ok(verifierPlan.tools.includes("bash"));
   assert.ok(verifierPlan.tools.includes("read"));
   assert.ok(!verifierPlan.tools.includes("edit")); // nunca puede escribir
 
-  // 3. Composición dinámica con legos (toolBricks + behaviorBricks)
+  // 3. Mini SDD (DC Planned Workflow): dc-phase-discovery, dc-phase-planning, dc-phase-apply, dc-phase-verify
+  const discoveryPlan = assembleLegoAgentPlan({
+    task: "Investigar código para discovery.md",
+    archetype: "dc-phase-discovery",
+  });
+  assert.equal(discoveryPlan.archetype, "dc-phase-discovery");
+  assert.ok(discoveryPlan.tools.includes("read"));
+  assert.ok(discoveryPlan.tools.includes("dc_codegraph_explore"));
+  assert.ok(!discoveryPlan.tools.includes("edit")); // solo lectura
+
+  const planningPlan = assembleLegoAgentPlan({
+    task: "Diseñar plan.md como DAG acíclico",
+    archetype: "dc-phase-planning",
+  });
+  assert.equal(planningPlan.archetype, "dc-phase-planning");
+  assert.ok(planningPlan.directives.some((d) => d.includes("DAG")));
+
+  const applyPlan = assembleLegoAgentPlan({
+    task: "Implementar tareas TDD para apply.md",
+    archetype: "dc-phase-apply",
+  });
+  assert.equal(applyPlan.archetype, "dc-phase-apply");
+  assert.ok(applyPlan.tools.includes("edit"));
+  assert.ok(applyPlan.tools.includes("bash"));
+  assert.ok(applyPlan.directives.some((d) => d.includes("RED")));
+
+  const verifyPhasePlan = assembleLegoAgentPlan({
+    task: "Verificar evidencia y calidad de aserciones en verify.md",
+    archetype: "dc-phase-verify",
+  });
+  assert.equal(verifyPhasePlan.archetype, "dc-phase-verify");
+  assert.ok(verifyPhasePlan.tools.includes("bash"));
+  assert.ok(!verifyPhasePlan.tools.includes("edit"));
+  assert.ok(verifyPhasePlan.directives.some((d) => d.includes("tautologías")));
+
+  // 4. Composición dinámica con legos (toolBricks + behaviorBricks)
   const customPlan = assembleLegoAgentPlan({
     task: "Investigar API y probar endpoint",
     toolBricks: ["fs-read", "browser", "services"],
@@ -1465,11 +1533,11 @@ test("dc-ephemeral-manager: assembleLegoAgentPlan builds archetypes and custom l
   assert.ok(customPlan.directives.some((d) => d.includes("fuente primaria")));
   assert.ok(customPlan.directives.some((d) => d.includes("solo lectura")));
 
-  // 4. prepareEphemeralAgent con arquetipo odd-worker
+  // 5. prepareEphemeralAgent con arquetipo dc-odd-worker
   const plan = prepareEphemeralAgent(
     {
       task: "Refactorizar modulo de pagos",
-      archetype: "odd-worker",
+      archetype: "dc-odd-worker",
     },
     {
       sessionId: "test-sess-lego",
@@ -1484,7 +1552,7 @@ test("dc-ephemeral-manager: assembleLegoAgentPlan builds archetypes and custom l
   assert.ok(plan.tools.includes("bash"));
 
   const md = fs.readFileSync(plan.agentFilePath, "utf8");
-  assert.ok(md.includes("Arquetipo: odd-worker"));
+  assert.ok(md.includes("Arquetipo: dc-odd-worker"));
   assert.ok(md.includes("RED"));
 
   cleanupEphemeralAgent(plan, {

@@ -84,3 +84,19 @@ Al delegar el pedido del usuario a la Fase 0 (`Discovery`) o a la Fase 1 (`Plann
    - Durante Discovery y Planning, los archivos del proyecto son de **estricta solo lectura**. Solo se escriben `discovery.md` y `plan.md`.
 4. **Pre-Mutation Summary Gate**:
    - Antes de lanzar `dc-phase-apply`, el orquestador presenta al usuario el resumen del plan y solicita confirmación explícita.
+
+---
+
+## Ejecución Efímera de las Fases (`dc_ephemeral_agent_run`)
+
+Cada fase se ejecuta de forma efímera, aislada y con taxi exclusivo de la flota mediante `dc_ephemeral_agent_run`:
+
+- **Fase 0 (Discovery)**:
+  `dc_ephemeral_agent_run({ archetype: "dc-phase-discovery", role: "dc-phase-discovery", task: "..." })`
+- **Fase 1 (Planning)**:
+  `dc_ephemeral_agent_run({ archetype: "dc-phase-planning", role: "dc-phase-planning", task: "..." })`
+- **Fase 2 (Apply)**:
+  `dc_ephemeral_agent_run({ archetype: "dc-phase-apply", role: "dc-phase-apply", task: "..." })`
+- **Fase 3 (Verify)**:
+  `dc_ephemeral_agent_run({ archetype: "dc-phase-verify", role: "dc-phase-verify", task: "..." })`
+

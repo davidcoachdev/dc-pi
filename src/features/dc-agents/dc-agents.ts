@@ -147,25 +147,19 @@ export default function dcAgentsExtension(pi: ExtensionAPI): void {
       // dejando las 35 tools en el catálogo para ser usadas exclusivamente por subagentes efímeros
       isolateSpecializedToolsForOrchestrator(pi);
 
-      // 4. Sincronización de agentes y skills estáticos
-      const agentsReport: DcAgentsSyncResult = syncDcAgents();
+      // 4. Sincronización de skills estáticos (los subagentes de DC Studio ahora son 100% efímeros bajo demanda)
       const skillsReport: DcAgentsSyncResult = syncDcSkills();
 
-      const totalSynced = agentsReport.synced.length + skillsReport.synced.length;
-      if (totalSynced > 0) {
-        const details: string[] = [];
-        if (agentsReport.synced.length > 0) details.push(`Subagentes: ${agentsReport.synced.join(", ")}`);
-        if (skillsReport.synced.length > 0) details.push(`Skills: ${skillsReport.synced.join(", ")}`);
-
+      if (skillsReport.synced.length > 0) {
         if (ctx.hasUI) {
           dcNotifier.notify(
             ctx,
             "DC Ecosystem",
-            `Restaurados: ${details.join(" | ")}`,
+            `Skills restauradas: ${skillsReport.synced.join(", ")}`,
             "info",
           );
         }
-        dcNotifier.notifyHerdr(`DC Studio: ${totalSynced} items (agentes/skills) sincronizados en Pi`);
+        dcNotifier.notifyHerdr(`DC Studio: ${skillsReport.synced.length} skills sincronizadas en Pi`);
       }
     } catch {
       /* noop en startup */
