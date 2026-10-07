@@ -18,18 +18,18 @@ export async function openEngramExplorer(ctx: ExtensionContext, project?: string
     title: `Dc Studio - Engram Visualizador [${projectName}]`,
     glyph: "⛩ ",
     width: "90%",
-    maxHeight: "85%",
+    maxHeight: 40,
     scrollable: false,
     showScrollbar: false,
     footer: (theme) => ({
-      left: ` ${theme.fg("accent", "↑↓/Clic")} elegir  ·  ${theme.fg("accent", "Ctrl+↑↓")} detalle  ·  ${theme.fg("accent", "c")} copiar  ·  ${theme.fg("accent", "o")} browser  ·  ${theme.fg("accent", "Esc")} salir`,
+      left: ` ${theme.fg("accent", "↑↓/Clic")} elegir  ·  ${theme.fg("accent", "j/k o Rueda")} scroll detalle  ·  ${theme.fg("accent", "c")} copiar  ·  ${theme.fg("accent", "o")} browser  ·  ${theme.fg("accent", "Esc")} salir`,
       right: theme.fg("accent", `${obs.length} registros (${projectName})`),
     }),
     content: (_done, theme, tui) => {
       return new EngramPanel({
         theme,
         projectName,
-        maxRows: () => Math.max(12, Math.floor(((tui as any)?.terminal?.rows ?? process.stdout?.rows ?? 35) * 0.85) - 6),
+        maxRows: 34,
         requestRender: () => tui.requestRender(),
       });
     },

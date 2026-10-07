@@ -17,11 +17,11 @@ export async function openSentinelViewer(
     title: "Dc Studio - Bitácora & Centinela Soberano v2.0",
     glyph: "⛩ ",
     width: "92%",
-    maxHeight: "88%",
+    maxHeight: 40,
     scrollable: false,
     showScrollbar: false,
     footer: (theme) => ({
-      left: ` ${theme.fg("accent", "↑↓")} navegar  ·  ${theme.fg("accent", "Tab/1-5")} vista  ·  ${theme.fg("accent", "Enter")} transbordo  ·  ${theme.fg("accent", "d")} olvidar  ·  ${theme.fg("accent", "p")} fijar  ·  ${theme.fg("accent", "g")} global  ·  ${theme.fg("accent", "c")} copiar`,
+      left: ` ${theme.fg("accent", "↑↓")} lista  ·  ${theme.fg("accent", "j/k o Rueda")} scroll detalle  ·  ${theme.fg("accent", "Tab/1-5")} vista  ·  ${theme.fg("accent", "Enter")} transbordo  ·  ${theme.fg("accent", "d")} olvidar  ·  ${theme.fg("accent", "p")} fijar`,
       right: theme.fg("accent", `${turns.length} turnos auditados`),
     }),
     content: (_done, theme, tui) => {
@@ -30,7 +30,7 @@ export async function openSentinelViewer(
         recorder: globalSentinelRecorder,
         projectRoot: ctx.cwd || process.cwd(),
         initialMode,
-        maxRows: () => Math.max(12, Math.floor(((tui as any)?.terminal?.rows ?? process.stdout?.rows ?? 35) * 0.88) - 6),
+        maxRows: 34,
         requestRender: () => tui.requestRender(),
       });
     },

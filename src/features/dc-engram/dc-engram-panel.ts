@@ -13,6 +13,7 @@ import { justifyRow } from "../../ui/dc-row.ts";
 import { dcClipboard } from "../../integrations/dc-clipboard/dc-clipboard.ts";
 import { openProjectDashboard } from "./dc-engram-enroll-panel.ts";
 import { getProjectObservations, resolveEngramProjectName, type EngramObservation } from "./dc-engram-db.ts";
+import { formatEngramMarkdownLines } from "../dc-sentinel/views/dc-sentinel-panel.ts";
 
 export interface EngramPanelOptions {
   theme: Pick<Theme, "fg" | "bg" | "bold">;
@@ -96,8 +97,8 @@ export class EngramPanel implements Component {
     if (typeof this.maxRowsOption === "number") {
       return Math.max(12, this.maxRowsOption);
     }
-    const termRows = process.stdout?.rows ?? 35;
-    return Math.max(12, Math.floor(termRows * 0.85) - 6);
+    // Alto fijo constante de 34 filas (32 de cuerpo + 2 de cabecera)
+    return 34;
   }
 
   private adjustListScroll(): void {
@@ -146,7 +147,11 @@ export class EngramPanel implements Component {
     lines.push(`${pad(headerLeft, leftW)} ${t.fg("border", "│")} ${pad(headerRight, rightW)}`);
     lines.push(`${t.fg("border", "─".repeat(leftW))}─┼─${t.fg("border", "─".repeat(rightW))}`);
 
-    // Si no hay observaciones en general o tras el filtro
+    // Altura del cuerpo visible siempre fija
+    const availableRows = Math.max(10, this.getMaxRows() - this.headerRows);
+    this.lastRowsCount = availableRows;
+
+    // Si no hay observaciones en general o tras el filtro: mantener SIEMPRE el mismo alto fijo
     if (filtered.length === 0) {
       const emptyMsg = total === 0
         ? `  ${t.fg("dim", "(sin memorias guardadas)")}`
@@ -156,59 +161,27 @@ export class EngramPanel implements Component {
         : `  ${t.fg("dim", "Probá con otro término o presioná Esc para limpiar.")}`;
 
       lines.push(`${pad(emptyMsg, leftW)} ${t.fg("border", "│")} ${pad(emptyDetail, rightW)}`);
-      for (let i = 0; i < 10; i++) {
+      for (let i = 1; i < availableRows; i++) {
         lines.push(`${" ".repeat(leftW)} ${t.fg("border", "│")} ${" ".repeat(rightW)}`);
       }
       return lines.map((l) => truncateToWidth(l, safeW, ""));
     }
 
-    // Altura del cuerpo visible
-    const availableRows = Math.max(10, this.getMaxRows() - this.headerRows);
-    this.lastRowsCount = availableRows;
     this.adjustListScroll();
 
-    // 1. Preparar detalle derecho
+    // 1. Preparar detalle derecho con formato Markdown rico
     const current = filtered[this.selectedIndex] || filtered[0]!;
     const rightContent: string[] = [];
 
-    rightContent.push(` 📌 ${t.bold(t.fg("accent", `ID: #${current.id}`))}  ${t.fg("dim", "·")}  ${t.fg("accent", `[${current.type}]`)}  ${t.fg("dim", "·")}  Scope: ${t.fg("text", current.scope)}`);
+    rightContent.push(` 📌 ${t.bold(t.fg("accent", `ID: #${current.id}`))}  ${t.fg("dim", "·")}  ${t.fg("accent", `[${current.type.toUpperCase()}]`)}  ${t.fg("dim", "·")}  Scope: ${t.fg("text", current.scope)}`);
     rightContent.push(` 📅 ${t.fg("dim", current.created_at)}`);
     rightContent.push(t.fg("border", "─".repeat(Math.max(1, rightW - 2))));
     rightContent.push(` ${t.bold(t.fg("text", current.title))}`);
     rightContent.push("");
 
-    const contentRaw = current.content || "(Sin contenido)";
-    const paragraphs = contentRaw.split("\n");
-    for (const p of paragraphs) {
-      const trimmed = p.trim();
-      if (!trimmed) {
-        rightContent.push("");
-        continue;
-      }
-
-      const isHeaderPrefix = /^(what|why|where|learned|goal|instructions|discoveries|accomplished|next steps|relevant files):/i.test(trimmed);
-      let lineToWrap = trimmed;
-
-      if (isHeaderPrefix) {
-        const colonIdx = trimmed.indexOf(":");
-        const prefix = trimmed.slice(0, colonIdx + 1);
-        const rest = trimmed.slice(colonIdx + 1).trim();
-        lineToWrap = `${t.bold(t.fg("accent", prefix))} ${rest}`;
-      }
-
-      let currentLine = "";
-      const words = lineToWrap.split(/\s+/);
-      for (const w of words) {
-        if (visibleWidth(currentLine + " " + w) > rightW - 3) {
-          rightContent.push(` ${currentLine}`);
-          currentLine = w;
-        } else {
-          currentLine = currentLine ? `${currentLine} ${w}` : w;
-        }
-      }
-      if (currentLine) {
-        rightContent.push(` ${currentLine}`);
-      }
+    const formattedLines = formatEngramMarkdownLines(current.content, rightW, t);
+    for (const fl of formattedLines) {
+      rightContent.push(fl);
     }
 
     // Scroll vertical del detalle derecho
@@ -232,26 +205,10 @@ export class EngramPanel implements Component {
         const typeBadge = `[${obs.type}]`;
         const lineStr = ` #${obs.id} ${typeBadge} ${obs.title}`;
         
-        // Reservar 1 columna a la derecha para el scrollbar si hay overflow
-        const contentW = maxListScroll > 0 ? leftW - 2 : leftW - 1;
+        // Sin barra de scroll visual (scroll invisible ocupando todo el ancho)
+        const contentW = leftW - 1;
         const truncated = truncateToWidth(lineStr, contentW, "…");
-        const paddedContent = pad(` ${truncated}`, contentW);
-
-        // Carácter de scrollbar vertical en la lista izquierda
-        let scrollbarChar = " ";
-        if (maxListScroll > 0) {
-          if (r === 0) {
-            scrollbarChar = this.listScrollOffset > 0 ? t.fg("accent", "▲") : t.fg("dim", "░");
-          } else if (r === availableRows - 1) {
-            scrollbarChar = this.listScrollOffset < maxListScroll ? t.fg("accent", "▼") : t.fg("dim", "░");
-          } else {
-            const trackH = availableRows - 2;
-            const thumbPos = Math.round((this.listScrollOffset / maxListScroll) * (trackH - 1));
-            scrollbarChar = (r - 1) === thumbPos ? t.fg("accent", "█") : t.fg("dim", "░");
-          }
-        }
-
-        const fullLeft = `${paddedContent}${scrollbarChar}`;
+        const fullLeft = pad(` ${truncated}`, leftW);
         leftCell = isSelected
           ? t.bg("selectedBg", t.bold(t.fg("accent", fullLeft)))
           : t.fg("text", fullLeft);
@@ -338,19 +295,21 @@ export class EngramPanel implements Component {
       return true;
     }
 
-    // Scroll vertical del detalle derecho con Ctrl+Up / Ctrl+Down
+    // Scroll vertical del detalle derecho con Ctrl+Up / Ctrl+Down o j / k o [ / ]
     const isScrollDown =
       matchesKey(data, "ctrl+down") ||
       matchesKey(data, Key.ctrl("down")) ||
-      data === "\x1b[1;5B";
+      data === "\x1b[1;5B" ||
+      (this.searchInput.isEmpty() && (data === "j" || data === "]"));
 
     const isScrollUp =
       matchesKey(data, "ctrl+up") ||
       matchesKey(data, Key.ctrl("up")) ||
-      data === "\x1b[1;5A";
+      data === "\x1b[1;5A" ||
+      (this.searchInput.isEmpty() && (data === "k" || data === "["));
 
     if (isScrollDown) {
-      this.detailScrollOffset = Math.min(100, this.detailScrollOffset + 4);
+      this.detailScrollOffset += 4;
       this.requestRender();
       return true;
     }
