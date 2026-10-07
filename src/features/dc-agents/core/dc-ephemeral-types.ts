@@ -189,6 +189,9 @@ export type DcToolBrick =
   | "terminal"
   | "code-intel"
   | "web-search"
+  | "discussions"
+  | "github"
+  | "academic"
   | "browser"
   | "audio"
   | "services"
@@ -209,10 +212,16 @@ export const DC_TOOL_BRICKS: Record<DcToolBrick, string[]> = {
   "web-search": [
     "dc_web_search",
     "dc_web_fetch",
+  ],
+  "discussions": [
     "dc_discussion_search",
     "dc_discussion_answers_get",
+  ],
+  "github": [
     "dc_github_code_search",
     "dc_github_get",
+  ],
+  "academic": [
     "dc_research_search",
   ],
   "browser": [

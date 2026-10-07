@@ -11,6 +11,7 @@ import {
   prepareEphemeralAgent,
   cleanupEphemeralAgent,
 } from "../core/dc-ephemeral-manager.ts";
+import { executeResearchSwarm } from "../core/dc-research-swarm.ts";
 import type {
   DcEphemeralToolPreset,
   DcReasoningEffort,
@@ -161,6 +162,9 @@ export function registerDcEphemeralTools(pi: ExtensionAPI): void {
               "terminal",
               "code-intel",
               "web-search",
+              "discussions",
+              "github",
+              "academic",
               "browser",
               "audio",
               "services",
@@ -421,6 +425,88 @@ export function registerDcEphemeralTools(pi: ExtensionAPI): void {
 
         return {
           content: [{ type: "text", text: `Error al despachar subagente efímero: ${err.message}` }],
+          details: { error: err.message },
+          isError: true,
+        };
+      }
+    },
+  });
+
+  // 2. dc_research_swarm — Enjambre de Becarios Efímeros para Investigación Paralela
+  pi.registerTool({
+    name: "dc_research_swarm",
+    label: "DC Research Swarm",
+    description: "Despliega en paralelo un enjambre de subagentes becarios efímeros (Fan-Out / Fan-In) para investigar en simultáneo por canales especializados (web, docs oficiales, discusiones de comunidad, GitHub, papers y YouTube), cada uno con un taxi libre de la flota, consolidando un informe unificado.",
+    parameters: {
+      type: "object",
+      properties: {
+        query: {
+          type: "string",
+          description: "Tema o pregunta técnica de investigación profunda a distribuir entre los becarios.",
+        },
+        channels: {
+          type: "array",
+          items: {
+            type: "string",
+            enum: ["web", "docs", "discussions", "github", "academic", "youtube"],
+          },
+          description: "Canales especializados a consultar en paralelo (por defecto: ['web', 'docs', 'discussions', 'github']).",
+        },
+        outputDir: {
+          type: "string",
+          description: "Directorio opcional donde escribir report.md y sources.md (ej: './noticias/2026-10-07-tema/').",
+        },
+        model: {
+          type: "string",
+          description: "Override opcional de modelo para los becarios (default: gemini-3.8-flash-high).",
+        },
+        effort: {
+          type: "string",
+          enum: ["low", "medium", "high", "off"],
+          description: "Nivel de reasoning effort para los becarios.",
+        },
+      },
+      required: ["query"],
+    } as any,
+    async execute(_id, params: any, _signal, _onUpdate, ctx?: ExtensionContext): Promise<any> {
+      const sessionId = ctx?.sessionManager?.getSessionId?.() || `ambient-${Date.now()}`;
+      const parentModel = ctx?.model ? `${ctx.model.provider || "cpam"}/${ctx.model.id}` : undefined;
+      let parentEffort: string | undefined;
+
+      try {
+        if (typeof (pi as any).getThinkingLevel === "function") {
+          parentEffort = (pi as any).getThinkingLevel();
+        }
+      } catch {
+        /* ignore */
+      }
+
+      try {
+        const swarmResult = await executeResearchSwarm(
+          {
+            query: params.query,
+            channels: params.channels,
+            outputDir: params.outputDir,
+            model: params.model,
+            effort: params.effort,
+            sessionId,
+          },
+          {
+            sessionId,
+            parentModel,
+            parentEffort,
+            pid: process.pid,
+            executeToolFn: (name, p) => (ctx as any)?.executeTool?.(name, p),
+          },
+        );
+
+        return {
+          content: [{ type: "text", text: swarmResult.reportMarkdown }],
+          details: swarmResult,
+        };
+      } catch (err: any) {
+        return {
+          content: [{ type: "text", text: `Error en dc_research_swarm: ${err.message}` }],
           details: { error: err.message },
           isError: true,
         };
