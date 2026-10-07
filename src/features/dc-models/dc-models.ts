@@ -53,6 +53,11 @@ export async function openModelsSelector(
   // 1. Fetch available models from Pi model registry / runtime (respetando scopedModels si existen)
   let models: ModelItem[] = [];
   try {
+    await (ctx as any).modelRegistry?.refresh?.({ allowNetwork: false });
+  } catch {
+    /* ignore refresh error */
+  }
+  try {
     const scoped = (ctx as any).scopedModels as unknown as Array<{ model?: ModelItem } | ModelItem> | undefined;
     if (scoped && scoped.length) {
       models = scoped.map((s) => (s as { model?: ModelItem }).model ?? (s as ModelItem));
