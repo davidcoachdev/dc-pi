@@ -21,7 +21,7 @@ Do not use for purely backend, CLI, or database tasks.
 
 ## Hard Rules
 
-- **Isolated Execution**: When reviewing complex UI trees or multi-component layouts, delegate inspection to subagent `ui-visual-inspector` to prevent context inflation.
+- **Isolated Execution**: When reviewing complex UI trees or multi-component layouts, delegate inspection to ephemeral subagent via `dc_ephemeral_agent_run` with `archetype: "dc-ui-visual-inspector"` to prevent context inflation.
 - **Fail on Arbitrary Values**: Flag hardcoded, arbitrary spacing or font classes (`w-[273px]`, `text-[11px]`) as anti-patterns when design system equivalents exist.
 - **Check Mobile Breakpoints**: Never approve frontend changes without verifying the mobile breakpoint (375px width). Layouts that create unexpected horizontal scrollbars must be flagged as blockers.
 - **Auditor Does Not Fix**: The inspector reports findings and provides exact CSS/Tailwind replacement recommendations. Code fixes must be applied by a dedicated worker under human review.
@@ -40,7 +40,7 @@ Do not use for purely backend, CLI, or database tasks.
 1. **Identify Modified Components**:
    - Run `git diff --name-only` to locate modified `.tsx`, `.vue`, `.jsx`, `.html`, or `.css` files.
 2. **Launch Visual Inspector**:
-   - Call `subagent_run` with `agent: "ui-visual-inspector"` and label `"audit ui layout"`.
+   - Call `dc_ephemeral_agent_run` with `archetype: "dc-ui-visual-inspector"`, `role: "dc-ui-visual-inspector"` and label `"audit ui layout"`.
    - Provide modified file paths and relevant design criteria in `task`.
 3. **Review Report**:
    - Examine detected blockers (overflows, text clippings, broken grids).

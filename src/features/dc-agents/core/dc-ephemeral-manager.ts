@@ -22,6 +22,7 @@ import {
   DC_TOOL_BRICKS,
   DC_BEHAVIOR_BRICKS,
   DC_AGENT_ARCHETYPES,
+  DC_ARCHETYPE_ALIASES,
 } from "./dc-ephemeral-types.ts";
 import { leaseTaxi, releaseTaxi } from "./dc-taxi-dispatcher.ts";
 import { calibrateEffortForTask, loadDcAgentsConfig, resolveExecutionModel } from "./dc-effort-policy.ts";
@@ -57,10 +58,14 @@ export interface AssembledLegoPlan {
  * a partir de un Arquetipo Canónico o de bloques individuales (toolBricks + behaviorBricks).
  */
 export function assembleLegoAgentPlan(options: DcEphemeralTaskOptions): AssembledLegoPlan {
-  // 1. Resolver Arquetipo Canónico si fue solicitado
+  // 1. Resolver Arquetipo Canónico si fue solicitado (normalizando alias al canónico dc-*)
+  const canonicalArchetype = options.archetype
+    ? (DC_ARCHETYPE_ALIASES[options.archetype] || options.archetype)
+    : undefined;
+
   let archetypeDef: DcArchetypeDefinition | undefined;
-  if (options.archetype && DC_AGENT_ARCHETYPES[options.archetype]) {
-    archetypeDef = DC_AGENT_ARCHETYPES[options.archetype];
+  if (canonicalArchetype && DC_AGENT_ARCHETYPES[canonicalArchetype]) {
+    archetypeDef = DC_AGENT_ARCHETYPES[canonicalArchetype];
   }
 
   // 2. Resolver herramientas aisladas
@@ -138,7 +143,7 @@ export function assembleLegoAgentPlan(options: DcEphemeralTaskOptions): Assemble
   return {
     tools: Array.from(toolSet),
     directives: Array.from(directiveSet),
-    archetype: options.archetype,
+    archetype: canonicalArchetype || options.archetype,
     recommendedModel: archetypeDef?.recommendedModel,
     defaultEffort: archetypeDef?.defaultEffort,
   };
