@@ -210,6 +210,9 @@ export function prepareEphemeralAgent(
     fs.mkdirSync(agentsDir, { recursive: true });
   }
 
+  // Purgar proactivamente cualquier definición huérfana de más de 15 min antes de crear una nueva
+  dcCleanOrphanedEphemeralAgents();
+
   const agentFilePath = path.join(agentsDir, `${agentName}.md`);
 
   // 1. Ensamblar plan de herramientas y directivas vía Motor de Legos
