@@ -42,3 +42,9 @@
 - **Prompt Usuario:** "commit"
 - **Pre-Flight Recall Activo:** `Fix bottom commit visibility in dc-git-graph panel`, `Unify semantic color for commit prefix and PR number in dc-git-graph`, `Structure sidebar enhancements into atomic work-unit commits`
 - **Herramientas Ejecutadas:** `bash`, `bash`, `bash`, `bash`, `bash`, `bash`, `bash`, `bash`, `bash`
+### Turno: turn-27-1791445327522 (2026-10-08T07:42:07.522Z)
+- **Prompt Usuario:** "merge"
+- **Pre-Flight Recall Activo:** `Merge feat/dc-ephemeral-subagents-migration into master with --no-ff`, `decision: merge feat/dc-ephemeral-lego-catalog to master`, `decision: merge feat/dc-ephemeral-agents to master`
+- **Herramientas Ejecutadas:** `bash`, `bash`, `bash`, `bash`, `bash`, `bash`, `bash`, `mem_save`
+- **⚠️ Errores / Alertas:**
+  - [bash Error]: ""
