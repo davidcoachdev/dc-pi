@@ -1,10 +1,10 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { classifyShellCommand, GUARDED_TOOLS } from "./dc-scan-guard.ts";
+import { classifyShellCommand, classifyNativeToolScan, GUARDED_TOOLS } from "./dc-scan-guard.ts";
 
 interface PiToolCallEvent {
   toolName?: string;
-  input?: { command?: unknown };
-  args?: { command?: unknown };
+  input?: Record<string, unknown>;
+  args?: Record<string, unknown>;
 }
 
 interface PiToolCallResult {
@@ -17,11 +17,25 @@ export function handleToolCall(event: PiToolCallEvent): PiToolCallResult | undef
     if (!event || typeof event.toolName !== "string") return undefined;
     if (!GUARDED_TOOLS.has(event.toolName)) return undefined;
 
-    const command = event.input?.command ?? event.args?.command;
-    const decision = classifyShellCommand(command);
-    if (decision.block && decision.reason) {
-      return { block: true, reason: decision.reason };
+    const rawInput = event.input ?? event.args;
+
+    // 1. Verificación para herramientas shell (bash, sh)
+    if (event.toolName === "bash" || event.toolName === "shell" || event.toolName === "sh") {
+      const command = rawInput?.command;
+      const decision = classifyShellCommand(command);
+      if (decision.block && decision.reason) {
+        return { block: true, reason: decision.reason };
+      }
     }
+
+    // 2. Verificación para herramientas nativas de búsqueda (grep, find)
+    if (event.toolName === "grep" || event.toolName === "find") {
+      const decision = classifyNativeToolScan(event.toolName, rawInput);
+      if (decision.block && decision.reason) {
+        return { block: true, reason: decision.reason };
+      }
+    }
+
     return undefined;
   } catch {
     return undefined;

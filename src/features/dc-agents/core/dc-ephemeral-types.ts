@@ -264,7 +264,8 @@ export type DcBehaviorBrick =
   | "source-verification"
   | "bounded-worker"
   | "dag-planning"
-  | "verify-independent";
+  | "verify-independent"
+  | "scoped-search";
 
 export const DC_BEHAVIOR_BRICKS: Record<DcBehaviorBrick, string> = {
   "strict-tdd":
@@ -283,6 +284,8 @@ export const DC_BEHAVIOR_BRICKS: Record<DcBehaviorBrick, string> = {
     "Diseña el plan como un Grafo Acíclico Dirigido (DAG) acíclico y topológicamente ejecutable. Define 'Allowed edit surfaces' explícitas sin '.' ni rutas absolutas. Asigna dependencias explícitas por tarea (T1, T2...) sin referencias circulares ni hacia adelante. Limita cada tarea a un presupuesto de revisión razonable (~150 líneas).",
   "verify-independent":
     "Opera como auditor independiente sin asumir que los reportes previos son ciertos. Ejecuta personalmente los tests y aserciones. Audita la disciplina TDD y rechaza tajantemente pruebas con tautologías (assert.ok(true)), tests que solo comprueben tipos sin comportamiento, o suites vacías.",
+  "scoped-search":
+    "Prohibido terminantemente ejecutar grep, find o escaneos recursivos en la raíz del sistema (/), en raíz de usuario (~ o /home/*) o en directorios padre genéricos. Todo comando de búsqueda o análisis debe acotarse estrictamente al directorio relativo del proyecto actual o a una subcarpeta concreta (ej: 'src/', 'lib/', 'test/').",
 };
 
 export type DcAgentArchetype =

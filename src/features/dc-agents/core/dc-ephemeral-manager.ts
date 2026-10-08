@@ -136,9 +136,10 @@ export function assembleLegoAgentPlan(options: DcEphemeralTaskOptions): Assemble
     }
   }
 
-  // Asegurar siempre contrato de artefacto y directiva de texto visible
+  // Asegurar siempre contrato de artefacto, directiva de texto visible y búsqueda acotada anti-hang
   directiveSet.add(DC_BEHAVIOR_BRICKS["artifact-contract"]);
   directiveSet.add(DC_BEHAVIOR_BRICKS["non-empty-response"]);
+  directiveSet.add(DC_BEHAVIOR_BRICKS["scoped-search"]);
 
   return {
     tools: Array.from(toolSet),
