@@ -7,12 +7,14 @@
  * pseudo-filesystems in Linux).
  */
 
+import * as os from "node:os";
+
 export interface ScanGuardDecision {
   block: boolean;
   reason?: string;
 }
 
-export const GUARDED_TOOLS: ReadonlySet<string> = new Set(["bash", "shell", "sh"]);
+export const GUARDED_TOOLS: ReadonlySet<string> = new Set(["bash", "shell", "sh", "grep", "find"]);
 
 /**
  * Checks if a token represents a filesystem root.
@@ -34,6 +36,14 @@ export function isRootPath(token: string): boolean {
   const home = t.replace(/[/\\]$/, "");
   if (home === "$HOME" || home === "${HOME}") return true;
   if (/^%(USERPROFILE|HOMEPATH|HOMEDRIVE|HOME)%$/i.test(home)) return true;
+
+  // Real user home directory (ej: /home/dc-studio o C:\Users\dc-studio)
+  try {
+    const userHome = os.homedir().replace(/[/\\]$/, "");
+    if (userHome && home === userHome) return true;
+  } catch {
+    /* ignore */
+  }
 
   return false;
 }
@@ -103,5 +113,24 @@ export function classifyShellCommand(command: unknown): ScanGuardDecision {
       return { block: true, reason: blockReason(command) };
     }
   }
+  return { block: false };
+}
+
+/**
+ * Valida si los parámetros de herramientas nativas como `grep` o `find` apuntan a raíces peligrosas.
+ */
+export function classifyNativeToolScan(toolName: string, input: Record<string, unknown> | undefined): ScanGuardDecision {
+  if (!input || typeof input !== "object") return { block: false };
+
+  const targetPath = (input.path || input.directory || input.dir) as string | undefined;
+  if (typeof targetPath === "string" && isRootPath(targetPath)) {
+    return {
+      block: true,
+      reason: `dc-scan-guard: se bloqueó la invocación de \`${toolName}\` en la raíz \`${targetPath}\`. ` +
+        `Buscar en \`/\`, \`~\` o el home del usuario colgará el proceso indefinidamente con miles de gigabytes. ` +
+        `Acotá la búsqueda a una subcarpeta concreta o relativa (ej: \`src/\`, \`lib/\`).`,
+    };
+  }
+
   return { block: false };
 }

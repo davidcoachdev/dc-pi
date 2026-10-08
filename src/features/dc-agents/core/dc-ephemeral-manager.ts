@@ -136,9 +136,10 @@ export function assembleLegoAgentPlan(options: DcEphemeralTaskOptions): Assemble
     }
   }
 
-  // Asegurar siempre contrato de artefacto y directiva de texto visible
+  // Asegurar siempre contrato de artefacto, directiva de texto visible y búsqueda acotada anti-hang
   directiveSet.add(DC_BEHAVIOR_BRICKS["artifact-contract"]);
   directiveSet.add(DC_BEHAVIOR_BRICKS["non-empty-response"]);
+  directiveSet.add(DC_BEHAVIOR_BRICKS["scoped-search"]);
 
   return {
     tools: Array.from(toolSet),
@@ -208,6 +209,9 @@ export function prepareEphemeralAgent(
   if (!fs.existsSync(agentsDir)) {
     fs.mkdirSync(agentsDir, { recursive: true });
   }
+
+  // Purgar proactivamente cualquier definición huérfana de más de 15 min antes de crear una nueva
+  dcCleanOrphanedEphemeralAgents();
 
   const agentFilePath = path.join(agentsDir, `${agentName}.md`);
 

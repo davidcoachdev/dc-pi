@@ -112,6 +112,14 @@ export default function dcAgentsExtension(pi: ExtensionAPI): void {
       // 1. Sweeper de agentes efímeros huérfanos
       dcCleanOrphanedEphemeralAgents();
 
+      // Guardián anti-fantasma: los subagentes corren en modo RPC/headless y ya tienen
+      // su taxi asignado por prepareEphemeralAgent(). Solo la terminal interactiva
+      // principal del usuario (orquestador) debe adquirir y cambiar su taxi de orquestador.
+      const isSubagentOrRpc = !ctx.hasUI || ctx.mode === "rpc" || process.argv.includes("rpc");
+      if (isSubagentOrRpc) {
+        return;
+      }
+
       // 2. Sistema de Taxis: Adquirir taxi libre para este orquestador
       const currentModelId = ctx.model ? `${ctx.model.provider || "cpam"}/${ctx.model.id}` : undefined;
       const sessionId = ctx.sessionManager?.getSessionId?.() || `ambient-${Date.now()}`;
@@ -169,6 +177,7 @@ export default function dcAgentsExtension(pi: ExtensionAPI): void {
   // Al cerrar o apagar sesión, liberar el taxi del orquestador
   pi.on("session_shutdown", (_event, ctx) => {
     try {
+      if (!ctx.hasUI || ctx.mode === "rpc" || process.argv.includes("rpc")) return;
       const sessionId = ctx.sessionManager?.getSessionId?.() || `ambient-${Date.now()}`;
       releaseOrchestratorTaxi(sessionId, process.pid);
     } catch {
@@ -179,7 +188,9 @@ export default function dcAgentsExtension(pi: ExtensionAPI): void {
   // Salida de proceso limpia (anti-zombi)
   process.on("exit", () => {
     try {
-      releaseOrchestratorTaxi(undefined, process.pid);
+      if (!process.argv.includes("rpc")) {
+        releaseOrchestratorTaxi(undefined, process.pid);
+      }
     } catch {
       /* noop */
     }
@@ -188,6 +199,7 @@ export default function dcAgentsExtension(pi: ExtensionAPI): void {
   // Sincronizar el taxi si cambia el modelo en caliente
   pi.on("model_select", (_event, ctx) => {
     try {
+      if (!ctx.hasUI || ctx.mode === "rpc" || process.argv.includes("rpc")) return;
       const currentModelId = ctx.model ? `${ctx.model.provider || "cpam"}/${ctx.model.id}` : undefined;
       const sessionId = ctx.sessionManager?.getSessionId?.() || `ambient-${Date.now()}`;
       syncOrchestratorTaxi(sessionId, currentModelId);

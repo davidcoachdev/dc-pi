@@ -370,7 +370,11 @@ export class DcAgentsPanel implements Component {
       }
       rightLines.push("");
       rightLines.push(` ${dim("Invocación: El orquestador delega automáticamente tareas a este subagente")}`);
-      rightLines.push(` ${dim("según las directivas de ODD, o explícitamente mediante subagent_run.")}`);
+      if (a.filePath.includes("efímero")) {
+        rightLines.push(` ${dim("de forma aislada bajo demanda mediante dc_ephemeral_agent_run.")}`);
+      } else {
+        rightLines.push(` ${dim("según las directivas de ODD, o explícitamente mediante subagent_run.")}`);
+      }
     }
 
     // Scroll vertical del detalle si está activo

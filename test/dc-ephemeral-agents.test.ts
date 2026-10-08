@@ -876,14 +876,19 @@ test("dc-ephemeral-tools: registerDcEphemeralTools registers tool in ExtensionAP
 
   registerDcEphemeralTools(fakePi);
 
-  assert.equal(registered.length, 1);
-  assert.equal(registered[0].name, "dc_ephemeral_agent_run");
-  assert.ok(registered[0].parameters.properties.task);
-  assert.ok(registered[0].parameters.properties.archetype);
-  assert.ok(registered[0].parameters.properties.toolBricks);
-  assert.ok(registered[0].parameters.properties.behaviorBricks);
-  assert.ok(registered[0].parameters.properties.toolPreset);
-  assert.ok(registered[0].parameters.properties.effort);
+  assert.equal(registered.length, 2);
+  const ephemTool = registered.find((t) => t.name === "dc_ephemeral_agent_run");
+  const swarmTool = registered.find((t) => t.name === "dc_research_swarm");
+
+  assert.ok(ephemTool, "dc_ephemeral_agent_run must be registered");
+  assert.ok(swarmTool, "dc_research_swarm must be registered");
+
+  assert.ok(ephemTool.parameters.properties.task);
+  assert.ok(ephemTool.parameters.properties.archetype);
+  assert.ok(ephemTool.parameters.properties.toolBricks);
+  assert.ok(ephemTool.parameters.properties.behaviorBricks);
+  assert.ok(ephemTool.parameters.properties.toolPreset);
+  assert.ok(ephemTool.parameters.properties.effort);
 });
 
 test("dc-ephemeral-tools: dc_ephemeral_agent_run executes with archetype and cleans up in finally", async () => {

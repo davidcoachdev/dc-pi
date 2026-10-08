@@ -124,6 +124,11 @@ export default function dcReloadExtension(
 
     try {
       if ((event as { reason?: string })?.reason === "reload") {
+        try {
+          void (ctx as any).modelRegistry?.refresh?.({ allowNetwork: false })?.catch?.(() => {});
+        } catch {
+          /* noop */
+        }
         const sent = notifier.notifyHerdr(RELOAD_TITLE, RELOAD_BODY);
         if (!sent && ctx.hasUI) {
           dcNotifier.notify(ctx, RELOAD_BODY, "info");

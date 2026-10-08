@@ -127,3 +127,23 @@ Abre una ventana modal (`88% x 82%`) con 3 pestañas y buscador integrado:
 1. **[1] Flota en Vivo:** Lista todas las unidades (`ac01`..`ac10`), su estado (`LIBRE`, `OCUPADO`, `RECARGANDO`), barras de progreso de cuota 5h/Semanal y qué agente o sesión la está utilizando. Presionar `Enter` o `Espacio` sobre una unidad abre la vista de telemetría detallada de esa cuenta.
 2. **[2] Historial & Tokens:** Registro de los últimos 100 viajes con duración, tokens de entrada/salida/razonamiento, costo estimado y ranking de consumo por subagente.
 3. **[3] Bitácora (Logs):** Flujo de eventos estructurados de arriendo, liberación, enfriamiento y errores (`~/.pi/agent/dc-studio/dc-taxis.log`).
+
+---
+
+## 4. Enjambre de Becarios Efímeros (`dc_research_swarm` — Fan-Out / Fan-In)
+
+Para investigaciones técnicas profundas, en lugar de que un solo subagente consulte secuencialmente múltiples fuentes durante minutos, la herramienta `dc_research_swarm` implementa un patrón **Fan-Out / Fan-In**:
+
+1. **Fan-Out Paralelo:** Dispara concurrentemente un enjambre de subagentes becarios efímeros (`dc-scout-*`), uno por canal especializado:
+   - **`web` (`dc-scout-web`):** Búsqueda web general (`dc_web_search`, `dc_web_fetch`).
+   - **`docs` (`dc-scout-docs`):** Documentación técnica oficial y PDFs (`dc_context7_*`, `dc_pdf_extract`).
+   - **`discussions` (`dc-scout-community`):** Discusiones y bugs de comunidad (`dc_discussion_*` en Hacker News y Stack Overflow).
+   - **`github` (`dc-scout-github`):** Código e implementaciones reales (`dc_github_*`, `dc_codegraph_*`).
+   - **`academic` (`dc-scout-academic`):** Papers formales en ArXiv y OpenAlex (`dc_research_search`).
+   - **`youtube` (`dc-scout-media`):** Conferencias técnicas y transcripciones (`dc_youtube_*`).
+2. **Aislamiento Multiproceso & Taxis:** Cada becario arrienda una unidad diferente de la **Flota de Taxis** (`ac01`-`ac23`) y carga estrictamente su bloque de herramientas (*Tool Brick*).
+3. **Resiliencia con `Promise.allSettled`:** Si un canal falla o no encuentra resultados, los demás continúan y entregan su evidencia normalmente sin interrumpir la investigación.
+4. **Fan-In (Síntesis):** El orquestador unifica las respuestas y genera de forma determinista dos artefactos:
+   - `report.md`: Síntesis ejecutiva multicanal en prosa limpia.
+   - `sources.md`: Matriz de fuentes consultadas, tiempos de ejecución y taxis utilizados.
+5. **Fresh Context Loop:** Todos los archivos temporales de los becarios (`dc-ephem-*.md`) se autodestruyen en el bloque `finally` y sus taxis vuelven al estado `libre`.
