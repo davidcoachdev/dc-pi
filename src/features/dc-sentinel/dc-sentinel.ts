@@ -17,6 +17,7 @@ import {
   extractSessionGitStats,
 } from "./core/dc-sentinel-deterministic-extractor.ts";
 import { globalLeaseManager } from "./core/dc-sentinel-lease.ts";
+import { appendDcSystemPromptOnce } from "../../core/dc-append-system-prompt.ts";
 
 /**
  * Agrega el bloque de memoria histórica de forma idempotente a appendSystemPrompt
@@ -26,10 +27,7 @@ export function appendRecallToPromptOptions(
   options: { appendSystemPrompt?: string } | undefined,
   block: string,
 ): void {
-  if (!options || !block) return;
-  const current = options.appendSystemPrompt ?? "";
-  if (current.includes("dc:sentinel:recall:start")) return; // Idempotencia estricta
-  options.appendSystemPrompt = current ? `${current}\n\n${block}` : block;
+  appendDcSystemPromptOnce(options, block, "dc:sentinel:recall:start");
 }
 
 export interface DcSentinelExtensionOptions {

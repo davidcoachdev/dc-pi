@@ -1,4 +1,5 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { appendDcSystemPromptOnce } from "../../core/dc-append-system-prompt.ts";
 import { dcNotifier } from "../../integrations/dc-notify/dc-notifier.ts";
 import { inspectGitSync } from "./core/dc-git-sync-inspector.ts";
 import type { GitSyncDiagnostic } from "./core/dc-git-sync-types.ts";
@@ -18,7 +19,7 @@ export default function dcGitSyncExtension(pi: ExtensionAPI): void {
   });
 
   // Chequeo único no invasivo al arrancar el agente en Turn 1
-  pi.on("before_agent_start", async (_event, ctx) => {
+  pi.on("before_agent_start", async (event: any, ctx) => {
     if (hasCheckedThisSession) return;
     hasCheckedThisSession = true;
 
@@ -37,9 +38,11 @@ export default function dcGitSyncExtension(pi: ExtensionAPI): void {
         }
         dcNotifier.notifyHerdr(`DC Git Sync: ${diag.summary}`);
 
-        // Inyectar mensaje informativo no bloqueante en el contexto del agente si la API lo permite
-        if (typeof (ctx as any).injectSystemMessage === "function") {
-          (ctx as any).injectSystemMessage(`[DC Git Sync]: ${diag.summary}${diag.recommendation ? ` Requisito: ${diag.recommendation}` : ""}`);
+        const syncNotice = `[DC Git Sync]: ${diag.summary}${diag.recommendation ? ` Requisito: ${diag.recommendation}` : ""}`;
+        if (event?.systemPromptOptions && typeof event.systemPromptOptions === "object") {
+          appendDcSystemPromptOnce(event.systemPromptOptions, syncNotice, "[DC Git Sync]:");
+        } else if (typeof (ctx as any).injectSystemMessage === "function") {
+          (ctx as any).injectSystemMessage(syncNotice);
         }
       }
     } catch {
