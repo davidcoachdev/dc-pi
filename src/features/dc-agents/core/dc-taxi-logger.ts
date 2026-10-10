@@ -31,16 +31,18 @@ export function appendTaxiLog(
   try {
     ensureLogDirectory();
 
-    // Rotar / truncar defensivamente si excede 2MB
+    // Rotar / truncar defensivamente y de forma atómica si excede 2MB
     if (fs.existsSync(logPath)) {
       try {
         const stats = fs.statSync(logPath);
         if (stats.size > MAX_LOG_SIZE_BYTES) {
           const content = fs.readFileSync(logPath, "utf8");
           const lines = content.split("\n");
-          // Conservar la mitad más reciente
-          const pruned = lines.slice(Math.floor(lines.length / 2)).join("\n");
-          fs.writeFileSync(logPath, pruned, "utf8");
+          // Conservar las últimas 1000 líneas más recientes
+          const pruned = lines.slice(-1000).join("\n") + "\n";
+          const tmpPath = `${logPath}.tmp.${Date.now()}.${Math.random().toString(36).slice(2)}`;
+          fs.writeFileSync(tmpPath, pruned, "utf8");
+          fs.renameSync(tmpPath, logPath);
         }
       } catch {
         /* ignore size check errors */

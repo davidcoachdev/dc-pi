@@ -6,6 +6,9 @@
  * Cumple con la Directiva 1 de DC Studio.
  */
 
+import * as fs from "node:fs";
+import * as path from "node:path";
+import * as os from "node:os";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import {
   prepareEphemeralAgent,
@@ -30,6 +33,83 @@ export interface ExtractedSubagentMetrics {
     total?: number;
   };
   costEstimated?: number;
+}
+
+interface BackgroundEphemeralTracking {
+  plan: NonNullable<ReturnType<typeof prepareEphemeralAgent>>;
+  sessionId: string;
+  startedAt: number;
+  taskId?: string;
+}
+
+const activeBackgroundPlans = new Map<string, BackgroundEphemeralTracking>();
+let backgroundSweeperTimer: NodeJS.Timeout | undefined;
+
+/**
+ * Sweeper periódico de tareas en background: verifica gentle-agents/tasks/
+ * y libera el taxi a la flota apenas la tarea cambia a 'completed', 'failed' o 'stopped'.
+ */
+function ensureBackgroundSweeper(): void {
+  if (backgroundSweeperTimer) return;
+
+  backgroundSweeperTimer = setInterval(() => {
+    if (activeBackgroundPlans.size === 0) return;
+
+    const now = Date.now();
+    const tasksDir = path.join(os.homedir(), ".pi", "agent", "gentle-agents", "tasks");
+
+    for (const [key, item] of Array.from(activeBackgroundPlans.entries())) {
+      let isDone = false;
+      let finalStatus: "completed" | "failed" | "timeout" = "completed";
+
+      if (item.taskId && fs.existsSync(tasksDir)) {
+        const taskFilePath = path.join(tasksDir, `${item.taskId}.json`);
+        if (fs.existsSync(taskFilePath)) {
+          try {
+            const raw = fs.readFileSync(taskFilePath, "utf8");
+            const parsed = JSON.parse(raw);
+            const status = parsed?.task?.status;
+            if (status === "completed" || status === "failed" || status === "stopped" || status === "aborted") {
+              isDone = true;
+              finalStatus = status === "completed" ? "completed" : "failed";
+            }
+          } catch {
+            /* ignore read error */
+          }
+        }
+      }
+
+      // Timeout defensivo de seguridad si la tarea desapareció o tardó más de 12 minutos
+      if (!isDone && now - item.startedAt > 12 * 60 * 1000) {
+        isDone = true;
+        finalStatus = "timeout";
+      }
+
+      if (isDone) {
+        activeBackgroundPlans.delete(key);
+        try {
+          cleanupEphemeralAgent(item.plan, {
+            sessionId: item.sessionId,
+            startedAt: item.startedAt,
+            endedAt: now,
+            status: finalStatus,
+            taskId: item.taskId,
+          });
+          appendTaxiLog("INFO", "EPHEMERAL_AGENT_BACKGROUND_REAPED", {
+            agent: item.plan.agentName,
+            account: item.plan.leasedAccount,
+            taskId: item.taskId,
+            durationMs: now - item.startedAt,
+            status: finalStatus,
+          });
+        } catch {
+          /* defensive */
+        }
+      }
+    }
+  }, 5000);
+
+  backgroundSweeperTimer.unref?.();
 }
 
 /**
@@ -392,14 +472,28 @@ export function registerDcEphemeralTools(pi: ExtensionAPI): void {
 
           if (plan) {
             if (plan.mode === "background") {
-              // En modo background NO destruimos el archivo .md ni liberamos el taxi sincrónicamente
-              // porque la tarea de fondo aún continúa corriendo.
-              // Registramos la delegación y dejamos que el ciclo de vida del subagente / TTL gestione su liberación.
+              // Extraer el taskId asignado por subagent_run para el seguimiento de background
+              const extractedTaskId =
+                subagentResult?.details?.taskId ||
+                subagentResult?.details?.task_id ||
+                (typeof subagentResult?.content?.[0]?.text === "string"
+                  ? subagentResult.content[0].text.match(/[a-z0-9]{8}-[0-9]-[a-z0-9]+/i)?.[0]
+                  : undefined);
+
+              activeBackgroundPlans.set(plan.ephemeralId, {
+                plan,
+                sessionId,
+                startedAt,
+                taskId: extractedTaskId,
+              });
+              ensureBackgroundSweeper();
+
               appendTaxiLog("INFO", "EPHEMERAL_AGENT_BACKGROUND_DELEGATED", {
                 agent: plan.agentName,
                 account: plan.leasedAccount,
                 model: plan.fullModelRef,
                 sessionId,
+                taskId: extractedTaskId,
               });
             } else {
               // Limpieza garantizada sincrónica: libera el taxi, borra el markdown y anota el viaje en el histórico

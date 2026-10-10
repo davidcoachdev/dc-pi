@@ -17,6 +17,7 @@ import {
   getFleetStatusSummary,
   acquireOrchestratorTaxi,
   releaseOrchestratorTaxi,
+  syncActivePiSessionsFromOs,
   withFleetLock,
 } from "../src/features/dc-agents/core/dc-taxi-dispatcher.ts";
 
@@ -608,6 +609,59 @@ test("dc-taxi-dispatcher: acquireOrchestratorTaxi auto-binds free CPAM taxi when
     assert.equal(resNoModel.modelId, "cpam/ac02/gemini-3.8-flash-high");
   } finally {
     fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("dc-taxi-dispatcher: leaseTaxi selects available unit with highest quota", () => {
+  const tempDir = createTempDir("lease-quota-priority");
+  const fleetPath = path.join(tempDir, "dc-taxis.json");
+
+  try {
+    const customAccounts = ["ac01", "ac02", "ac03"];
+    saveFleetState(createInitialFleetState(customAccounts), fleetPath);
+
+    // ac01: 20% cuota, ac02: 85% cuota, ac03: 45% cuota
+    const customQuotas = (ac: string) => {
+      if (ac === "ac01") return { account: "ac01", gemini5hPct: 20, geminiWeeklyPct: 50, lastChecked: Date.now() };
+      if (ac === "ac02") return { account: "ac02", gemini5hPct: 85, geminiWeeklyPct: 90, lastChecked: Date.now() };
+      if (ac === "ac03") return { account: "ac03", gemini5hPct: 45, geminiWeeklyPct: 70, lastChecked: Date.now() };
+      return undefined;
+    };
+
+    const lease = leaseTaxi(
+      {
+        type: "ephemeral_subagent",
+        sessionId: "sess-q",
+        pid: process.pid,
+        model: "gemini-3.8-flash-high",
+      },
+      undefined,
+      fleetPath,
+      300000,
+      customAccounts,
+      customQuotas,
+    );
+
+    assert.ok(lease);
+    // Debe seleccionar ac02 porque tiene 85% (mayor cuota disponible)
+    assert.equal(lease.account, "ac02");
+    assert.equal(lease.unit.status, "ocupado");
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("dc-taxi-dispatcher: syncActivePiSessionsFromOs never auto-assigns unknown OS processes as orchestrator", () => {
+  const customAccounts = ["ac01", "ac02"];
+  const state = createInitialFleetState(customAccounts);
+
+  // Llamar a syncActivePiSessionsFromOs sobre el estado con cuentas libres
+  syncActivePiSessionsFromOs(state);
+
+  // Todas las cuentas deben permanecer libres; jamás inventar pasajeros 'orchestrator'
+  for (const ac of customAccounts) {
+    assert.equal(state.fleet[ac].status, "libre");
+    assert.equal(state.fleet[ac].passenger, null);
   }
 });
 
