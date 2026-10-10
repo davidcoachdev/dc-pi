@@ -456,10 +456,15 @@ export function reapAbandonedTaxis(
 
     const passenger = unit.passenger;
     const isPidDead = !isProcessAlive(passenger.pid);
-    const isTtlExpired = now - (passenger.heartbeatAt || passenger.startedAt) > leaseTtlMs;
+    // Un orquestador interactivo en una terminal viva NUNCA expira por TTL.
+    // Solo se libera si su proceso en el sistema operativo murió realmente (isPidDead).
+    // El TTL de inactividad solo aplica a subagentes o procesos efímeros desatendidos.
+    const isTtlExpired =
+      passenger.type !== "orchestrator" &&
+      now - (passenger.heartbeatAt || passenger.startedAt) > leaseTtlMs;
 
     if (isPidDead || isTtlExpired) {
-      const reason = isPidDead ? `PID ${passenger.pid} no existe en OS` : `TTL expirado (${Math.round((now - passenger.heartbeatAt) / 1000)}s)`;
+      const reason = isPidDead ? `PID ${passenger.pid} no existe en OS` : `TTL expirado (${Math.round((now - (passenger.heartbeatAt || passenger.startedAt)) / 1000)}s)`;
       appendTaxiLog("WARN", "TAXI_ZOMBIE_REAPED", {
         account,
         reason,
