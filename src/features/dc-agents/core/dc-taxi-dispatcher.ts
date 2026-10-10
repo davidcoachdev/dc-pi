@@ -877,14 +877,6 @@ export function getFleetStatusSummary(
     }
   }
 
-  // Escaneo activo de procesos vivos del OS si estamos en entorno real
-  if (!allowedAccounts || allowedAccounts.length === 0) {
-    const newlySynced = syncActivePiSessionsFromOs(state);
-    if (newlySynced > 0) {
-      saveFleetState(state, fleetPath);
-    }
-  }
-
   const units = Object.values(state.fleet);
   const total = units.length;
   const libres = units.filter((u) => u.status === "libre").length;
