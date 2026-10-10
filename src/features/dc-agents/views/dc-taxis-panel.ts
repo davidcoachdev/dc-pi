@@ -474,11 +474,19 @@ export class DcTaxisPanel implements Component {
       const p = unit.passenger;
       const elapsedSec = Math.floor((Date.now() - p.startedAt) / 1000);
       const elapsedMin = (elapsedSec / 60).toFixed(1);
-      const pType = p.type === "orchestrator" ? "Orquestador (Sesión Principal)" : (p.type === "ephemeral_subagent" ? "Subagente Efímero (Fresh Context)" : "Subagente Estático");
+      const pType = p.type === "orchestrator"
+        ? "Orquestador (Sesión Principal)"
+        : (p.type === "ephemeral_subagent"
+          ? "Subagente Efímero (Worker Paralelo)"
+          : "Subagente Estático");
 
       lines.push(`  Tipo Pasajero:    ${th.bold(pType)}`);
       lines.push(`  Modelo Activo:    ${th.fg("accent", p.model || "gemini-3.8-flash-high")}`);
-      lines.push(`  PID / Proceso:    ${th.bold(String(p.pid))} (Activo en sistema operativo)`);
+
+      const pidAnnotation = p.type === "orchestrator"
+        ? th.fg("success", "(Terminal Interactiva Principal)")
+        : th.fg("dim", "(Worker Paralelo delegado por terminal)");
+      lines.push(`  PID / Proceso:    ${th.bold(String(p.pid))} ${pidAnnotation}`);
       lines.push(`  Sesión ID:        ${th.fg("dim", p.sessionId)}`);
       lines.push(`  Tarea / Misión:   ${th.bold(p.taskLabel || "Tarea interactiva")}`);
       lines.push(`  Tiempo en Curso:  ${th.bold(th.fg("accent", `${elapsedSec}s (~${elapsedMin}m)`))}`);
@@ -573,10 +581,13 @@ export class DcTaxisPanel implements Component {
 
       if (unit.passenger) {
         const p = unit.passenger;
-        const pType = p.type === "orchestrator" ? "Orquestador" : (p.type === "ephemeral_subagent" ? "Efímero" : "Subagente");
+        const pType = p.type === "orchestrator"
+          ? "Orquestador"
+          : (p.type === "ephemeral_subagent" ? "Efímero (Sub)" : "Subagente");
         passengerStr = (pType + " ".repeat(14)).slice(0, 14);
         modelStr = ((p.model?.split("/").pop() || p.model || "gemini") + " ".repeat(20)).slice(0, 20);
-        pidStr = (String(p.pid) + " ".repeat(7)).slice(0, 7);
+        const pidDisplay = p.type === "ephemeral_subagent" ? `↳${p.pid}` : String(p.pid);
+        pidStr = (pidDisplay + " ".repeat(7)).slice(0, 7);
 
         const elapsedSec = Math.floor((Date.now() - p.startedAt) / 1000);
         durationStr = `${elapsedSec}s`;
