@@ -520,6 +520,51 @@ test("dc-taxi-dispatcher: reapAbandonedTaxis auto-recovers dead PID and expired 
   }
 });
 
+test("dc-taxi-dispatcher: reapAbandonedTaxis never evicts a live orchestrator based on elapsed TTL", () => {
+  const tempDir = createTempDir("live-orch-ttl");
+  const fleetPath = path.join(tempDir, "dc-taxis.json");
+
+  try {
+    const state = createInitialFleetState(["ac01", "ac02"]);
+
+    // ac01 ocupado por un orquestador vivo cuyo último heartbeat fue hace 20 minutos (> 5m TTL)
+    const twentyMinsAgo = Date.now() - 20 * 60 * 1000;
+    state.fleet["ac01"].status = "ocupado";
+    state.fleet["ac01"].passenger = {
+      type: "orchestrator",
+      sessionId: "live-long-sess",
+      pid: process.pid, // PID de este proceso que está 100% vivo
+      startedAt: twentyMinsAgo,
+      heartbeatAt: twentyMinsAgo,
+    };
+
+    // ac02 ocupado por un subagente efímero cuyo último heartbeat fue hace 20 minutos (> 5m TTL)
+    state.fleet["ac02"].status = "ocupado";
+    state.fleet["ac02"].passenger = {
+      type: "ephemeral_subagent",
+      sessionId: "ephem-hung-sess",
+      pid: process.pid,
+      startedAt: twentyMinsAgo,
+      heartbeatAt: twentyMinsAgo,
+    };
+
+    saveFleetState(state, fleetPath);
+
+    // Ejecutar reaper con TTL de 5 minutos (300_000 ms)
+    const reaped = reapAbandonedTaxis(state, 300000);
+
+    // Solo debe reapear ac02 (el subagente colgado). ac01 (el orquestador vivo) DEBE permanecer intacto.
+    assert.equal(reaped, 1);
+    assert.equal(state.fleet["ac01"].status, "ocupado");
+    assert.equal(state.fleet["ac01"].passenger?.sessionId, "live-long-sess");
+
+    assert.equal(state.fleet["ac02"].status, "libre");
+    assert.equal(state.fleet["ac02"].passenger, null);
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("dc-taxi-dispatcher: acquireOrchestratorTaxi prevents collisions between multiple Pi terminals", () => {
   const tempDir = createTempDir("multi-pi");
   const fleetPath = path.join(tempDir, "dc-taxis.json");
