@@ -175,16 +175,37 @@ function ensureDirectory(targetPath: string): void {
 
 /**
  * Comprueba si un proceso sigue vivo en el sistema operativo sin enviarle una señal destructiva.
+ * En Linux inspecciona /proc/<pid>/stat para descartar procesos en estado Zombie ('Z') o Dead ('X').
  */
 export function isProcessAlive(pid: number): boolean {
   if (!pid || pid <= 0) return false;
   try {
     process.kill(pid, 0);
-    return true;
   } catch (err: unknown) {
     const error = err as NodeJS.ErrnoException;
     return error.code === "EPERM";
   }
+
+  // En Linux, comprobar si el kernel lo mantiene como Zombie ('Z')
+  if (process.platform === "linux") {
+    try {
+      const statPath = `/proc/${pid}/stat`;
+      if (fs.existsSync(statPath)) {
+        const statRaw = fs.readFileSync(statPath, "utf8");
+        const lastParen = statRaw.lastIndexOf(")");
+        if (lastParen >= 0 && lastParen + 2 < statRaw.length) {
+          const stateChar = statRaw.charAt(lastParen + 2);
+          if (stateChar === "Z" || stateChar === "X") {
+            return false;
+          }
+        }
+      }
+    } catch {
+      return false;
+    }
+  }
+
+  return true;
 }
 
 export interface ActivePiProcessInfo {
@@ -218,12 +239,28 @@ export function discoverActivePiProcesses(): ActivePiProcessInfo[] {
         const cmdRaw = fs.readFileSync(cmdlinePath, "utf8");
         const cmd = cmdRaw.replace(/\0/g, " ");
 
-        // Debe ser un proceso pi pero no un subproceso RPC
+        // Debe ser un proceso pi interactivo, nunca un subproceso RPC ni hijo de esta sesión
+        const isRpcOrSubprocess =
+          cmd.includes("--mode rpc") ||
+          cmd.includes("--session-dir") ||
+          cmd.includes("--append-system-prompt") ||
+          cmd.includes("subagent");
+
         const isPi =
-          (cmd.includes("bin/pi") || cmd.trim().startsWith("pi ") || cmd.trim() === "pi") &&
-          !cmd.includes("--mode rpc");
+          (cmd.includes("bin/pi") || cmd.trim().startsWith("pi ") || cmd.trim() === "pi" || cmd.includes("cli.js")) &&
+          !isRpcOrSubprocess;
 
         if (!isPi) continue;
+
+        // Descartar si es un proceso hijo directo de esta sesión
+        try {
+          const statContent = fs.readFileSync(path.join(procDir, entry, "stat"), "utf8");
+          const parts = statContent.split(" ");
+          const ppid = parseInt(parts[3], 10);
+          if (ppid === process.pid) continue;
+        } catch {
+          /* ignore stat read error */
+        }
 
         const cwdPath = path.join(procDir, entry, "cwd");
         let cwd = "";
@@ -292,56 +329,20 @@ export function discoverActivePiProcesses(): ActivePiProcessInfo[] {
 
 /**
  * Sincroniza la flota con todos los procesos de Pi vivos en el sistema operativo.
+ * Solo renueva heartbeats de pasajeros legítimos ya registrados; NUNCA inventa
+ * ni auto-adquiere taxis como 'orchestrator' para procesos desconocidos en el OS.
  */
 export function syncActivePiSessionsFromOs(state: DcTaxiFleetState): number {
   const activeProcesses = discoverActivePiProcesses();
   let synced = 0;
 
   for (const proc of activeProcesses) {
-    let alreadyHasTaxi = false;
     for (const unit of Object.values(state.fleet)) {
       if (unit.passenger && unit.passenger.pid === proc.pid) {
         unit.passenger.heartbeatAt = Date.now();
-        alreadyHasTaxi = true;
+        synced++;
         break;
       }
-    }
-
-    if (alreadyHasTaxi) continue;
-
-    let account = "";
-    if (proc.modelId && proc.modelId.includes("/")) {
-      const parts = proc.modelId.split("/");
-      for (const p of parts) {
-        if (p.toLowerCase().startsWith("ac")) {
-          account = p.toLowerCase();
-          break;
-        }
-      }
-    }
-
-    if (!account || !state.fleet[account] || state.fleet[account].status === "ocupado") {
-      for (const [ac, unit] of Object.entries(state.fleet)) {
-        if (unit.status === "libre") {
-          account = ac;
-          break;
-        }
-      }
-    }
-
-    if (account && state.fleet[account]) {
-      const unit = state.fleet[account];
-      unit.status = "ocupado";
-      unit.passenger = {
-        type: "orchestrator",
-        sessionId: proc.sessionId || `pid-${proc.pid}`,
-        pid: proc.pid,
-        model: proc.modelId || `cpam/${account}/gemini-3.8-flash-high`,
-        taskLabel: `Sesión Activa (${path.basename(proc.cwd || "terminal")})`,
-        startedAt: Date.now(),
-        heartbeatAt: Date.now(),
-      };
-      synced++;
     }
   }
 
@@ -745,24 +746,34 @@ export function leaseTaxi(
       return { account: preferredAccount, unit };
     }
 
-    // 2. Buscar cualquier taxi libre disponible
-    for (const [account, unit] of Object.entries(state.fleet)) {
-      if (unit.status === "libre") {
-        unit.status = "ocupado";
-        unit.passenger = fullPassenger;
-        saveFleetState(state, fleetPath);
+    // 2. Buscar el mejor taxi libre disponible ordenado por mayor cuota restante (algoritmo inteligente)
+    const freeUnits = Object.values(state.fleet).filter((u) => u.status === "libre");
+    if (freeUnits.length > 0) {
+      freeUnits.sort((a, b) => {
+        const qA = quotaGetter(a.account)?.gemini5hPct ?? 100;
+        const qB = quotaGetter(b.account)?.gemini5hPct ?? 100;
+        if (qB !== qA) {
+          return qB - qA; // Descendente: priorizar unidades con más cuota
+        }
+        return a.account.localeCompare(b.account, undefined, { numeric: true });
+      });
 
-        appendTaxiLog("INFO", "TAXI_LEASED", {
-          account,
-          type: fullPassenger.type,
-          sessionId: fullPassenger.sessionId,
-          pid: fullPassenger.pid,
-          model: fullPassenger.model,
-          preferred: false,
-        });
+      const selectedUnit = freeUnits[0];
+      selectedUnit.status = "ocupado";
+      selectedUnit.passenger = fullPassenger;
+      saveFleetState(state, fleetPath);
 
-        return { account, unit };
-      }
+      appendTaxiLog("INFO", "TAXI_LEASED", {
+        account: selectedUnit.account,
+        type: fullPassenger.type,
+        sessionId: fullPassenger.sessionId,
+        pid: fullPassenger.pid,
+        model: fullPassenger.model,
+        preferred: false,
+        quotaPct: quotaGetter(selectedUnit.account)?.gemini5hPct ?? null,
+      });
+
+      return { account: selectedUnit.account, unit: selectedUnit };
     }
 
     // 3. Flota agotada
