@@ -18,6 +18,8 @@ import {
   acquireOrchestratorTaxi,
   releaseOrchestratorTaxi,
   syncActivePiSessionsFromOs,
+  findDirectChildPid,
+  updateTaxiPassengerPid,
   withFleetLock,
 } from "../src/features/dc-agents/core/dc-taxi-dispatcher.ts";
 
@@ -707,6 +709,48 @@ test("dc-taxi-dispatcher: syncActivePiSessionsFromOs never auto-assigns unknown 
   for (const ac of customAccounts) {
     assert.equal(state.fleet[ac].status, "libre");
     assert.equal(state.fleet[ac].passenger, null);
+  }
+});
+
+test("dc-taxi-dispatcher: updateTaxiPassengerPid dynamically binds real spawned child PID", () => {
+  const tempDir = createTempDir("real-child-pid");
+  const fleetPath = path.join(tempDir, "dc-taxis.json");
+
+  try {
+    const customAccounts = ["ac01"];
+    saveFleetState(createInitialFleetState(customAccounts), fleetPath);
+
+    const lease = leaseTaxi(
+      {
+        type: "ephemeral_subagent",
+        sessionId: "sess-real",
+        pid: process.pid, // Arranca con el PID del padre
+        model: "gemini-3.8-flash-high",
+      },
+      "ac01",
+      fleetPath,
+      300000,
+      customAccounts,
+    );
+    assert.ok(lease);
+    assert.equal(lease.unit.passenger?.pid, process.pid);
+
+    // Spawneamos un hijo real temporal
+    const child = spawn("sleep", ["2"]);
+    const realChildPid = child.pid!;
+    assert.ok(realChildPid > 0);
+
+    // Actualizamos al PID real del hijo en tiempo real
+    const updated = updateTaxiPassengerPid("ac01", realChildPid, fleetPath);
+    assert.equal(updated, true);
+
+    const reloaded = loadFleetState(fleetPath, customAccounts);
+    assert.equal(reloaded.fleet["ac01"].passenger?.pid, realChildPid);
+    assert.notEqual(reloaded.fleet["ac01"].passenger?.pid, process.pid);
+
+    child.kill();
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
   }
 });
 

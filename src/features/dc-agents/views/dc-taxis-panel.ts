@@ -485,7 +485,7 @@ export class DcTaxisPanel implements Component {
 
       const pidAnnotation = p.type === "orchestrator"
         ? th.fg("success", "(Terminal Interactiva Principal)")
-        : th.fg("dim", "(Worker Paralelo delegado por terminal)");
+        : th.fg("accent", "(Subproceso Spawned en SO)");
       lines.push(`  PID / Proceso:    ${th.bold(String(p.pid))} ${pidAnnotation}`);
       lines.push(`  Sesión ID:        ${th.fg("dim", p.sessionId)}`);
       lines.push(`  Tarea / Misión:   ${th.bold(p.taskLabel || "Tarea interactiva")}`);
@@ -586,7 +586,7 @@ export class DcTaxisPanel implements Component {
           : (p.type === "ephemeral_subagent" ? "Efímero (Sub)" : "Subagente");
         passengerStr = (pType + " ".repeat(14)).slice(0, 14);
         modelStr = ((p.model?.split("/").pop() || p.model || "gemini") + " ".repeat(20)).slice(0, 20);
-        const pidDisplay = p.type === "ephemeral_subagent" ? `↳${p.pid}` : String(p.pid);
+        const pidDisplay = String(p.pid);
         pidStr = (pidDisplay + " ".repeat(7)).slice(0, 7);
 
         const elapsedSec = Math.floor((Date.now() - p.startedAt) / 1000);

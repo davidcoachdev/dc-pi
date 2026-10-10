@@ -841,6 +841,60 @@ export function releaseTaxi(
 }
 
 /**
+ * Busca activamente en /proc el PID real del subproceso hijo generado por este proceso.
+ */
+export function findDirectChildPid(parentPid: number = process.pid): number | undefined {
+  if (process.platform !== "linux") return undefined;
+  try {
+    const entries = fs.readdirSync("/proc");
+    for (const entry of entries) {
+      if (!/^\d+$/.test(entry)) continue;
+      try {
+        const statRaw = fs.readFileSync(path.join("/proc", entry, "stat"), "utf8");
+        const lastParen = statRaw.lastIndexOf(")");
+        if (lastParen >= 0) {
+          const rest = statRaw.slice(lastParen + 2).trim();
+          const tokens = rest.split(" ");
+          const ppid = parseInt(tokens[1], 10);
+          if (ppid === parentPid) {
+            const childPid = parseInt(entry, 10);
+            if (!isNaN(childPid) && childPid > 0) {
+              return childPid;
+            }
+          }
+        }
+      } catch {
+        /* skip entry */
+      }
+    }
+  } catch {
+    /* skip /proc */
+  }
+  return undefined;
+}
+
+/**
+ * Actualiza el PID del pasajero de un taxi arrendado (por ejemplo, para reflejar el PID real del subproceso hijo).
+ */
+export function updateTaxiPassengerPid(
+  account: string,
+  realPid: number,
+  fleetPath: string = FLEET_STATE_PATH,
+): boolean {
+  if (!realPid || realPid <= 0) return false;
+  return withFleetLock(fleetPath, () => {
+    const state = loadFleetState(fleetPath);
+    const unit = state.fleet[account];
+    if (unit && unit.status === "ocupado" && unit.passenger) {
+      unit.passenger.pid = realPid;
+      saveFleetState(state, fleetPath);
+      return true;
+    }
+    return false;
+  });
+}
+
+/**
  * Envía un pulso de vida (heartbeat) para mantener el taxi arrendado.
  */
 export function heartbeatTaxi(

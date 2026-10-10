@@ -23,7 +23,11 @@ import type {
   DcBehaviorBrick,
 } from "../core/dc-ephemeral-types.ts";
 import { appendTaxiLog } from "../core/dc-taxi-logger.ts";
-import { heartbeatTaxi } from "../core/dc-taxi-dispatcher.ts";
+import {
+  heartbeatTaxi,
+  findDirectChildPid,
+  updateTaxiPassengerPid,
+} from "../core/dc-taxi-dispatcher.ts";
 
 export interface ExtractedSubagentMetrics {
   tokens?: {
@@ -388,6 +392,19 @@ export function registerDcEphemeralTools(pi: ExtensionAPI): void {
           }
 
           if (typeof (ctx as any)?.executeTool === "function") {
+            // Intentar descubrir y asociar en tiempo real el PID real del subproceso hijo spawneado
+            let childPidChecked = false;
+            const childPidDetector = setInterval(() => {
+              if (childPidChecked || !plan) return;
+              const childPid = findDirectChildPid(process.pid);
+              if (childPid && childPid > 0) {
+                childPidChecked = true;
+                clearInterval(childPidDetector);
+                updateTaxiPassengerPid(plan.leasedAccount, childPid);
+              }
+            }, 100);
+            childPidDetector.unref?.();
+
             const rawOutcome = await (ctx as any).executeTool(
               "subagent_run",
               {
@@ -398,6 +415,7 @@ export function registerDcEphemeralTools(pi: ExtensionAPI): void {
               },
               { signal: _signal, onUpdate: _onUpdate },
             );
+            clearInterval(childPidDetector);
 
             // Pi retorna NestedToolOutcome: { toolCall, result: { content, details }, isError }
             // Desenvolvemos para obtener el ToolResult canónico con .content en la raíz
