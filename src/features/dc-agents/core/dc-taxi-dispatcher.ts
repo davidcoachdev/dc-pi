@@ -896,21 +896,24 @@ export function updateTaxiPassengerPid(
 
 /**
  * Envía un pulso de vida (heartbeat) para mantener el taxi arrendado.
+ * Protegido atómicamente con withFleetLock para evitar sobrescrituras de estado.
  */
 export function heartbeatTaxi(
   account: string,
   fleetPath: string = FLEET_STATE_PATH,
 ): boolean {
-  const state = loadFleetState(fleetPath);
-  const unit = state.fleet[account];
+  return withFleetLock(fleetPath, () => {
+    const state = loadFleetState(fleetPath);
+    const unit = state.fleet[account];
 
-  if (!unit || unit.status !== "ocupado" || !unit.passenger) {
-    return false;
-  }
+    if (!unit || unit.status !== "ocupado" || !unit.passenger) {
+      return false;
+    }
 
-  unit.passenger.heartbeatAt = Date.now();
-  saveFleetState(state, fleetPath);
-  return true;
+    unit.passenger.heartbeatAt = Date.now();
+    saveFleetState(state, fleetPath);
+    return true;
+  });
 }
 
 /**

@@ -15,6 +15,13 @@ import {
   cleanupEphemeralAgent,
 } from "../core/dc-ephemeral-manager.ts";
 import { executeResearchSwarm } from "../core/dc-research-swarm.ts";
+import {
+  DC_AGENT_ARCHETYPES,
+  DC_ARCHETYPE_ALIASES,
+  DC_TOOL_BRICKS,
+  DC_BEHAVIOR_BRICKS,
+  DC_TOOL_PRESETS,
+} from "../core/dc-ephemeral-types.ts";
 import type {
   DcEphemeralToolPreset,
   DcReasoningEffort,
@@ -213,26 +220,8 @@ export function registerDcEphemeralTools(pi: ExtensionAPI): void {
         archetype: {
           type: "string",
           enum: [
-            "dc-phase-discovery",
-            "dc-phase-planning",
-            "dc-phase-apply",
-            "dc-phase-verify",
-            "dc-odd-scout",
-            "dc-odd-worker",
-            "dc-odd-verifier",
-            "dc-odd-planner",
-            "dc-researcher",
-            "dc-news-to-day",
-            "dc-ui-visual-inspector",
-            "dc-browser-inspector",
-            "dc-pr-comment-analyst",
-            "dc-sentinel",
-            "dc-smoke",
-            "dc-media",
-            "dc-service-ops",
-            "odd-scout",
-            "odd-worker",
-            "odd-verifier",
+            ...Object.keys(DC_AGENT_ARCHETYPES),
+            ...Object.keys(DC_ARCHETYPE_ALIASES),
           ],
           description: "Arquetipo canónico de subagente listo para usar (Fast-path del Catálogo DC Studio). Todos los arquetipos estándar usan el prefijo canónico dc-.",
         },
@@ -240,21 +229,7 @@ export function registerDcEphemeralTools(pi: ExtensionAPI): void {
           type: "array",
           items: {
             type: "string",
-            enum: [
-              "fs-read",
-              "fs-write",
-              "terminal",
-              "code-intel",
-              "web-search",
-              "discussions",
-              "github",
-              "academic",
-              "browser",
-              "audio",
-              "services",
-              "docs",
-              "youtube",
-            ],
+            enum: Object.keys(DC_TOOL_BRICKS),
           },
           description: "Bloques de Lego de herramientas para ensamblar un agente a medida sin desperdiciar tokens.",
         },
@@ -262,16 +237,7 @@ export function registerDcEphemeralTools(pi: ExtensionAPI): void {
           type: "array",
           items: {
             type: "string",
-            enum: [
-              "strict-tdd",
-              "read-only-analyst",
-              "artifact-contract",
-              "non-empty-response",
-              "source-verification",
-              "bounded-worker",
-              "dag-planning",
-              "verify-independent",
-            ],
+            enum: Object.keys(DC_BEHAVIOR_BRICKS),
           },
           description: "Bloques de Lego de comportamiento y directivas operativas.",
         },
@@ -281,19 +247,7 @@ export function registerDcEphemeralTools(pi: ExtensionAPI): void {
         },
         toolPreset: {
           type: "string",
-          enum: [
-            "youtube",
-            "browser",
-            "audio",
-            "api",
-            "services",
-            "codegraph",
-            "docs",
-            "research",
-            "scout",
-            "worker",
-            "verifier",
-          ],
+          enum: Object.keys(DC_TOOL_PRESETS),
           description: "Preset de herramientas aislado (retrocompatibilidad).",
         },
         tools: {
@@ -377,6 +331,7 @@ export function registerDcEphemeralTools(pi: ExtensionAPI): void {
         // 2. Ejecutar atómicamente el subagente vía ctx.executeTool si está disponible
         let subagentResult: any;
         let heartbeatTimer: NodeJS.Timeout | undefined;
+        let childPidDetector: NodeJS.Timeout | undefined;
         let taskStatus: "completed" | "failed" | "cancelled" | "timeout" = "completed";
         let executionError: string | undefined;
         let tokens: { input?: number; output?: number; reasoning?: number; total?: number } | undefined;
@@ -394,12 +349,12 @@ export function registerDcEphemeralTools(pi: ExtensionAPI): void {
           if (typeof (ctx as any)?.executeTool === "function") {
             // Intentar descubrir y asociar en tiempo real el PID real del subproceso hijo spawneado
             let childPidChecked = false;
-            const childPidDetector = setInterval(() => {
+            childPidDetector = setInterval(() => {
               if (childPidChecked || !plan) return;
               const childPid = findDirectChildPid(process.pid);
               if (childPid && childPid > 0) {
                 childPidChecked = true;
-                clearInterval(childPidDetector);
+                if (childPidDetector) clearInterval(childPidDetector);
                 updateTaxiPassengerPid(plan.leasedAccount, childPid);
               }
             }, 100);
@@ -415,7 +370,7 @@ export function registerDcEphemeralTools(pi: ExtensionAPI): void {
               },
               { signal: _signal, onUpdate: _onUpdate },
             );
-            clearInterval(childPidDetector);
+            if (childPidDetector) clearInterval(childPidDetector);
 
             // Pi retorna NestedToolOutcome: { toolCall, result: { content, details }, isError }
             // Desenvolvemos para obtener el ToolResult canónico con .content en la raíz
@@ -487,6 +442,7 @@ export function registerDcEphemeralTools(pi: ExtensionAPI): void {
           throw execErr;
         } finally {
           if (heartbeatTimer) clearInterval(heartbeatTimer);
+          if (childPidDetector) clearInterval(childPidDetector);
 
           if (plan) {
             if (plan.mode === "background") {
