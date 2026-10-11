@@ -1770,3 +1770,18 @@ test("dc-ephemeral-tools: dc_ephemeral_batch_run executes multiple tasks in para
   assert.equal(result.details.completed, 3);
   assert.equal(result.details.failed, 0);
 });
+
+test("dc-ephemeral-manager: injects Lego Tool Guidelines for active tool bricks", () => {
+  const plan = assembleLegoAgentPlan({
+    task: "Auditar seguridad y probar API",
+    toolBricks: ["security", "api"],
+  });
+
+  // Directivas de herramientas activas
+  assert.ok(plan.directives.some((d) => d.includes("[Tool: security]") && d.includes("dc_owasp_audit")));
+  assert.ok(plan.directives.some((d) => d.includes("[Tool: api]") && d.includes("dc_api_swagger")));
+
+  // No debe incluir herramientas no activas
+  assert.ok(!plan.directives.some((d) => d.includes("[Tool: youtube]")));
+  assert.ok(!plan.directives.some((d) => d.includes("[Tool: browser]")));
+});
