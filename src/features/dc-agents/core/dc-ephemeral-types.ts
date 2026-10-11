@@ -267,6 +267,28 @@ export const DC_TOOL_BRICKS: Record<DcToolBrick, string[]> = {
   ],
 };
 
+/**
+ * Directivas operativas concisas asociadas a cada bloque de herramientas (Lego Tool Guidelines).
+ * Se inyectan automáticamente en el subagente únicamente para las herramientas que tiene activas.
+ */
+export const DC_TOOL_BRICK_GUIDELINES: Record<DcToolBrick, string> = {
+  "fs-read": "Inspecciona código y archivos mediante 'read', 'find' o 'grep' de forma focalizada sin volcados masivos.",
+  "fs-write": "Aplica cambios mediante 'edit' o 'write' respetando estrictamente las superficies autorizadas sin omitir código.",
+  "terminal": "Ejecuta comandos puntuales vía 'bash' acotados al directorio del proyecto y observa el código de salida real.",
+  "code-intel": "Usa 'dc_codegraph_node' e 'impact' para trazar llamadas y dependencias antes de sugerir cambios en símbolos.",
+  "web-search": "Usa 'dc_web_search' y 'dc_web_fetch' para consultar documentación y fuentes externas actualizadas.",
+  "discussions": "Busca soluciones comunitarias o hilos técnicos mediante 'dc_discussion_search' y extrae respuestas verificadas.",
+  "github": "Inspecciona repositorios, código o issues externos mediante 'dc_github_code_search' y 'dc_github_get'.",
+  "academic": "Consulta literatura científica y papers técnicos mediante 'dc_research_search'.",
+  "browser": "Inspecciona pestañas abiertas con 'dc_browser_tabs' antes de navegar o capturar pantalla con 'dc_browser_screenshot'.",
+  "audio": "Genera archivos de voz a partir de texto o Markdown usando 'dc_markdown_to_audio' o 'dc_text_to_audio'.",
+  "services": "Supervisa o controla procesos en segundo plano mediante 'dc_services_list', 'start', 'stop' y 'logs'.",
+  "docs": "Extrae texto de PDFs locales con 'dc_pdf_extract' o consulta documentación de librerías con 'dc_context7_search'.",
+  "youtube": "Extrae transcripciones completas con 'dc_youtube_transcript_get' para analizar contenido sin descargar video.",
+  "api": "Inspecciona contratos con 'dc_api_swagger' o 'graphql' antes de enviar peticiones HTTP con 'dc_api_rest'.",
+  "security": "Audita fragmentos de código o git diffs con 'dc_owasp_audit' y consulta mitigaciones con 'dc_owasp_query'.",
+};
+
 export type DcBehaviorBrick =
   | "strict-tdd"
   | "read-only-analyst"

@@ -20,6 +20,7 @@ import type {
 import {
   DC_TOOL_PRESETS,
   DC_TOOL_BRICKS,
+  DC_TOOL_BRICK_GUIDELINES,
   DC_BEHAVIOR_BRICKS,
   DC_AGENT_ARCHETYPES,
   DC_ARCHETYPE_ALIASES,
@@ -119,6 +120,21 @@ export function assembleLegoAgentPlan(options: DcEphemeralTaskOptions): Assemble
   // Directivas universales mínimas
   directiveSet.add("Usa exclusivamente las herramientas asignadas en tu toolset.");
   directiveSet.add("No supongas información no provista. Si necesitas una consulta externa al padre, usa subagent_parent_message con kind: 'query'.");
+
+  // Inyectar guías operativas concisas de las herramientas asignadas (Lego Tool Guidelines)
+  const activeBricks = new Set<string>();
+  if (archetypeDef) {
+    for (const b of archetypeDef.toolBricks) activeBricks.add(b);
+  }
+  if (options.toolBricks && Array.isArray(options.toolBricks)) {
+    for (const b of options.toolBricks) activeBricks.add(b);
+  }
+  for (const brick of activeBricks) {
+    const guideline = (DC_TOOL_BRICK_GUIDELINES as Record<string, string>)[brick];
+    if (guideline) {
+      directiveSet.add(`[Tool: ${brick}] ${guideline}`);
+    }
+  }
 
   // Si hay arquetipo, incorporar sus behaviorBricks
   if (archetypeDef) {
