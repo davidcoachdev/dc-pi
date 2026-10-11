@@ -343,7 +343,13 @@ export function prepareEphemeralAgent(
       : []),
   ].join("\n");
 
-  fs.writeFileSync(agentFilePath, frontmatter, "utf8");
+  try {
+    fs.writeFileSync(agentFilePath, frontmatter, "utf8");
+  } catch (fsErr) {
+    // Si falla la escritura en disco, liberar el taxi inmediatamente para evitar fugas
+    releaseTaxi(leasedAccount, contextMeta.sessionId);
+    throw fsErr;
+  }
 
   appendTaxiLog("INFO", "EPHEMERAL_AGENT_PREPARED", {
     agentName,
