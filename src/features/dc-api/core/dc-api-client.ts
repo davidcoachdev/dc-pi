@@ -67,10 +67,20 @@ export async function executeRestRequest(options: ApiRestRequestOptions): Promis
       responseHeaders[key] = val;
     });
 
+    // Sanitizar cabeceras de respuesta sensibles (ej: Set-Cookie, Authorization)
+    const sanitizedHeaders: Record<string, string> = {};
+    for (const [k, v] of Object.entries(responseHeaders)) {
+      if (/cookie|auth|token|key|secret/i.test(k)) {
+        sanitizedHeaders[k] = "[REDACTED_HEADER]";
+      } else {
+        sanitizedHeaders[k] = redactSecrets(v);
+      }
+    }
+
     return {
       status: res.status,
       statusText: res.statusText,
-      headers: responseHeaders,
+      headers: sanitizedHeaders,
       durationMs,
       body: redactSecrets(formattedBody),
       byteSize,
