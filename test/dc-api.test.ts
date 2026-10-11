@@ -47,3 +47,19 @@ test("dcApiExtension registers all 3 API tools and /dc-api command", () => {
 
   assert.ok(registeredCommands.includes("dc-api"));
 });
+
+test("dc-api: redactSecrets censors sensitive tokens and credentials in headers and error messages", async () => {
+  const { redactSecrets } = await import("../src/features/dc-websearch/core/dc-websearch-security.ts");
+
+  // Bearer token
+  const leakedBearer = "Error: Invalid token Bearer ghp_123456789012345678901234567890123456 failed";
+  const sanitized = redactSecrets(leakedBearer);
+  assert.ok(!sanitized.includes("ghp_"));
+  assert.ok(sanitized.includes("[REDACTED_SECRET]"));
+
+  // API key assignment
+  const leakedKey = "Failed with api_key='sk-abcdefghijklmnopqrstuvwxyz1234567890abcdefghijklmnopqr'";
+  const sanitizedKey = redactSecrets(leakedKey);
+  assert.ok(!sanitizedKey.includes("sk-abcdef"));
+  assert.ok(sanitizedKey.includes("[REDACTED_SECRET]"));
+});

@@ -2,6 +2,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { executeRestRequest } from "../core/dc-api-client.ts";
 import { discoverSwaggerEndpoints } from "../core/dc-api-swagger.ts";
 import { executeGraphQLQuery } from "../core/dc-api-graphql.ts";
+import { redactSecrets } from "../../dc-websearch/core/dc-websearch-security.ts";
 import type { HttpMethod } from "../core/dc-api-types.ts";
 
 export function registerDcApiTools(pi: ExtensionAPI): void {
@@ -52,8 +53,8 @@ export function registerDcApiTools(pi: ExtensionAPI): void {
         };
       } catch (err: any) {
         return {
-          content: [{ type: "text", text: `Error en dc_api_rest: ${err.message}` }],
-          details: { error: err.message },
+          content: [{ type: "text", text: `Error en dc_api_rest: ${redactSecrets(err.message)}` }],
+          details: { error: redactSecrets(err.message) },
           isError: true,
         };
       }
@@ -90,8 +91,8 @@ export function registerDcApiTools(pi: ExtensionAPI): void {
         };
       } catch (err: any) {
         return {
-          content: [{ type: "text", text: `Error al inspeccionar Swagger: ${err.message}` }],
-          details: { error: err.message },
+          content: [{ type: "text", text: `Error al inspeccionar Swagger: ${redactSecrets(err.message)}` }],
+          details: { error: redactSecrets(err.message) },
           isError: true,
         };
       }
@@ -136,8 +137,8 @@ export function registerDcApiTools(pi: ExtensionAPI): void {
         };
       } catch (err: any) {
         return {
-          content: [{ type: "text", text: `Error en dc_api_graphql: ${err.message}` }],
-          details: { error: err.message },
+          content: [{ type: "text", text: `Error en dc_api_graphql: ${redactSecrets(err.message)}` }],
+          details: { error: redactSecrets(err.message) },
           isError: true,
         };
       }
