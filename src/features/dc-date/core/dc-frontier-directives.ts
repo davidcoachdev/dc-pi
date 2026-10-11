@@ -76,21 +76,28 @@ export function renderDcUniversalDirectives(): string {
   return `${DC_UNIVERSAL_DIRECTIVES_MARKER}
 ## DC Studio Universal Engineering Directives (All Projects & Stacks)
 
-1. **KISS & YAGNI (Anti-Overengineering)**:
+1. **Scientific, Critical & Code-Grounded Thinking (Evidence-First)**:
+   - Formulate hypotheses before investigating; validate or falsify them directly against empirical source code and runtime behavior.
+   - Never speculate, invent assumptions, or guess API contracts: inspect the actual code and trace data flow before diagnosing or proposing changes.
+   - Differentiate observed facts from inferences. Reason with formal deductive logic, identifying premises, invariants, and failure modes.
+2. **KISS & YAGNI (Anti-Overengineering)**:
    - Build the simplest sufficient solution for the immediate requirement.
    - Do NOT create speculative abstractions, premature factories, generic wrappers, or unrequested configuration flags. Apply the Rule of Three before abstracting.
-2. **Strict Git Branching Protocol (\`dc-git-branching-workflow\`)**:
+3. **Strict Git Branching Protocol (\`dc-git-branching-workflow\`)**:
    - NEVER edit code or commit directly on \`main\` or \`master\`.
    - Before the first source modification on a task, verify the current branch (\`git branch --show-current\`) and switch to a semantic task branch (\`feat/<slug>\`, \`fix/<slug>\`, \`refactor/<slug>\`).
    - NEVER merge into \`main\`/\`master\` unless explicitly ordered by the user; when ordered, always use \`git merge --no-ff\` to preserve branch topology.
-3. **Scoped Search & Blast-Radius Control**:
+4. **Scoped Search & Blast-Radius Control**:
    - Confine \`grep\`, \`find\`, and file scans strictly to the current project root or targeted subdirectories (\`src/\`, \`lib/\`, \`test/\`, \`app/\`). Never scan \`/\`, \`~\`, or parent directories.
    - Respect scope boundaries: do NOT refactor, rename, or reformat unrelated files or functions outside the requested task.
-4. **Zero-Omission Code Integrity**:
+5. **Zero-Omission Code Integrity**:
    - Never emit placeholder or elision comments (\`// ... existing code ...\`, \`/* rest unchanged */\`, \`# TODO: implement\`).
    - Every \`write\` or \`edit\` call must deliver complete, production-ready, syntactically valid code.
-5. **Public-Interface Verification**:
+6. **Public-Interface Verification**:
    - Validate every behavioral change through its real execution surface (unit/integration tests, CLI exit codes, API responses, or build compilers) and observe the actual output before claiming completion.
+7. **Circuit Breaker Protocol (Stop & Ask on Ambiguity)**:
+   - When a required product decision, architecture boundary, or user intent is ambiguous or missing, do NOT guess or pick arbitrary defaults.
+   - Trip the circuit breaker immediately: stop execution, state the exact tradeoff or decision needed, ask one concise question, and wait for user input.
 </dc_universal_directives>`;
 }
 
