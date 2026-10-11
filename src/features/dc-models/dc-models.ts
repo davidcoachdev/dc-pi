@@ -6,6 +6,7 @@ import { openDcModal } from "../../ui/dc-modal.ts";
 import { cliProxyClient } from "../../integrations/dc-cliproxy/dc-cliproxy-client.ts";
 import { dcNotifier } from "../../integrations/dc-notify/dc-notifier.ts";
 import { DcModelsPanel, type ModelAccountTab, type ModelItem, type EffortLevel } from "./dc-models-panel.ts";
+import { resolveRecommendedContextWindow, resolveSafeMaxTokens } from "./core/dc-model-calibration.ts";
 
 export const SETTINGS_FILE = path.join(os.homedir(), ".pi/agent/settings.json");
 
@@ -96,7 +97,15 @@ export async function openModelsSelector(
     /* si falla el fallback, seguimos con lo que tenemos */
   }
 
-  // 2. Discover accounts / prefixes via CLIProxy
+  // 2. Calibrar ventanas de contexto defensivas y tokens de salida seguros (inspirado en Joker/CPAM)
+  for (const m of models) {
+    if (m.id) {
+      m.contextWindow = resolveRecommendedContextWindow(m.id, m.contextWindow);
+      m.maxTokens = resolveSafeMaxTokens(m.maxTokens);
+    }
+  }
+
+  // 3. Discover accounts / prefixes via CLIProxy
   const prefixEmails = await cliProxyClient.fetchPrefixEmails();
   const tabs: ModelAccountTab[] = [];
 

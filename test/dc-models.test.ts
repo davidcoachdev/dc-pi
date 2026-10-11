@@ -392,3 +392,30 @@ test("DcModelsPanel mouse click and wheel work correctly with viewport scroll of
 
   assert.equal(panel.getModelCursor(), 37, "Mouse wheel down must advance cursor by 3");
 });
+
+test("dc-model-calibration: resolves recommended caps and safe max tokens", async () => {
+  const {
+    resolveRecommendedContextWindow,
+    resolveSafeMaxTokens,
+    buildStrictThinkingLevelMap,
+    RECOMMENDED_CONTEXT_CAPS,
+    MAX_SAFE_OUTPUT_TOKENS,
+  } = await import("../src/features/dc-models/core/dc-model-calibration.ts");
+
+  // 1. Context Window Caps
+  assert.equal(resolveRecommendedContextWindow("gemini-3.8-flash-high", 2_000_000), RECOMMENDED_CONTEXT_CAPS.gemini);
+  assert.equal(resolveRecommendedContextWindow("gpt-5-codex", 1_000_000), RECOMMENDED_CONTEXT_CAPS.gpt);
+  assert.equal(resolveRecommendedContextWindow("claude-3.7-sonnet", 500_000), RECOMMENDED_CONTEXT_CAPS.claude);
+  assert.equal(resolveRecommendedContextWindow("llama-3-70b", 100_000), 100_000); // menor al cap se respeta
+
+  // 2. Safe Max Output Tokens
+  assert.equal(resolveSafeMaxTokens(128_000), MAX_SAFE_OUTPUT_TOKENS);
+  assert.equal(resolveSafeMaxTokens(8_192), 8_192);
+  assert.equal(resolveSafeMaxTokens(undefined), 16_384);
+
+  // 3. Strict Thinking Level Map
+  const mapGemini = buildStrictThinkingLevelMap(["low", "high"]);
+  assert.equal(mapGemini.low, "low");
+  assert.equal(mapGemini.high, "high");
+  assert.equal(mapGemini.medium, null); // no soportado -> null para evitar HTTP 400
+});
