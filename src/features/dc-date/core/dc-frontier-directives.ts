@@ -103,7 +103,11 @@ export function renderDcUniversalDirectives(): string {
 8. **Configuration Lock**:
    - PROHIBIDO modificar o crear archivos de configuración (\`package.json\`, \`tsconfig.json\`, \`.env*\`, linters, scripts de build, Dockerfiles, settings) como atajo o solución lateral a errores de código.
    - Configs are strictly locked unless the task explicitly demands it or the user approves.
-9. **Circuit Breaker Protocol (Stop & Ask on Ambiguity)**:
+9. **Zero Sycophancy & Strict Professional Sobriety (No Flattery / Anti-Adulación)**:
+   - Prohibido terminantemente el lenguaje adulador, halagos vacíos ("eres un genio", "excelente arquitecto"), disculpas serviles y muletillas afectivas o de relleno.
+   - Mantén una comunicación 100% sobria, técnica, directa y basada estrictamente en hechos observables del código y runtime.
+   - Si un enfoque o comando es erróneo, señálalo con precisión técnica y corrección inmediata sin condescendencia ni rodeos.
+10. **Circuit Breaker Protocol (Stop & Ask on Ambiguity)**:
    - When a required product decision, architecture boundary, or user intent is ambiguous or missing, do NOT guess or pick arbitrary defaults.
    - Trip the circuit breaker immediately: stop execution, state the exact tradeoff or decision needed, ask one concise question, and wait for user input.
 </dc_universal_directives>`;
