@@ -985,7 +985,8 @@ test("dc-ephemeral-manager: prepareEphemeralAgent and cleanup lifecycle", () => 
     },
   );
 
-  assert.ok(plan.agentName.startsWith("dc-ephem-"));
+  assert.ok(plan.agentName.startsWith("dc-sub-") || plan.agentName.startsWith("dc-ephem-"));
+  assert.ok(plan.agentName.includes("media") || plan.agentName.includes("search"));
   assert.ok(fs.existsSync(plan.agentFilePath));
   assert.equal(plan.tools.length, DC_TOOL_PRESETS.youtube.length);
   assert.equal(plan.effectiveEffort, "low"); // Preset youtube -> low
@@ -1069,7 +1070,7 @@ test("dc-ephemeral-tools: dc_ephemeral_agent_run executes with archetype and cle
   }, undefined, undefined, fakeCtx);
 
   assert.equal(executeToolCalled, true);
-  assert.ok(executedAgentName.startsWith("dc-ephem-"));
+  assert.ok(executedAgentName.startsWith("dc-sub-") || executedAgentName.startsWith("dc-ephem-"));
   assert.ok(outcome.content[0].text.includes("Reporte de scout"));
 });
 
@@ -1107,7 +1108,7 @@ test("dc-ephemeral-tools: dc_ephemeral_agent_run executes subagent atomically an
   );
 
   assert.equal(executeToolCalled, true);
-  assert.ok(executedAgentName.startsWith("dc-ephem-"));
+  assert.ok(executedAgentName.startsWith("dc-sub-") || executedAgentName.startsWith("dc-ephem-"));
   assert.equal(result.content[0].text, "Auditoría completada sin fallos.");
 
   // Comprobar que el archivo temporal .md ya fue eliminado en el bloque finally
@@ -1201,7 +1202,7 @@ test("dc-ephemeral-tools: mode background does not destroy agent file nor releas
     fakeCtx,
   );
 
-  assert.ok(executedAgentName.startsWith("dc-ephem-"));
+  assert.ok(executedAgentName.startsWith("dc-sub-") || executedAgentName.startsWith("dc-ephem-"));
   assert.ok(outcome.content[0].text.includes("Background worker started"));
 
   const agentPath = path.join(os.homedir(), ".pi", "agent", "agents", `${executedAgentName}.md`);
@@ -1282,7 +1283,7 @@ test("dc-ephemeral-tools: token usage and costEstimated from subagent_run propag
     fakeCtx,
   );
 
-  assert.ok(executedAgentName.startsWith("dc-ephem-"));
+  assert.ok(executedAgentName.startsWith("dc-sub-") || executedAgentName.startsWith("dc-ephem-"));
   assert.equal(outcome.content[0].text, "Tarea de calculo finalizada.");
 
   // En modo task el archivo SI debe haber sido limpiado
@@ -1700,7 +1701,8 @@ test("dc-ephemeral-manager: assembleLegoAgentPlan builds archetypes and custom l
     },
   );
 
-  assert.ok(plan.agentName.startsWith("dc-ephem-"));
+  assert.ok(plan.agentName.startsWith("dc-sub-") || plan.agentName.startsWith("dc-ephem-"));
+  assert.ok(plan.agentName.includes("worker"));
   assert.equal(plan.effectiveEffort, "high");
   assert.ok(plan.tools.includes("edit"));
   assert.ok(plan.tools.includes("bash"));

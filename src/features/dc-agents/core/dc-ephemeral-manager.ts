@@ -151,7 +151,66 @@ export function assembleLegoAgentPlan(options: DcEphemeralTaskOptions): Assemble
 }
 
 /**
- * Sweeper de arranque y mantenimiento: elimina archivos residuales dc-ephem-*.md
+ * Deriva un slug semántico conciso y amigable para el usuario basado en el arquetipo, rol o tarea.
+ * Ejemplo: 'dc-sub-search-a1b2', 'dc-sub-verify-c3d4', 'dc-sub-security-e5f6'.
+ */
+export function deriveSemanticSubagentName(
+  options: DcEphemeralTaskOptions,
+  hash: string = randomUUID().slice(0, 6),
+): string {
+  const shortHash = hash.slice(0, 6);
+
+  // 1. Derivar por Arquetipo
+  if (options.archetype) {
+    const arch = String(options.archetype).toLowerCase();
+    if (arch.includes("discovery") || arch.includes("scout")) return `dc-sub-discovery-${shortHash}`;
+    if (arch.includes("planning") || arch.includes("planner")) return `dc-sub-plan-${shortHash}`;
+    if (arch.includes("apply") || arch.includes("worker")) return `dc-sub-worker-${shortHash}`;
+    if (arch.includes("verify") || arch.includes("verifier")) return `dc-sub-verify-${shortHash}`;
+    if (arch.includes("researcher") || arch.includes("search")) return `dc-sub-search-${shortHash}`;
+    if (arch.includes("security") || arch.includes("owasp")) return `dc-sub-security-${shortHash}`;
+    if (arch.includes("api")) return `dc-sub-api-${shortHash}`;
+    if (arch.includes("news")) return `dc-sub-news-${shortHash}`;
+    if (arch.includes("ui") || arch.includes("browser")) return `dc-sub-ui-${shortHash}`;
+    if (arch.includes("media") || arch.includes("audio") || arch.includes("youtube")) return `dc-sub-media-${shortHash}`;
+    if (arch.includes("service")) return `dc-sub-services-${shortHash}`;
+    if (arch.includes("smoke")) return `dc-sub-smoke-${shortHash}`;
+  }
+
+  // 2. Derivar por Preset de herramientas
+  if (options.toolPreset) {
+    const preset = String(options.toolPreset).toLowerCase();
+    if (preset === "research" || preset === "docs") return `dc-sub-search-${shortHash}`;
+    if (preset === "verifier") return `dc-sub-verify-${shortHash}`;
+    if (preset === "worker") return `dc-sub-worker-${shortHash}`;
+    if (preset === "browser") return `dc-sub-ui-${shortHash}`;
+    if (preset === "youtube" || preset === "audio") return `dc-sub-media-${shortHash}`;
+    if (preset === "api") return `dc-sub-api-${shortHash}`;
+    if (preset === "services") return `dc-sub-services-${shortHash}`;
+    if (preset === "scout") return `dc-sub-discovery-${shortHash}`;
+  }
+
+  // 3. Derivar por Rol explícito
+  if (options.role) {
+    const r = options.role.toLowerCase().replace(/[^a-z0-9]/g, "-").replace(/^-+|-+$/g, "");
+    const cleanRole = r.replace(/^dc-sub-|^dc-ephem-|^dc-/, "").slice(0, 12);
+    if (cleanRole) return `dc-sub-${cleanRole}-${shortHash}`;
+  }
+
+  // 4. Derivar heurísticamente de palabras clave en la tarea
+  const t = options.task.toLowerCase();
+  if (/investig|busc|search|find|revisar.*repo|averigua/i.test(t)) return `dc-sub-search-${shortHash}`;
+  if (/verific|audit|comprob|test|check/i.test(t)) return `dc-sub-verify-${shortHash}`;
+  if (/seguridad|vulnerab|owasp|token|secret/i.test(t)) return `dc-sub-security-${shortHash}`;
+  if (/endpoint|swagger|graphql|rest|api/i.test(t)) return `dc-sub-api-${shortHash}`;
+  if (/arregl|fix|implement|escrib|modific|crea/i.test(t)) return `dc-sub-worker-${shortHash}`;
+
+  // Fallback estándar
+  return `dc-sub-task-${shortHash}`;
+}
+
+/**
+ * Sweeper de arranque y mantenimiento: elimina archivos residuales dc-sub-*.md y dc-ephem-*.md
  * huérfanos de sesiones anteriores que hayan crasheado.
  */
 export function dcCleanOrphanedEphemeralAgents(maxAgeMs: number = 15 * 60 * 1000): number {
@@ -164,7 +223,7 @@ export function dcCleanOrphanedEphemeralAgents(maxAgeMs: number = 15 * 60 * 1000
     const now = Date.now();
 
     for (const file of files) {
-      if (file.startsWith("dc-ephem-") && file.endsWith(".md")) {
+      if ((file.startsWith("dc-sub-") || file.startsWith("dc-ephem-")) && file.endsWith(".md")) {
         const fullPath = path.join(agentsDir, file);
         try {
           const stats = fs.statSync(fullPath);
@@ -202,8 +261,8 @@ export function prepareEphemeralAgent(
 ): EphemeralAgentLaunchPlan {
   const config = loadDcAgentsConfig();
   const pid = contextMeta.pid || process.pid;
-  const uuidShort = randomUUID().slice(0, 8);
-  const agentName = `dc-ephem-${uuidShort}`;
+  const uuidShort = randomUUID().slice(0, 6);
+  const agentName = deriveSemanticSubagentName(options, uuidShort);
   const agentsDir = getAgentsDirectory();
 
   if (!fs.existsSync(agentsDir)) {
