@@ -196,7 +196,9 @@ export type DcToolBrick =
   | "audio"
   | "services"
   | "docs"
-  | "youtube";
+  | "youtube"
+  | "api"
+  | "security";
 
 export const DC_TOOL_BRICKS: Record<DcToolBrick, string[]> = {
   "fs-read": ["read", "find", "grep"],
@@ -254,6 +256,15 @@ export const DC_TOOL_BRICKS: Record<DcToolBrick, string[]> = {
     "dc_youtube_transcript_get",
     "dc_youtube_channel_search",
   ],
+  "api": [
+    "dc_api_rest",
+    "dc_api_swagger",
+    "dc_api_graphql",
+  ],
+  "security": [
+    "dc_owasp_query",
+    "dc_owasp_audit",
+  ],
 };
 
 export type DcBehaviorBrick =
@@ -308,7 +319,9 @@ export type DcAgentArchetype =
   | "dc-sentinel"
   | "dc-smoke"
   | "dc-media"
-  | "dc-service-ops";
+  | "dc-service-ops"
+  | "dc-security-auditor"
+  | "dc-api-tester";
 
 export const DC_ARCHETYPE_ALIASES: Record<string, DcAgentArchetype> = {
   "odd-scout": "dc-odd-scout",
@@ -318,6 +331,8 @@ export const DC_ARCHETYPE_ALIASES: Record<string, DcAgentArchetype> = {
   "dc-smoke-subagent": "dc-smoke",
   "ui-visual-inspector": "dc-ui-visual-inspector",
   "pr-comment-analyst": "dc-pr-comment-analyst",
+  "security-auditor": "dc-security-auditor",
+  "api-tester": "dc-api-tester",
 };
 
 export interface DcArchetypeDefinition {
@@ -471,6 +486,22 @@ export const DC_AGENT_ARCHETYPES: Record<DcAgentArchetype, DcArchetypeDefinition
     behaviorBricks: ["artifact-contract", "non-empty-response"],
     recommendedModel: "gemini-3-flash",
     defaultEffort: "low",
+  },
+  "dc-security-auditor": {
+    name: "dc-security-auditor",
+    description: "Auditoría de seguridad y análisis estático de vulnerabilidades OWASP sobre diffs y código.",
+    toolBricks: ["fs-read", "security"],
+    behaviorBricks: ["read-only-analyst", "artifact-contract", "non-empty-response"],
+    recommendedModel: "gemini-3.8-flash-high",
+    defaultEffort: "high",
+  },
+  "dc-api-tester": {
+    name: "dc-api-tester",
+    description: "Inspección, prueba de endpoints REST, Swagger y GraphQL de APIs locales o remotas.",
+    toolBricks: ["fs-read", "api"],
+    behaviorBricks: ["read-only-analyst", "artifact-contract", "non-empty-response"],
+    recommendedModel: "gemini-3.8-flash-high",
+    defaultEffort: "medium",
   },
 };
 

@@ -1546,6 +1546,10 @@ test("dc-ephemeral-types: Tool Bricks, Behavior Bricks, and Canonical Archetypes
   assert.ok(DC_TOOL_BRICKS["fs-write"].includes("write"));
   assert.ok(DC_TOOL_BRICKS["terminal"].includes("bash"));
   assert.ok(DC_TOOL_BRICKS["code-intel"].includes("dc_codegraph_status"));
+  assert.ok(DC_TOOL_BRICKS["api"].includes("dc_api_rest"));
+  assert.ok(DC_TOOL_BRICKS["api"].includes("dc_api_swagger"));
+  assert.ok(DC_TOOL_BRICKS["security"].includes("dc_owasp_query"));
+  assert.ok(DC_TOOL_BRICKS["security"].includes("dc_owasp_audit"));
 
   // 2. Behavior Bricks
   assert.ok(DC_BEHAVIOR_BRICKS["strict-tdd"].includes("RED"));
@@ -1573,6 +1577,8 @@ test("dc-ephemeral-types: Tool Bricks, Behavior Bricks, and Canonical Archetypes
     "dc-smoke",
     "dc-media",
     "dc-service-ops",
+    "dc-security-auditor",
+    "dc-api-tester",
   ] as const;
 
   for (const name of canonicalArchetypes) {

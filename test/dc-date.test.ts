@@ -75,6 +75,11 @@ test("buildDcHarnessPromptBlock builds universal directives + Gemini protocol fo
 
   assert.ok(block37.includes("Current date: 2026-10-09 (Viernes)."));
   assert.ok(block37.includes(DC_UNIVERSAL_DIRECTIVES_MARKER));
+  assert.ok(block37.includes("Scientific, Critical & Code-Grounded Thinking"));
+  assert.ok(block37.includes("Circuit Breaker Protocol"));
+  assert.ok(block37.includes("Package Manager Detection"));
+  assert.ok(block37.includes("Configuration Lock"));
+  assert.ok(block37.includes("Zero Sycophancy"));
   assert.ok(block37.includes("KISS & YAGNI"));
   assert.ok(block37.includes("--no-ff"));
   assert.ok(block37.includes(GEMINI_FRONTIER_PROTOCOL_MARKER));
