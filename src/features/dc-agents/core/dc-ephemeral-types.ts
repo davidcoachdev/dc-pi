@@ -528,6 +528,26 @@ export interface DcEphemeralTaskOptions {
   cwd?: string;
 }
 
+export interface DcBatchSubagentItem {
+  task: string;
+  role?: string;
+  label?: string;
+  archetype?: DcAgentArchetype;
+  toolBricks?: DcToolBrick[];
+  behaviorBricks?: DcBehaviorBrick[];
+  toolPreset?: DcEphemeralToolPreset;
+  tools?: string[];
+  model?: string;
+  effort?: DcReasoningEffort;
+  seedContext?: string;
+}
+
+export interface DcEphemeralBatchOptions {
+  items: DcBatchSubagentItem[];
+  mode?: "task" | "background";
+  timeoutMs?: number;
+}
+
 export type DcEnforceProviderPolicy = "force_gemini" | "inherit_or_fallback" | "custom";
 
 export interface DcAgentsRoutingConfig {

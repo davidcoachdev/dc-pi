@@ -28,6 +28,7 @@ import type {
   DcAgentArchetype,
   DcToolBrick,
   DcBehaviorBrick,
+  DcBatchSubagentItem,
 } from "../core/dc-ephemeral-types.ts";
 import { appendTaxiLog } from "../core/dc-taxi-logger.ts";
 import {
@@ -579,6 +580,225 @@ export function registerDcEphemeralTools(pi: ExtensionAPI): void {
           isError: true,
         };
       }
+    },
+  });
+
+  // 3. dc_ephemeral_batch_run — Fan-Out Masivo de Subagentes Concurrentes
+  pi.registerTool({
+    name: "dc_ephemeral_batch_run",
+    label: "DC Ephemeral Batch Run",
+    description: "Despacha múltiples tareas a subagentes efímeros concurrentes en paralelo puro (Fan-Out / Fan-In) en el mismo milisegundo, asignando una unidad de la Flota de Taxis a cada uno sin bloquear turnos intermedios.",
+    parameters: {
+      type: "object",
+      properties: {
+        items: {
+          type: "array",
+          description: "Lista de tareas independientes a ejecutar en paralelo con subagentes dedicados.",
+          items: {
+            type: "object",
+            properties: {
+              task: { type: "string", description: "Instrucción autocontenida que ejecutará el subagente." },
+              role: { type: "string", description: "Rol o propósito (ej: 'scanner-1', 'doc-auditor')." },
+              label: { type: "string", description: "Etiqueta breve para la tarjeta de seguimiento." },
+              archetype: {
+                type: "string",
+                enum: [
+                  ...Object.keys(DC_AGENT_ARCHETYPES),
+                  ...Object.keys(DC_ARCHETYPE_ALIASES),
+                ],
+                description: "Arquetipo canónico listo para usar.",
+              },
+              toolBricks: {
+                type: "array",
+                items: { type: "string", enum: Object.keys(DC_TOOL_BRICKS) },
+                description: "Bloques de Lego de herramientas.",
+              },
+              behaviorBricks: {
+                type: "array",
+                items: { type: "string", enum: Object.keys(DC_BEHAVIOR_BRICKS) },
+                description: "Directivas de comportamiento.",
+              },
+              model: { type: "string", description: "Override opcional de modelo para este worker." },
+              effort: { type: "string", enum: ["low", "medium", "high", "off"], description: "Esfuerzo de razonamiento." },
+              seedContext: { type: "string", description: "Contexto inicial resumido para el subagente." },
+            },
+            required: ["task"],
+          },
+        },
+        mode: {
+          type: "string",
+          enum: ["task", "background"],
+          description: "Modo de ejecución: 'task' espera a todos los workers y consolida resultados (default); 'background' los lanza en paralelo y retorna inmediatamente.",
+        },
+      },
+      required: ["items"],
+    } as any,
+    async execute(_id, params: any, _signal, _onUpdate, ctx?: ExtensionContext): Promise<any> {
+      const items: DcBatchSubagentItem[] = Array.isArray(params.items) ? params.items : [];
+      if (items.length === 0) {
+        return {
+          content: [{ type: "text", text: "No se proporcionaron tareas en el lote (items vacío)." }],
+          details: { count: 0 },
+          isError: true,
+        };
+      }
+
+      const mode: "task" | "background" = params.mode || "task";
+      const sessionId = ctx?.sessionManager?.getSessionId?.() || `batch-${Date.now()}`;
+      const parentModel = ctx?.model ? `${ctx.model.provider || "cpam"}/${ctx.model.id}` : undefined;
+      let parentEffort: string | undefined;
+
+      try {
+        if (typeof (pi as any).getThinkingLevel === "function") {
+          parentEffort = (pi as any).getThinkingLevel();
+        }
+      } catch {}
+
+      appendTaxiLog("INFO", "BATCH_RUN_DISPATCHING", {
+        itemsCount: items.length,
+        mode,
+        sessionId,
+      });
+
+      // Ejecutar el abanico de subagentes concurrentemente mediante Promise.allSettled
+      const promises = items.map(async (item, index) => {
+        const itemRole = item.role || `worker-${index + 1}`;
+        let plan: ReturnType<typeof prepareEphemeralAgent> | undefined;
+
+        try {
+          plan = prepareEphemeralAgent(
+            {
+              task: item.task,
+              role: itemRole,
+              label: item.label || itemRole,
+              archetype: item.archetype,
+              toolBricks: item.toolBricks,
+              behaviorBricks: item.behaviorBricks,
+              toolPreset: item.toolPreset,
+              tools: item.tools,
+              seedContext: item.seedContext,
+              model: item.model,
+              effort: item.effort,
+              mode,
+              sessionId,
+            },
+            {
+              sessionId,
+              parentModel,
+              parentEffort,
+              pid: process.pid,
+            },
+          );
+
+          if (typeof (ctx as any)?.executeTool !== "function") {
+            return {
+              itemRole,
+              agentName: plan.agentName,
+              account: plan.leasedAccount,
+              status: "prepared",
+              output: `Subagente preparado en ${plan.agentFilePath} (executeTool no disponible en host).`,
+            };
+          }
+
+          const rawOutcome = await (ctx as any).executeTool(
+            "subagent_run",
+            {
+              agent: plan.agentName,
+              task: item.task,
+              mode,
+              label: item.label || itemRole,
+            },
+            { signal: _signal, onUpdate: _onUpdate },
+          );
+
+          let textOutput = "";
+          if (rawOutcome?.result?.content?.[0]?.text) {
+            textOutput = rawOutcome.result.content[0].text;
+          } else if (rawOutcome?.content?.[0]?.text) {
+            textOutput = rawOutcome.content[0].text;
+          } else if (typeof rawOutcome?.result === "string") {
+            textOutput = rawOutcome.result;
+          } else {
+            textOutput = JSON.stringify(rawOutcome?.result || rawOutcome || "");
+          }
+
+          if (mode !== "background") {
+            cleanupEphemeralAgent(plan, {
+              sessionId,
+              startedAt: Date.now(),
+              endedAt: Date.now(),
+              status: rawOutcome?.isError ? "failed" : "completed",
+            });
+          }
+
+          return {
+            itemRole,
+            agentName: plan.agentName,
+            account: plan.leasedAccount,
+            status: rawOutcome?.isError ? "failed" : "completed",
+            output: textOutput,
+          };
+        } catch (itemErr: any) {
+          if (plan && mode !== "background") {
+            cleanupEphemeralAgent(plan, {
+              sessionId,
+              startedAt: Date.now(),
+              endedAt: Date.now(),
+              status: "failed",
+              error: itemErr.message,
+            });
+          }
+          return {
+            itemRole,
+            agentName: plan?.agentName || "unknown",
+            account: plan?.leasedAccount || "unknown",
+            status: "failed",
+            output: `Error: ${itemErr.message}`,
+          };
+        }
+      });
+
+      const settled = await Promise.allSettled(promises);
+      const results = settled.map((s, idx) => {
+        if (s.status === "fulfilled") return s.value;
+        return {
+          itemRole: items[idx]?.role || `worker-${idx + 1}`,
+          agentName: "unknown",
+          account: "unknown",
+          status: "failed",
+          output: `Error fatal de promesa: ${s.reason}`,
+        };
+      });
+
+      const completedCount = results.filter((r) => r.status === "completed" || r.status === "prepared").length;
+      const failedCount = results.filter((r) => r.status === "failed").length;
+
+      const reportLines: string[] = [
+        `### Reporte de Despacho Masivo en Paralelo (Fan-Out: ${items.length} Subagentes)`,
+        `- **Modo:** \`${mode}\``,
+        `- **Tareas Exitosas / Despachadas:** ${completedCount} / ${items.length}`,
+        failedCount > 0 ? `- **Tareas con Fallo:** ${failedCount}` : "",
+        "",
+        "#### Detalle por Subagente Concurrente:",
+      ].filter(Boolean);
+
+      results.forEach((r, idx) => {
+        reportLines.push(
+          `**[${idx + 1}/${items.length}] ${r.itemRole}** (\`${r.agentName}\` · Taxi: \`${r.account}\` · Estado: \`${r.status.toUpperCase()}\`)`,
+        );
+        reportLines.push(`> ${r.output.split("\n").slice(0, 5).join("\n> ")}`);
+        reportLines.push("");
+      });
+
+      return {
+        content: [{ type: "text", text: reportLines.join("\n") }],
+        details: {
+          total: items.length,
+          completed: completedCount,
+          failed: failedCount,
+          results,
+        },
+      };
     },
   });
 }
