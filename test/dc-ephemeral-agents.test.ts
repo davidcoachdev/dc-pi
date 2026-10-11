@@ -1020,12 +1020,14 @@ test("dc-ephemeral-tools: registerDcEphemeralTools registers tool in ExtensionAP
 
   registerDcEphemeralTools(fakePi);
 
-  assert.equal(registered.length, 2);
+  assert.equal(registered.length, 3);
   const ephemTool = registered.find((t) => t.name === "dc_ephemeral_agent_run");
   const swarmTool = registered.find((t) => t.name === "dc_research_swarm");
+  const batchTool = registered.find((t) => t.name === "dc_ephemeral_batch_run");
 
   assert.ok(ephemTool, "dc_ephemeral_agent_run must be registered");
   assert.ok(swarmTool, "dc_research_swarm must be registered");
+  assert.ok(batchTool, "dc_ephemeral_batch_run must be registered");
 
   assert.ok(ephemTool.parameters.properties.task);
   assert.ok(ephemTool.parameters.properties.archetype);
@@ -1718,4 +1720,53 @@ test("dc-ephemeral-manager: assembleLegoAgentPlan builds archetypes and custom l
     status: "completed",
   });
   assert.equal(fs.existsSync(plan.agentFilePath), false);
+});
+
+test("dc-ephemeral-tools: dc_ephemeral_batch_run executes multiple tasks in parallel via Promise.allSettled", async () => {
+  const registered: any[] = [];
+  const fakePi = {
+    registerTool(toolDef: any) {
+      registered.push(toolDef);
+    },
+  } as any;
+
+  registerDcEphemeralTools(fakePi);
+  const batchTool = registered.find((t) => t.name === "dc_ephemeral_batch_run");
+  assert.ok(batchTool, "dc_ephemeral_batch_run must be registered");
+
+  const dispatchedAgents: string[] = [];
+  const fakeCtx = {
+    sessionManager: { getSessionId: () => "sess-batch-test" },
+    model: { provider: "cpam", id: "ac01/gemini-3.8-flash-high" },
+    executeTool: async (name: string, args: any) => {
+      assert.equal(name, "subagent_run");
+      dispatchedAgents.push(args.agent);
+      return {
+        content: [{ type: "text", text: `Resultado de worker ${args.agent}` }],
+      };
+    },
+  } as any;
+
+  const result = await batchTool.execute(
+    "call-batch-1",
+    {
+      items: [
+        { task: "Auditar módulo A", role: "auditor-a" },
+        { task: "Auditar módulo B", role: "auditor-b" },
+        { task: "Auditar módulo C", role: "auditor-c" },
+      ],
+      mode: "task",
+    },
+    undefined,
+    undefined,
+    fakeCtx,
+  );
+
+  assert.equal(dispatchedAgents.length, 3);
+  assert.ok(result.content[0].text.includes("Fan-Out: 3 Subagentes"));
+  assert.ok(result.content[0].text.includes("auditor-a"));
+  assert.ok(result.content[0].text.includes("auditor-b"));
+  assert.ok(result.content[0].text.includes("auditor-c"));
+  assert.equal(result.details.completed, 3);
+  assert.equal(result.details.failed, 0);
 });
