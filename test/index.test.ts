@@ -143,6 +143,9 @@ test("dcStudioExtension registers all canonical commands and keybindings", () =>
     "dc-prompt",
     "dc-dialogs",
     "dc-state-test",
+    "dc-plan",
+    "dc-body",
+    "dc-agents",
   ];
 
   for (const cmd of expectedCanonicalCommands) {
@@ -158,7 +161,8 @@ test("dcStudioExtension registers all canonical commands and keybindings", () =>
   // Essential shortcuts registered
   assert.ok(shortcuts.has("f5"), "Expected F5 shortcut for reload");
   assert.ok(shortcuts.has("alt+m"), "Expected Alt+M shortcut for models");
-  assert.ok(shortcuts.has("alt+f"), "Expected Alt+F shortcut for changes");
+  assert.ok(shortcuts.has("alt+shift+f"), "Expected Alt+Shift+F shortcut for changes");
+  assert.ok(shortcuts.has("alt+t"), "Expected Alt+T shortcut for plan");
   assert.ok(shortcuts.has("alt+e"), "Expected Alt+E shortcut for status");
   assert.ok(shortcuts.has("alt+c"), "Expected Alt+C shortcut for faces");
   assert.ok(shortcuts.has("alt+shift+b"), "Expected Alt+Shift+B shortcut for sidebar");

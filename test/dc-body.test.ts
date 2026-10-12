@@ -147,3 +147,18 @@ test("dc-body: tryAttachBodyFrame reattaches if layoutRoot[LAYOUT_NODE] was repl
   const nestedHStack2 = layout2.entries[0].component[LAYOUT_NODE]();
   assert.equal(nestedHStack2.entries[0].component[BODY_FRAMED], true);
 });
+
+test("dc-body: registers canonical /dc-body command", async () => {
+  const { dcBodyExtension } = await import("../src/features/dc-body/dc-body.ts");
+  const registeredCommands: string[] = [];
+
+  const mockPi: any = {
+    registerCommand(name: string) {
+      registeredCommands.push(name);
+    },
+    on() {},
+  };
+
+  dcBodyExtension(mockPi);
+  assert.deepEqual(registeredCommands, ["dc-body"]);
+});

@@ -258,18 +258,18 @@ export function dcBodyExtension(pi: ExtensionAPI): void {
     }
   });
 
-  pi.registerCommand("body-frame", {
-    description: "Activa o desactiva el marco de doble línea del body del chat. /body-frame [on|off|toggle]",
+  pi.registerCommand("dc-body", {
+    description: "Activa o desactiva el marco de doble línea del body del chat. /dc-body [on|off|toggle]",
     handler: async (args: string, ctx: ExtensionContext) => {
       const mode = (args || "").trim().toLowerCase();
       const current = readBodyPrefs();
       let nextState: boolean;
 
-      if (mode === "on") nextState = true;
-      else if (mode === "off") nextState = false;
-      else if (mode === "toggle" || mode === "") nextState = !current.frame;
+      if (mode === "on" || mode === "frame on") nextState = true;
+      else if (mode === "off" || mode === "frame off") nextState = false;
+      else if (mode === "toggle" || mode === "frame toggle" || mode === "") nextState = !current.frame;
       else {
-        dcNotifier.notify(ctx, "Uso: /body-frame [on|off|toggle]");
+        dcNotifier.notify(ctx, "Uso: /dc-body [on|off|toggle]");
         return;
       }
 
