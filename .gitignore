@@ -5,3 +5,5 @@ node_modules/
 .atl/
 .codegraph/
 .pi/
+# Sentinel telemetry flight logs
+docs/chronicle/
