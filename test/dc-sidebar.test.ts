@@ -13,7 +13,10 @@ import {
   SIDEBAR_BREAKPOINT,
   getTerminalColumns,
   isRailActive,
+  tryWrap,
+  restoreNative,
 } from "../src/features/dc-sidebar/runtime/dc-sidebar-host.ts";
+import { RAIL_WIDTH } from "../src/features/dc-sidebar/core/dc-sidebar-types.ts";
 import {
   writeSidebarPrefs,
   readSidebarPrefs,
@@ -400,4 +403,66 @@ test("Status sidebar Centinela section wires click handlers to open Sentinel vie
 
   await metroRow.onClick();
   assert.equal(customCalls, 2, "Clicking Líneas de Metro row must trigger Sentinel viewer modal");
+});
+
+test("Standalone Sidebar: mounts autonomous hstack when gentle-shell is absent", () => {
+  writeSidebarPrefs({ hidden: false, minWidth: 140 });
+
+  const dummyChat = { render: () => ["chat"], invalidate() {} };
+  const dummyDock = { render: () => ["dock"], invalidate() {} };
+  const nativeVStack = {
+    type: "vstack",
+    entries: [
+      { component: dummyChat, basis: 0, grow: 1, shrink: 1 },
+      { component: dummyDock, basis: "auto", grow: 0, shrink: 0 },
+    ],
+  };
+
+  const rootComponent: any = {
+    render: () => ["root"],
+    invalidate() {},
+    [LAYOUT_NODE]: () => nativeVStack,
+  };
+
+  const mockTui: any = {
+    layoutRoot: rootComponent,
+    terminal: { columns: 160, rows: 40 },
+    requestRender() {},
+  };
+  (globalThis as any)[Symbol.for("dc.sidebar.tui-ref")] = mockTui;
+
+  // 1. Envolver root nativo con tryWrap
+  const wrapped = tryWrap(mockTui);
+  assert.equal(wrapped, true, "tryWrap must succeed in standalone mode");
+
+  // 2. Con columns = 160 (>= 140) y hidden = false, debe devolver un hstack con 2 entradas
+  const layout = rootComponent[LAYOUT_NODE]();
+  assert.equal(layout.type, "hstack", "Must wrap into hstack when wide enough");
+  assert.equal(layout.entries.length, 2, "Must have left and rail entries");
+  assert.equal(layout.entries[0].grow, 1, "Left column must grow to fill space");
+  assert.equal(layout.entries[1].basis, RAIL_WIDTH + 2, "Right rail must have RAIL_WIDTH + 2 columns");
+
+  // Verificar que el componente izquierdo exponga el layout nativo original
+  const leftComp = layout.entries[0].component;
+  const leftLayout = leftComp[LAYOUT_NODE]();
+  assert.equal(leftLayout.type, "vstack");
+  assert.equal(leftLayout.entries[0].component, dummyChat);
+
+  // 3. Con columns < 140, debe devolver el layout nativo directamente
+  mockTui.terminal.columns = 120;
+  const narrowLayout = rootComponent[LAYOUT_NODE]();
+  assert.equal(narrowLayout.type, "vstack", "Must return native vstack when terminal is too narrow");
+  assert.equal(narrowLayout.entries[0].component, dummyChat);
+
+  // 4. Con hidden = true, debe devolver el layout nativo directamente
+  mockTui.terminal.columns = 160;
+  writeSidebarPrefs({ hidden: true });
+  const hiddenLayout = rootComponent[LAYOUT_NODE]();
+  assert.equal(hiddenLayout.type, "vstack", "Must return native vstack when sidebar is hidden");
+
+  // 5. restoreNative debe restaurar la función original
+  writeSidebarPrefs({ hidden: false });
+  restoreNative();
+  const restoredLayout = rootComponent[LAYOUT_NODE]();
+  assert.equal(restoredLayout, nativeVStack, "Must restore original native layout function");
 });
