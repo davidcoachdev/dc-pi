@@ -29,9 +29,6 @@ export async function openKeysViewer(
 }
 
 export default function dcKeysExtension(pi: ExtensionAPI): void {
-  // Liberar alt+f y alt+b de las acciones por defecto del editor
-  enforceKeybindings();
-
   async function showKeys(ctx: ExtensionContext): Promise<void> {
     if (!ctx.hasUI) {
       dcNotifier.notify(ctx, "DC Keys", "dc-keys necesita TUI (no hay UI en este modo).", "error");
