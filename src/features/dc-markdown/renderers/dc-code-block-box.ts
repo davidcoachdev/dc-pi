@@ -1,6 +1,6 @@
-import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { Markdown, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { getLangIcon, resolveColors, strWidth } from "../core/dc-markdown-tokens.ts";
-import { codeBlockCollapseState, storeCodeBlock } from "../core/dc-markdown-store.ts";
+import { codeBlockCollapseState, queueRenderedBlock, storeCodeBlock } from "../core/dc-markdown-store.ts";
 
 export interface CodeBlockBoxOptions {
   text: string;
@@ -32,14 +32,16 @@ export function renderCodeBlockBox(options: CodeBlockBoxOptions): string[] {
   const innerCodeW = Math.max(4, blockW - 4);
 
   const codeId = storeCodeBlock(text || "", rawLang);
+  queueRenderedBlock(codeId);
   const isCollapsed = codeBlockCollapseState.get(codeId) ?? false;
+  const isMarkdown = rawLang === "markdown" || rawLang === "md";
 
   const { bgAnsi: CODE_BG, borderAnsi: borderCol, tagAnsi } = resolveColors(isErrorBox, options.activeUiTheme);
   const border = (s: string) => `${borderCol}${s}\x1b[0m`;
   const sideBorder = border("│");
 
   const styleBlockLine = (content: string): string => {
-    const v = strWidth(content);
+    const v = visibleWidth(content);
     const textCell =
       v > innerCodeW ? truncateToWidth(content, innerCodeW, "") : content + " ".repeat(Math.max(0, innerCodeW - v));
     const row = `${sideBorder} ${textCell} ${sideBorder}`;
@@ -49,17 +51,18 @@ export function renderCodeBlockBox(options: CodeBlockBoxOptions): string[] {
 
   let titlePart = "";
   if (isErrorBox) {
-    titlePart = ` ☠️  Error `;
+    titlePart = " ☠️ Error ";
+  } else if (isMarkdown) {
+    titlePart = " markdown ";
   } else if (rawLang && rawLang !== "text" && rawLang !== "txt") {
-    const icon = getLangIcon(rawLang);
-    titlePart = ` ${icon}  ${rawLang} `;
+    titlePart = ` ${rawLang} `;
   } else {
-    titlePart = `   code `;
+    titlePart = " code ";
   }
 
-  const titleLen = strWidth(titlePart);
+  const titleLen = visibleWidth(titlePart);
   const arrowBadge = isCollapsed ? " ▼ " : " ▲ ";
-  const arrowLen = strWidth(arrowBadge);
+  const arrowLen = visibleWidth(arrowBadge);
   const rightDashes = 3;
   const fillLen = Math.max(0, blockW - 3 - titleLen - arrowLen - rightDashes);
 
@@ -72,27 +75,72 @@ export function renderCodeBlockBox(options: CodeBlockBoxOptions): string[] {
   const styledArrow = `\x1b[38;2;255;255;255m${arrowBadge}\x1b[0m`;
   const topBorder = `${borderCol}╭─${styledBadge}${borderCol}${"─".repeat(fillLen)}${styledArrow}${borderCol}${"─".repeat(rightDashes)}╮\x1b[0m`;
 
-  const topMarker = `\x1b_dc:code:${codeId}:top\x1b\\`;
-  const botMarker = `\x1b_dc:code:${codeId}:bot\x1b\\`;
-
-  const topRow = `${leftMargin}${CODE_BG}${topBorder.replace(/\x1b\[0m/g, `\x1b[0m${CODE_BG}`)}\x1b[49m${rightMargin}${topMarker}`;
+  const topRow = `${leftMargin}${CODE_BG}${topBorder.replace(/\x1b\[0m/g, `\x1b[0m${CODE_BG}`)}\x1b[49m${rightMargin}`;
 
   const copyBadge = " 📋 ";
-  const copyBadgeLen = strWidth(copyBadge);
+  const copyBadgeLen = visibleWidth(copyBadge);
   const bottomDashes = Math.max(0, blockW - 2 - copyBadgeLen - rightDashes);
   const whiteCopy = `\x1b[38;2;255;255;255m${copyBadge}\x1b[0m`;
   const bottomBorder = `${borderCol}╰${"─".repeat(bottomDashes)}${whiteCopy}${borderCol}${"─".repeat(rightDashes)}╯\x1b[0m`;
-  const bottomRow = `${leftMargin}${CODE_BG}${bottomBorder.replace(/\x1b\[0m/g, `\x1b[0m${CODE_BG}`)}\x1b[49m${rightMargin}${botMarker}`;
+  const bottomRow = `${leftMargin}${CODE_BG}${bottomBorder.replace(/\x1b\[0m/g, `\x1b[0m${CODE_BG}`)}\x1b[49m${rightMargin}`;
 
   const lines: string[] = [];
   lines.push(topRow);
+
+  // Si es Markdown (lang: "markdown" | "md"), renderizarlo como contenido tipográfico formateado
+  // (títulos enriquecidos sin '#' y viñetas con '•' en vez de '-')
+  if (isMarkdown) {
+    const fallbackMdTheme = {
+      heading: (s: string) => `\x1b[1m\x1b[38;2;255;77;77m${s}\x1b[0m`,
+      bold: (s: string) => `\x1b[1m${s}\x1b[22m`,
+      italic: (s: string) => `\x1b[3m${s}\x1b[23m`,
+      underline: (s: string) => `\x1b[4m${s}\x1b[24m`,
+      listBullet: (s: string) => `\x1b[38;2;255;77;77m•\x1b[0m `,
+      code: (s: string) => `\x1b[38;2;255;204;102m${s}\x1b[0m`,
+      codeBlock: (s: string) => s,
+      codeBlockBorder: (s: string) => s,
+      quote: (s: string) => s,
+      quoteBorder: (s: string) => s,
+      hr: (s: string) => s,
+      link: (s: string) => s,
+      linkUrl: (s: string) => s,
+      strikethrough: (s: string) => s,
+      codeBlockIndent: "  ",
+    };
+    const activeTheme = options.activeUiTheme;
+    const mdTheme = activeTheme?.markdownTheme || activeTheme || fallbackMdTheme;
+
+    const md = new Markdown(text || "", 0, 0, mdTheme);
+    const mdLines = md.render(innerCodeW);
+
+    if (isCollapsed) {
+      const previewCount = Math.min(3, mdLines.length);
+      for (let idx = 0; idx < previewCount; idx++) {
+        lines.push(styleBlockLine(mdLines[idx] || ""));
+      }
+      if (mdLines.length > 3) {
+        lines.push(
+          styleBlockLine(
+            `\x1b[2m… (${mdLines.length - 3} líneas más · clic arriba en ▼ para expandir)\x1b[22m`,
+          ),
+        );
+      }
+    } else {
+      for (const line of mdLines) {
+        lines.push(styleBlockLine(line));
+      }
+    }
+
+    lines.push(bottomRow);
+    return lines;
+  }
 
   const rawCodeLines = (text || "").split("\n");
   const totalCodeLines = rawCodeLines.length;
   const gutterDigits = Math.max(1, String(totalCodeLines).length);
 
   const renderFormattedLine = (lineContent: string, lineIndex: number): string => {
-    if (isErrorBox) {
+    if (isErrorBox || isMarkdown) {
       return styleBlockLine(`${indent}${lineContent}`);
     }
     const numStr = String(lineIndex + 1).padStart(gutterDigits, " ");

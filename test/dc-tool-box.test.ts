@@ -176,3 +176,64 @@ test("installToolBoxPatch wraps updateResult and normalizes missing or nested co
   assert.equal(mockInstance.result.content[0].text, "direct text message");
 });
 
+test("installToolBoxPatch: compact collapsed preview rendering and mouse toggle on top bar", () => {
+  installToolBoxPatch();
+
+  const mockInstance: any = Object.create(ToolExecutionComponent.prototype);
+  mockInstance.toolName = "read";
+  mockInstance.args = { path: "src/index.ts" };
+  mockInstance.expanded = false;
+  mockInstance.result = { isError: false };
+  mockInstance.children = [];
+  mockInstance.ui = { requestRender() {} };
+  mockInstance.setExpanded = function (val: boolean) {
+    this.expanded = val;
+  };
+  mockInstance[Symbol.for("dc.tool-execution.orig-render")] = () => [
+    "line 1 of content",
+    "line 2 of content",
+    "line 3 of content",
+    "line 4 of content",
+    "line 5 of content",
+  ];
+
+  // 1. Cuando está colapsado (expanded: false): muestra 3 líneas de preview + línea de 'más líneas'
+  const collapsedLines = mockInstance.render(70);
+  assert.ok(collapsedLines.length >= 5, "Collapsed should render top, 3 preview lines, hint, and bottom");
+  assert.ok(collapsedLines[1].includes("▼"), "Top row must contain ▼ expand icon");
+  assert.ok(collapsedLines[1].includes("read"), "Top row must display tool name");
+  assert.ok(collapsedLines[1].includes("src/index.ts"), "Top row must display file path");
+  assert.ok(collapsedLines.some((l: string) => l.includes("line 1 of content")));
+  assert.ok(collapsedLines.some((l: string) => l.includes("line 3 of content")));
+  assert.ok(collapsedLines.some((l: string) => l.includes("líneas más")), "Should include preview hint");
+  assert.ok(collapsedLines[collapsedLines.length - 1].includes("📋"), "Bottom row must contain 📋 copy icon");
+
+  // 2. Clic en la barra superior (y: 1) debe alternar expanded a true
+  const mouseRes = mockInstance.handleMouse({
+    type: "click",
+    button: "left",
+    x: 10,
+    y: 1,
+    width: 70,
+  });
+  assert.equal(mouseRes?.handled, true, "Top row click should be handled");
+  assert.equal(mockInstance.expanded, true, "Click on top bar should expand tool box");
+
+  // 3. Cuando está expandido (expanded: true): renderiza todas las líneas completas
+  const expandedLines = mockInstance.render(70);
+  assert.ok(expandedLines.length > 5, "Expanded should render all body lines between borders");
+  assert.ok(expandedLines[1].includes("▲"), "Top row must contain ▲ collapse icon");
+  assert.ok(expandedLines.some((l: string) => l.includes("line 5 of content")));
+  assert.ok(expandedLines[expandedLines.length - 1].includes("📋"), "Bottom row must contain 📋");
+
+  // 4. Clic de nuevo en la barra superior debe colapsarlo a false
+  mockInstance.handleMouse({
+    type: "click",
+    button: "left",
+    x: 10,
+    y: 1,
+    width: 70,
+  });
+  assert.equal(mockInstance.expanded, false, "Second click should collapse tool box back");
+});
+

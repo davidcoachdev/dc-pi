@@ -2,6 +2,7 @@ import { UserMessageComponent } from "@earendil-works/pi-coding-agent";
 import type { TuiMouseEvent, TuiMouseEventResult } from "@earendil-works/pi-tui";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { dcClipboard } from "../../integrations/dc-clipboard/dc-clipboard.ts";
+import { dcNotifier } from "../../integrations/dc-notify/dc-notifier.ts";
 import { getUserName } from "../dc-user/dc-user-store.ts";
 
 export const ORIG_RENDER = Symbol.for("dc.user-message.orig-render");
@@ -93,15 +94,14 @@ export function installUserBoxPatch(): boolean {
     }
     if (!bgAnsi) bgAnsi = "\x1b[48;2;26;26;26m";
 
-    // Título superior con el nombre del usuario y glifo Torii
+    // Título superior con el nombre del usuario y glifo Torii alineado a la izquierda
     const name = resolveCurrentUserName();
     const titleText = ` ⛩  ${name} `;
     const titleLen = visibleWidth(titleText);
-    const dashesTotal = Math.max(0, cardW - 3 - titleLen);
-    const rightDashes = 3;
-    const leftDashes = Math.max(0, dashesTotal - rightDashes);
+    const topDashes = Math.max(0, cardW - 3 - titleLen);
 
-    const topBorder = border(`╭${"─".repeat(leftDashes)}${titleText}${"─".repeat(rightDashes)}╮`);
+    const styledTitle = `\x1b[1m\x1b[38;2;255;77;77m${titleText}\x1b[0m`;
+    const topBorder = `${border("╭─")}${styledTitle}${border("─".repeat(topDashes) + "╮")}`;
 
     const copyBadge = " 📋 ";
     const copyBadgeLen = visibleWidth(copyBadge);
@@ -183,7 +183,7 @@ export function installUserBoxPatch(): boolean {
   };
 
   proto.handleMouse = function (event: TuiMouseEvent): TuiMouseEventResult | undefined {
-    const marginW = event.width > 40 ? 2 : (event.width > 20 ? 1 : 0);
+    const marginW = event.width > 40 ? 1 : 0;
 
     // Clic en el botón 📋 copiar
     if (event.type === "click" && (event.button ?? "left") === "left") {
@@ -200,6 +200,7 @@ export function installUserBoxPatch(): boolean {
 
         if (textToCopy.trim()) {
           void dcClipboard.copy(textToCopy);
+          dcNotifier.notifyHerdr("📋 Portapapeles", "Copiado prompt del usuario");
         }
         return { handled: true };
       }

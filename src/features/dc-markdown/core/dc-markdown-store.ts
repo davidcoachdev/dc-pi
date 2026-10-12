@@ -12,6 +12,19 @@ export interface StoredCodeBlock {
 let nextCodeId = 1;
 const codeStore = new Map<number, StoredCodeBlock>();
 export const codeBlockCollapseState = new Map<number, boolean>();
+export const renderedBlockQueue: number[] = [];
+
+export function queueRenderedBlock(id: number): void {
+  renderedBlockQueue.push(id);
+}
+
+export function takeRenderedBlock(): number | undefined {
+  return renderedBlockQueue.shift();
+}
+
+export function clearRenderedBlockQueue(): void {
+  renderedBlockQueue.length = 0;
+}
 
 export function storeCodeBlock(code: string, lang: string): number {
   const codeId = nextCodeId++;
@@ -30,4 +43,5 @@ export function getStoredCodeBlock(id: number): StoredCodeBlock | undefined {
 export function clearCodeStore(): void {
   codeStore.clear();
   codeBlockCollapseState.clear();
+  renderedBlockQueue.length = 0;
 }

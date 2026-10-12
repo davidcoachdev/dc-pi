@@ -117,7 +117,7 @@ export function extractUnframedContent(comp: Component): Component {
 export const framedBodyMap = new WeakMap<Component, Component>();
 
 /** Envuelve el contenido del transcript en una caja con contorno de doble línea (╔═, ║, ╚═). */
-export function framedBody(tui: TUI, content: Component, pad = 2): Component {
+export function framedBody(tui: TUI, content: Component, pad = 1): Component {
   // Protección absoluta: si el componente ya está marcado como enmarcado, nunca re-envolver
   if ((content as unknown as Record<symbol, unknown>)[BODY_FRAMED]) {
     return content;
