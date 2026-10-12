@@ -3,7 +3,7 @@ import * as assert from "node:assert";
 import dcOwaspExtension from "../src/features/dc-owasp/dc-owasp.ts";
 
 describe("dcOwaspExtension — Integración con Pi", () => {
-  it("registra comandos /dc-owasp y /owasp en Pi", () => {
+  it("registra comando canónico /dc-owasp en Pi", () => {
     const commands: any[] = [];
     const tools: any[] = [];
 
@@ -18,10 +18,9 @@ describe("dcOwaspExtension — Integración con Pi", () => {
 
     dcOwaspExtension(mockPi);
 
-    // Comandos TUI
-    assert.strictEqual(commands.length, 2);
+    // Comando TUI canónico
+    assert.strictEqual(commands.length, 1);
     assert.ok(commands.some((c) => c.name === "dc-owasp"));
-    assert.ok(commands.some((c) => c.name === "owasp"));
 
     // Herramientas LLM
     assert.strictEqual(tools.length, 2);

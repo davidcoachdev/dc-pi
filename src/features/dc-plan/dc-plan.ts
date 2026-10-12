@@ -23,15 +23,8 @@ export function openPlanViewer(ctx: ExtensionContext): void {
 }
 
 export function dcPlanExtension(pi: ExtensionAPI): void {
-  pi.registerCommand("plan", {
+  pi.registerCommand("dc-plan", {
     description: "Abre el visor interactivo de planificación ODD y tareas (DcWindow).",
-    handler: async (_args: string, ctx: ExtensionContext) => {
-      openPlanViewer(ctx);
-    },
-  });
-
-  pi.registerCommand("odd", {
-    description: "Alias para /plan (visor interactivo de tareas ODD).",
     handler: async (_args: string, ctx: ExtensionContext) => {
       openPlanViewer(ctx);
     },

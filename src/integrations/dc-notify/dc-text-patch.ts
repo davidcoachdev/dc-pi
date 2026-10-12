@@ -82,13 +82,13 @@ export function patchTextNotificationFilter(): void {
           return [];
         }
 
-        // Aviso de reintento en texto plano
+        // Aviso de reintento de conexión del runtime nativo de Pi
         if (
-          lines.some(
-            (l) =>
-              typeof l === "string" &&
-              (l.includes("Retrying (") || (l.includes("Retrying") && l.includes("cancel"))),
-          )
+          lines.some((l) => {
+            if (typeof l !== "string") return false;
+            const clean = l.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, "").trim();
+            return clean.startsWith("Retrying (") && clean.includes("cancel");
+          })
         ) {
           return [];
         }

@@ -209,14 +209,6 @@ export default function dcAgentsExtension(pi: ExtensionAPI): void {
     }
   });
 
-  // Comando /agents (abre el visor modal interactivo)
-  pi.registerCommand("agents", {
-    description: "Abre el visor interactivo de subagentes y ejecuciones (DcWindow)",
-    handler: async (_args: string | undefined, ctx: ExtensionContext) => {
-      openAgentsViewer(ctx);
-    },
-  });
-
   // Comando /dc-taxis (abre el monitor de la Flota de Taxis, historial de tokens y logs)
   pi.registerCommand("dc-taxis", {
     description: "DC Studio: monitor interactivo de la Flota de Taxis, historial de tokens y auditoría",

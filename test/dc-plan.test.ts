@@ -8,6 +8,8 @@ import {
   loadOddPlans,
 } from "../src/features/dc-plan/core/dc-plan-types.ts";
 import { DcPlanPanel } from "../src/features/dc-plan/views/dc-plan-panel.ts";
+import { dcPlanExtension } from "../src/features/dc-plan/dc-plan.ts";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 function createMockTheme() {
   return {
@@ -72,4 +74,22 @@ test("dc-plan: DcPlanPanel renders without crashing and navigates", () => {
   // Pressing Esc calls onDone
   panel.handleInput("\x1b");
   assert.equal(doneCalled, true);
+});
+
+test("dc-plan: registers canonical /dc-plan command and Alt+T shortcut", () => {
+  const registeredCommands: string[] = [];
+  const registeredShortcuts: string[] = [];
+
+  const mockPi = {
+    registerCommand(name: string) {
+      registeredCommands.push(name);
+    },
+    registerShortcut(shortcut: string) {
+      registeredShortcuts.push(shortcut);
+    },
+  } as unknown as ExtensionAPI;
+
+  dcPlanExtension(mockPi);
+  assert.deepEqual(registeredCommands, ["dc-plan"]);
+  assert.deepEqual(registeredShortcuts, ["alt+t"]);
 });

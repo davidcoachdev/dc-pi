@@ -26,22 +26,29 @@ export function installErrorBoxPatch(): boolean {
     assistantProto.updateContent = function (message: any, isStreaming?: boolean): void {
       origUpdateContent.call(this, message, isStreaming);
 
-      if (!isCodeBoxEnabled()) return;
+      try {
+        if (!isCodeBoxEnabled()) return;
 
-      const hasToolCalls = message?.content?.some((c: any) => c.type === "toolCall");
-      if (!hasToolCalls && message?.stopReason === "error") {
-        const lastChild = this.contentContainer?.children?.[this.contentContainer.children.length - 1];
-        if (lastChild instanceof Text) {
-          const rawError = message.errorMessage || "Unknown error";
-          const formatted = prettifyErrorContent(rawError);
-          const mdText = `\`\`\`error\n${formatted}\n\`\`\``;
-          this.contentContainer.children[this.contentContainer.children.length - 1] = new Markdown(
-            mdText,
-            this.outputPad ?? 1,
-            0,
-            this.markdownTheme,
-          );
+        const hasToolCalls = message?.content?.some((c: any) => c.type === "toolCall");
+        if (!hasToolCalls && message?.stopReason === "error") {
+          const children = this.contentContainer?.children;
+          if (Array.isArray(children) && children.length > 0) {
+            const lastChild = children[children.length - 1];
+            if (lastChild instanceof Text) {
+              const rawError = message.errorMessage || "Unknown error";
+              const formatted = prettifyErrorContent(rawError);
+              const mdText = `\`\`\`error\n${formatted}\n\`\`\``;
+              children[children.length - 1] = new Markdown(
+                mdText,
+                this.outputPad ?? 1,
+                0,
+                this.markdownTheme,
+              );
+            }
+          }
         }
+      } catch {
+        /* defensive: ignore formatting error and keep original message display */
       }
     };
   }

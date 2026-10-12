@@ -894,80 +894,90 @@ export function installDialogsPatch(): void {
 
         void this.showExtensionCustom(
           (_tui: unknown, rawTheme: Theme, _kb: unknown, done: (r: unknown) => void) => {
-            const theme = resolveSafeTheme(rawTheme, this);
-            const selector = new SessionSelectorComponent(
-              (onProgress: any) =>
-                SessionManager.list(
-                  this.sessionManager.getCwd(),
-                  this.sessionManager.getSessionDir(),
-                  onProgress,
-                ),
-              (onProgress: any) =>
-                this.sessionManager.usesDefaultSessionDir()
-                  ? SessionManager.listAll(onProgress)
-                  : SessionManager.listAll(this.sessionManager.getSessionDir(), onProgress),
-              async (sessionPath: string) => {
-                done(undefined);
-                await this.handleResumeSession(sessionPath);
-              },
-              () => {
-                done(undefined);
-                this.ui.requestRender();
-              },
-              () => {
-                done(undefined);
-                void this.shutdown();
-              },
-              () => this.ui.requestRender(),
-              {
-                renameSession: async (sessionFilePath: string, nextName: string | undefined) => {
-                  const next = (nextName ?? "").trim();
-                  if (!next) return;
-                  const mgr = SessionManager.open(sessionFilePath);
-                  mgr.appendSessionInfo(next);
+            let selector: any;
+            try {
+              const theme = resolveSafeTheme(rawTheme, this);
+              selector = new SessionSelectorComponent(
+                (onProgress: any) =>
+                  SessionManager.list(
+                    this.sessionManager.getCwd(),
+                    this.sessionManager.getSessionDir(),
+                    onProgress,
+                  ),
+                (onProgress: any) =>
+                  this.sessionManager.usesDefaultSessionDir()
+                    ? SessionManager.listAll(onProgress)
+                    : SessionManager.listAll(this.sessionManager.getSessionDir(), onProgress),
+                async (sessionPath: string) => {
+                  done(undefined);
+                  await this.handleResumeSession(sessionPath);
                 },
-                showRenameHint: true,
-                keybindings: this.keybindings,
-              },
-              this.sessionManager.getSessionFile(),
-            );
+                () => {
+                  done(undefined);
+                  this.ui.requestRender();
+                },
+                () => {
+                  done(undefined);
+                  void this.shutdown();
+                },
+                () => this.ui.requestRender(),
+                {
+                  renameSession: async (sessionFilePath: string, nextName: string | undefined) => {
+                    const next = (nextName ?? "").trim();
+                    if (!next) return;
+                    const mgr = SessionManager.open(sessionFilePath);
+                    mgr.appendSessionInfo(next);
+                  },
+                  showRenameHint: true,
+                  keybindings: this.keybindings,
+                },
+                this.sessionManager.getSessionFile(),
+              );
 
-            const titleFn = () => {
-              const scope = (selector as any).scope;
-              return scope === "all"
-                ? "⛩  Dc Studio - Sesiones (Todas)"
-                : "⛩  Dc Studio - Sesiones";
-            };
+              const titleFn = () => {
+                const scope = (selector as any).scope;
+                return scope === "all"
+                  ? "⛩  Dc Studio - Sesiones (Todas)"
+                  : "⛩  Dc Studio - Sesiones";
+              };
 
-            const footerFn = () => {
-              try {
-                const header = (selector as any).header;
-                if (header && typeof header.render === "function") {
-                  const hLines = header.render(100);
-                  if (Array.isArray(hLines) && hLines.length >= 3) {
-                    const h1 = hLines[1]?.trim() || "";
-                    const h2 = hLines[2]?.trim() || "";
-                    if (h1 && h2) return `${h1}  ·  ${h2}`;
-                    return h1 || h2 || undefined;
+              const footerFn = () => {
+                try {
+                  const header = (selector as any).header;
+                  if (header && typeof header.render === "function") {
+                    const hLines = header.render(100);
+                    if (Array.isArray(hLines) && hLines.length >= 3) {
+                      const h1 = hLines[1]?.trim() || "";
+                      const h2 = hLines[2]?.trim() || "";
+                      if (h1 && h2) return `${h1}  ·  ${h2}`;
+                      return h1 || h2 || undefined;
+                    }
                   }
-                }
-              } catch {}
-              return "tab scope  ·  ctrl+s sort  ·  ctrl+n named  ·  ctrl+d delete  ·  ctrl+r rename";
-            };
+                } catch {}
+                return "tab scope  ·  ctrl+s sort  ·  ctrl+n named  ·  ctrl+d delete  ·  ctrl+r rename";
+              };
 
-            return markDcWindow(new DcWindow({
-              title: titleFn,
-              theme,
-              content: selector,
-              footer: footerFn,
-              onClose: () => {
-                done(undefined);
-                this.ui.requestRender();
-              },
-              paddingX: 1,
-              frame: "double",
-              solidBackground: true,
-            }));
+              return markDcWindow(new DcWindow({
+                title: titleFn,
+                theme,
+                content: selector,
+                footer: footerFn,
+                onClose: () => {
+                  done(undefined);
+                  this.ui.requestRender();
+                },
+                paddingX: 1,
+                frame: "double",
+                solidBackground: true,
+              }));
+            } catch (err) {
+              // Fallback defensivo: si la API privada de SessionSelectorComponent cambia,
+              // cerrar el overlay y recurrir inmediatamente al método nativo de Pi
+              done(undefined);
+              this.ui?.requestRender?.();
+              void origShowSessionSelector.call(this);
+              return { render: () => [] as string[], invalidate() {} };
+            }
           },
           {
             overlay: true,
@@ -1004,53 +1014,62 @@ export function installDialogsPatch(): void {
 
         void this.showExtensionCustom(
           (tui: any, rawTheme: Theme, _kb: any, done: (r: any) => void) => {
-            const theme = resolveSafeTheme(rawTheme, this);
-            const selector = new TreeSelectorComponent(
-              tree,
-              realLeafId,
-              tui.terminal?.rows ?? 40,
-              async (entryId: string) => {
-                done(undefined);
-                if (entryId === this.sessionManager.getLeafId()) {
-                  this.showStatus?.("Already at this point");
-                  return;
-                }
-                try {
-                  await this.session.navigateTree(entryId);
-                  this.showStatus?.("Navigated to selected point");
-                  this.chatContainer?.clear?.();
-                  this.renderInitialMessages?.();
-                } catch (e: any) {
-                  this.showError?.(`Navigation error: ${e.message}`);
-                }
-              },
-              () => {
-                done(undefined);
-                this.ui?.requestRender?.();
-              },
-              (entryId: string, label: string | undefined) => {
-                if (label !== undefined) {
-                  this.sessionManager?.appendLabelChange?.(entryId, label);
-                }
-                this.ui?.requestRender?.();
-              },
-              initialSelectedId,
-              this.settingsManager?.getTreeFilterMode?.(),
-            );
+            try {
+              const theme = resolveSafeTheme(rawTheme, this);
+              const selector = new TreeSelectorComponent(
+                tree,
+                realLeafId,
+                tui.terminal?.rows ?? 40,
+                async (entryId: string) => {
+                  done(undefined);
+                  if (entryId === this.sessionManager.getLeafId()) {
+                    this.showStatus?.("Already at this point");
+                    return;
+                  }
+                  try {
+                    await this.session.navigateTree(entryId);
+                    this.showStatus?.("Navigated to selected point");
+                    this.chatContainer?.clear?.();
+                    this.renderInitialMessages?.();
+                  } catch (e: any) {
+                    this.showError?.(`Navigation error: ${e.message}`);
+                  }
+                },
+                () => {
+                  done(undefined);
+                  this.ui?.requestRender?.();
+                },
+                (entryId: string, label: string | undefined) => {
+                  if (label !== undefined) {
+                    this.sessionManager?.appendLabelChange?.(entryId, label);
+                  }
+                  this.ui?.requestRender?.();
+                },
+                initialSelectedId,
+                this.settingsManager?.getTreeFilterMode?.(),
+              );
 
-            return markDcWindow(new DcWindow({
-              title: "⛩  Dc Studio - Árbol de Sesiones",
-              theme,
-              content: selector,
-              footer: "↑/↓: navegar  ·  Enter: saltar a turno  ·  esc: cerrar",
-              onClose: () => {
-                done(undefined);
-                this.ui?.requestRender?.();
-              },
-              paddingX: 1,
-              frame: "double",
-              solidBackground: true,
-            }));
+              return markDcWindow(new DcWindow({
+                title: "⛩  Dc Studio - Árbol de Sesiones",
+                theme,
+                content: selector,
+                footer: "↑/↓: navegar  ·  Enter: saltar a turno  ·  esc: cerrar",
+                onClose: () => {
+                  done(undefined);
+                  this.ui?.requestRender?.();
+                },
+                paddingX: 1,
+                frame: "double",
+                solidBackground: true,
+              }));
+            } catch (err) {
+              // Fallback defensivo: si TreeSelectorComponent cambia o falla,
+              // cerrar overlay y delegar a la implementación nativa
+              done(undefined);
+              this.ui?.requestRender?.();
+              void origShowTreeSelector.call(this, initialSelectedId);
+              return { render: () => [] as string[], invalidate() {} };
+            }
           },
           {
             overlay: true,
@@ -1192,35 +1211,43 @@ export function installDialogsPatch(): void {
         }
         void this.showExtensionCustom(
           (_tui: any, rawTheme: Theme, _kb: any, done: (val: string | undefined) => void) => {
-            const theme = resolveSafeTheme(rawTheme, this);
-            const input = new ExtensionInputComponent(
-              title,
-              placeholder,
-              (value: string) => {
-                done(value);
-                resolve(value);
-              },
-              () => {
-                done(undefined);
-                resolve(undefined);
-              },
-              { tui: this.ui, timeout: opts?.timeout },
-            );
+            try {
+              const theme = resolveSafeTheme(rawTheme, this);
+              const input = new ExtensionInputComponent(
+                title,
+                placeholder,
+                (value: string) => {
+                  done(value);
+                  resolve(value);
+                },
+                () => {
+                  done(undefined);
+                  resolve(undefined);
+                },
+                { tui: this.ui, timeout: opts?.timeout },
+              );
 
-            return markDcWindow(new DcWindow({
-              title: title || "Input",
-              glyph: "⛩ ",
-              theme,
-              content: input,
-              footer: "Enter: confirmar  ·  esc: cancelar",
-              onClose: () => {
-                done(undefined);
-                resolve(undefined);
-              },
-              paddingX: 1,
-              frame: "double",
-              solidBackground: true,
-            }));
+              return markDcWindow(new DcWindow({
+                title: title || "Input",
+                glyph: "⛩ ",
+                theme,
+                content: input,
+                footer: "Enter: confirmar  ·  esc: cancelar",
+                onClose: () => {
+                  done(undefined);
+                  resolve(undefined);
+                },
+                paddingX: 1,
+                frame: "double",
+                solidBackground: true,
+              }));
+            } catch (err) {
+              // Fallback defensivo si ExtensionInputComponent cambia su API
+              done(undefined);
+              this.ui?.requestRender?.();
+              void origShowExtInput.call(this, title, placeholder, opts).then(resolve);
+              return { render: () => [] as string[], invalidate() {} };
+            }
           },
           {
             overlay: true,
