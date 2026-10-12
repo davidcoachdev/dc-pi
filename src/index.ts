@@ -67,6 +67,7 @@ import dcHandoffExtension from "./features/dc-handoff/index.ts";
 import dcGitGraphExtension from "./features/dc-git-graph/dc-git-graph.ts";
 import dcSentinelExtension from "./features/dc-sentinel/index.ts";
 import dcOwaspExtension from "./features/dc-owasp/index.ts";
+import dcLazywebExtension from "./features/dc-lazyweb/index.ts";
 import dcStateMonitorExtension from "./core/dc-agent-state/index.ts";
 
 export const profileDuelExtension = dcFaceExtension;
@@ -119,6 +120,7 @@ export {
   dcGitGraphExtension,
   dcSentinelExtension,
   dcOwaspExtension,
+  dcLazywebExtension,
   dcStateMonitorExtension,
 };
 
@@ -142,6 +144,7 @@ export * from "./features/dc-checkpoint/index.ts";
 export * from "./features/dc-handoff/index.ts";
 export * from "./features/dc-sentinel/index.ts";
 export * from "./features/dc-owasp/index.ts";
+export * from "./features/dc-lazyweb/index.ts";
 
 /**
  * Unified DC Studio Extension.
@@ -192,6 +195,7 @@ export function dcStudioExtension(pi: ExtensionAPI, ctx?: ExtensionContext): voi
   dcEngramExtension(pi);
   dcSentinelExtension(pi);
   dcOwaspExtension(pi);
+  dcLazywebExtension(pi);
   dcDialogsExtension(pi, ctx);
 }
 

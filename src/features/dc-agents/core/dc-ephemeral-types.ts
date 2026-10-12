@@ -198,7 +198,8 @@ export type DcToolBrick =
   | "docs"
   | "youtube"
   | "api"
-  | "security";
+  | "security"
+  | "lazyweb";
 
 export const DC_TOOL_BRICKS: Record<DcToolBrick, string[]> = {
   "fs-read": ["read", "find", "grep"],
@@ -265,6 +266,9 @@ export const DC_TOOL_BRICKS: Record<DcToolBrick, string[]> = {
     "dc_owasp_query",
     "dc_owasp_audit",
   ],
+  "lazyweb": [
+    "dc_lazyweb_search",
+  ],
 };
 
 /**
@@ -287,6 +291,7 @@ export const DC_TOOL_BRICK_GUIDELINES: Record<DcToolBrick, string> = {
   "youtube": "Extrae transcripciones completas con 'dc_youtube_transcript_get' para analizar contenido sin descargar video.",
   "api": "Inspecciona contratos con 'dc_api_swagger' o 'graphql' antes de enviar peticiones HTTP con 'dc_api_rest'.",
   "security": "Audita fragmentos de código o git diffs con 'dc_owasp_audit' y consulta mitigaciones con 'dc_owasp_query'.",
+  "lazyweb": "Consulta patrones reales de UI/UX, pantallas, flujos y experimentos A/B con 'dc_lazyweb_search' (activa openPreview: true solo cuando el usuario pida ver las capturas).",
 };
 
 export type DcBehaviorBrick =
