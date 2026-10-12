@@ -239,3 +239,90 @@ test("dc-lazyweb: dc_lazyweb_search executes stateless JSON-RPC call and optiona
     fs.rmSync(tempDir, { recursive: true, force: true });
   }
 });
+
+test("dc-lazyweb: DcLazywebClient automatically refreshes stale token and retries once on HTTP 401", async () => {
+  const tempDir = createTempDir("retry-401");
+  const tokenFile = path.join(tempDir, "lazyweb_mcp_token");
+  const installIdFile = path.join(tempDir, "install_id");
+  fs.writeFileSync(tokenFile, "stale-expired-token\n", "utf8");
+
+  let mcpAttempts = 0;
+  let tokenRefreshCalls = 0;
+
+  const mockFetch = async (url: string, init?: any) => {
+    if (url.includes("/api/mcp/install-token")) {
+      tokenRefreshCalls++;
+      return {
+        ok: true,
+        status: 200,
+        headers: { get: () => "application/json" },
+        json: async () => ({ ok: true, token: "fresh-renewed-token-9999" }),
+        text: async () => JSON.stringify({ ok: true, token: "fresh-renewed-token-9999" }),
+      } as any;
+    }
+    if (url === "https://www.lazyweb.com/mcp") {
+      mcpAttempts++;
+      if (init.headers.Authorization === "Bearer stale-expired-token") {
+        return {
+          ok: false,
+          status: 401,
+          headers: { get: () => "application/json" },
+          text: async () => JSON.stringify({ error: "unauthorized" }),
+        } as any;
+      }
+      assert.equal(init.headers.Authorization, "Bearer fresh-renewed-token-9999");
+      return {
+        ok: true,
+        status: 200,
+        headers: { get: () => "application/json" },
+        text: async () =>
+          JSON.stringify({
+            jsonrpc: "2.0",
+            id: 1,
+            result: {
+              content: [
+                {
+                  type: "text",
+                  text: JSON.stringify({
+                    ok: true,
+                    results: [
+                      {
+                        companyName: "linear",
+                        pageUrl: "https://linear.app",
+                        platform: "desktop",
+                        visionDescription: "Linear dark mode hero",
+                      },
+                    ],
+                  }),
+                },
+              ],
+            },
+          }),
+      } as any;
+    }
+    throw new Error(`Unexpected URL: ${url}`);
+  };
+
+  try {
+    const client = new DcLazywebClient({
+      tokenFile,
+      installIdFile,
+      fetchImpl: mockFetch as any,
+    });
+
+    const result = await client.search({
+      mode: "screens",
+      query: "dark mode hero",
+      limit: 1,
+    });
+
+    assert.equal(mcpAttempts, 2);
+    assert.equal(tokenRefreshCalls, 1);
+    assert.equal(result.items.length, 1);
+    assert.equal(result.items[0].company, "linear");
+    assert.equal(fs.readFileSync(tokenFile, "utf8").trim(), "fresh-renewed-token-9999");
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+

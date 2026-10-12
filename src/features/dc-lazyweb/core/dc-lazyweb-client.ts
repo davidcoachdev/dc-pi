@@ -240,17 +240,19 @@ export class DcLazywebClient {
   /**
    * Obtiene el token Bearer existente o solicita uno gratuito nuevo sin requerir login ni tarjeta.
    */
-  public async ensureToken(): Promise<string> {
-    const envToken = (process.env.LAZYWEB_MCP_TOKEN || "").trim();
-    if (envToken) return envToken;
+  public async ensureToken(forceRefresh: boolean = false): Promise<string> {
+    if (!forceRefresh) {
+      const envToken = (process.env.LAZYWEB_MCP_TOKEN || "").trim();
+      if (envToken) return envToken;
 
-    try {
-      if (fs.existsSync(this.tokenFile)) {
-        const saved = fs.readFileSync(this.tokenFile, "utf8").trim();
-        if (saved) return saved;
+      try {
+        if (fs.existsSync(this.tokenFile)) {
+          const saved = fs.readFileSync(this.tokenFile, "utf8").trim();
+          if (saved) return saved;
+        }
+      } catch {
+        /* ignore */
       }
-    } catch {
-      /* ignore */
     }
 
     const installId = this.ensureInstallId();
@@ -404,7 +406,7 @@ export class DcLazywebClient {
     }
 
     const limit = Math.max(1, Math.min(15, Number(params.limit || 5)));
-    const token = await this.ensureToken();
+    let token = await this.ensureToken(false);
 
     const args: Record<string, any> = { query, limit };
     if (mode === "screens" && params.platform) {
@@ -417,23 +419,30 @@ export class DcLazywebClient {
       args.target_screen_description = query;
     }
 
-    const res = await this.fetchImpl(this.mcpUrl, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "application/json, text/event-stream",
-        Authorization: `Bearer ${token}`,
-      },
-      body: JSON.stringify({
-        jsonrpc: "2.0",
-        id: 1,
-        method: "tools/call",
-        params: {
-          name: mcpToolName,
-          arguments: args,
+    const executeRpcPost = async (bearerToken: string) =>
+      this.fetchImpl(this.mcpUrl, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json, text/event-stream",
+          Authorization: `Bearer ${bearerToken}`,
         },
-      }),
-    });
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: 1,
+          method: "tools/call",
+          params: {
+            name: mcpToolName,
+            arguments: args,
+          },
+        }),
+      });
+
+    let res = await executeRpcPost(token);
+    if (res.status === 401 && !(process.env.LAZYWEB_MCP_TOKEN || "").trim()) {
+      token = await this.ensureToken(true);
+      res = await executeRpcPost(token);
+    }
 
     const contentType = res.headers?.get?.("content-type") || "application/json";
     const rawText = await res.text();
