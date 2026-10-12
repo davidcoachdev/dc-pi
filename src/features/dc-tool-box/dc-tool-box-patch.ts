@@ -151,24 +151,46 @@ export function installToolBoxPatch(): boolean {
     const rawName = String(this.toolName || "tool");
     const icon = getToolIcon(rawName);
     const statusGlyph = isError ? " ✖" : (this.result ? " ✓" : " …");
-    const badge = ` ${icon}  ${rawName}${statusGlyph} `;
-    const badgeLen = visibleWidth(badge);
 
-    // Indicador de colapso [▼] cerrado, [▲] abierto
+    let detail = "";
+    if (this.args) {
+      const p = this.args.path ?? this.args.file_path;
+      if (typeof p === "string" && p.trim()) {
+        const parts = p.trim().split(/[\\/]/);
+        detail = parts.length > 2 ? ` …/${parts.slice(-2).join("/")}` : ` ${p.trim()}`;
+      } else if (typeof this.args.command === "string" && this.args.command.trim()) {
+        const cmd = this.args.command.trim().split(/\s+/).slice(0, 3).join(" ");
+        detail = ` ${cmd}`;
+      } else if (typeof this.args.pattern === "string" && this.args.pattern.trim()) {
+        detail = ` ${this.args.pattern.trim()}`;
+      } else if (typeof this.args.query === "string" && this.args.query.trim()) {
+        detail = ` ${this.args.query.trim()}`;
+      }
+    }
+
+    const maxBadgeLen = Math.max(10, cardW - 14);
+    let badgeText = ` ${icon}  ${rawName}${detail}${statusGlyph} `;
+    if (visibleWidth(badgeText) > maxBadgeLen) {
+      badgeText = truncateToWidth(badgeText, maxBadgeLen - 3, "") + "… ";
+    }
+    const badgeLen = visibleWidth(badgeText);
+
+    // Indicador de colapso ▼ cerrado, ▲ abierto en borde superior (solo el icono)
     const arrowSymbol = this.expanded ? "▲" : "▼";
     const arrowBadge = ` ${arrowSymbol} `;
     const arrowLen = visibleWidth(arrowBadge);
-    const topBorderRightDashes = 3;
+    const topBorderRightDashes = 2;
     const availableDashes = Math.max(0, cardW - 3 - badgeLen - arrowLen - topBorderRightDashes);
 
     let topBorder = "";
-    if (arrowBadge && availableDashes >= 1) {
+    if (availableDashes >= 1) {
       const whiteArrow = `\x1b[38;2;255;255;255m${arrowBadge}\x1b[0m`;
-      topBorder = `${borderCol}╭─${badge}${"─".repeat(availableDashes)}${whiteArrow}${borderCol}${"─".repeat(topBorderRightDashes)}╮${reset}`;
+      topBorder = `${borderCol}╭─${badgeText}${"─".repeat(availableDashes)}${whiteArrow}${borderCol}${"─".repeat(topBorderRightDashes)}╮${reset}`;
     } else {
-      topBorder = `${borderCol}╭─${badge}${"─".repeat(Math.max(0, cardW - 3 - badgeLen))}╮${reset}`;
+      topBorder = `${borderCol}╭─${badgeText}${"─".repeat(Math.max(0, cardW - 3 - badgeLen))}╮${reset}`;
     }
 
+    // Botón interactivo de copia 📋 en borde inferior (solo el icono)
     const copyBadge = " 📋 ";
     const copyBadgeLen = visibleWidth(copyBadge);
     const bottomBorderRightDashes = 3;
@@ -226,19 +248,35 @@ export function installToolBoxPatch(): boolean {
       linesToProcess = unwrapped;
     }
 
+    // Guardar texto completo sin truncar para el copiado al portapapeles
+    (this as any)[LAST_BODY_TEXT] = linesToProcess.map((l) => l.replace(/\x1b\[[0-9;]*m/g, "")).join("\n");
+
+    const totalLines = linesToProcess.length;
+    let displayedLines = linesToProcess;
+    let hasMorePreview = false;
+    let remainingLines = 0;
+
+    // Si está colapsado (this.expanded === false) y no es error: mostrar preview de 3 líneas
+    if (!this.expanded && !isError && totalLines > 0) {
+      const PREVIEW_LIMIT = 3;
+      if (totalLines > PREVIEW_LIMIT) {
+        displayedLines = linesToProcess.slice(0, PREVIEW_LIMIT);
+        hasMorePreview = true;
+        remainingLines = totalLines - PREVIEW_LIMIT;
+      }
+    }
+
     const bodyLines: string[] = [];
-    const plainBodyLines: string[] = [];
     const targetW = cardW - 4;
 
-    for (let i = 0; i < linesToProcess.length; i++) {
-      const line = linesToProcess[i];
+    for (let i = 0; i < displayedLines.length; i++) {
+      const line = displayedLines[i];
       if (line === undefined) continue;
       if (line.includes("\x1b_G") || line.includes("\x1b]1337;")) {
         bodyLines.push(line);
         continue;
       }
       const clean = line.replace(/\x1b\[48;2;[0-9;]+m/g, "").replace(/\x1b\[49m/g, "").trimEnd();
-      plainBodyLines.push(clean.replace(/\x1b\[[0-9;]*m/g, ""));
       const v = visibleWidth(clean);
       const cell = v > targetW ? truncateToWidth(clean, targetW, "") : clean + " ".repeat(Math.max(0, targetW - v));
       const row = `${side} ${cell} ${side}`;
@@ -246,7 +284,15 @@ export function installToolBoxPatch(): boolean {
       bodyLines.push(`${leftPad}${bgAnsi}${pres}\x1b[49m${rightPad}`);
     }
 
-    (this as any)[LAST_BODY_TEXT] = plainBodyLines.join("\n");
+    if (hasMorePreview) {
+      const hint = `\x1b[2m… (${remainingLines} líneas más · clic arriba en ▼ para expandir)\x1b[22m`;
+      const v = visibleWidth(hint);
+      const cell = v > targetW ? truncateToWidth(hint, targetW, "") : hint + " ".repeat(Math.max(0, targetW - v));
+      const row = `${side} ${cell} ${side}`;
+      const pres = row.replace(/\x1b\[0m/g, `\x1b[0m${bgAnsi}`).replace(/\x1b\[49m/g, bgAnsi);
+      bodyLines.push(`${leftPad}${bgAnsi}${pres}\x1b[49m${rightPad}`);
+    }
+
     (this as any)[LAST_COPY_REGION] = {
       y: 2 + bodyLines.length,
       startX: margin + cardW - 1 - bottomBorderRightDashes - copyBadgeLen,
@@ -259,10 +305,19 @@ export function installToolBoxPatch(): boolean {
   proto.handleMouse = function (event: TuiMouseEvent): TuiMouseEventResult | undefined {
     const margin = event.width > 40 ? config.indent : (event.width > 20 ? Math.min(config.indent, 1) : 0);
 
-    // Clic en botón 📋 copiar en borde inferior
     if (event.type === "click" && (event.button ?? "left") === "left") {
+      // 1. Clic en la cabecera superior (y === 0 o y === 1): alternar colapso / expansión
+      if (event.y === 0 || event.y === 1) {
+        this.setExpanded(!this.expanded);
+        (this.ui as any)?.requestRender?.();
+        const tuiRef = (globalThis as any)[Symbol.for("dc.sidebar.tui-ref")];
+        tuiRef?.requestRender?.();
+        return { handled: true };
+      }
+
+      // 2. Clic en botón 📋 copiar en borde inferior
       const copyRegion = (this as any)[LAST_COPY_REGION];
-      if (copyRegion && event.y === copyRegion.y && event.x >= copyRegion.startX) {
+      if (copyRegion && (event.y === copyRegion.y || event.y === copyRegion.y - 1) && event.x >= copyRegion.startX) {
         let textToCopy = "";
         const result = (this as any).result;
 
@@ -282,6 +337,7 @@ export function installToolBoxPatch(): boolean {
 
         if (textToCopy.trim()) {
           void dcClipboard.copy(textToCopy);
+          dcNotifier.notifyHerdr("📋 Portapapeles", "Copiado resultado de " + (this.toolName || "tool"));
         }
         return { handled: true };
       }

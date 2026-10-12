@@ -4,7 +4,12 @@ import { dcClipboard } from "../../../integrations/dc-clipboard/dc-clipboard.ts"
 import { dcNotifier } from "../../../integrations/dc-notify/dc-notifier.ts";
 import { isCodeBoxEnabled } from "../core/dc-markdown-config.ts";
 import { getHeadingPrefix } from "../core/dc-markdown-tokens.ts";
-import { codeBlockCollapseState, getStoredCodeBlock } from "../core/dc-markdown-store.ts";
+import {
+  clearRenderedBlockQueue,
+  codeBlockCollapseState,
+  getStoredCodeBlock,
+  takeRenderedBlock,
+} from "../core/dc-markdown-store.ts";
 import { renderCodeBlockBox } from "../renderers/dc-code-block-box.ts";
 
 export const ORIG_RENDER_TOKEN = Symbol.for("dc.markdown.orig-render-token");
@@ -69,6 +74,19 @@ export function installMarkdownPatch(): boolean {
         return orig.call(this, token, width, nextTokenType, styleContext);
       }
 
+      const rawLang = (token.lang || "").trim().toLowerCase();
+      // Si el bloque de código es documentación o markdown explícito (```markdown / ```md / ```txt / ```text),
+      // NO encerrarlo en una card de código ni ponerle números de línea:
+      // se renderiza directamente como texto/markdown enriquecido nativo de Pi para que fluya en el chat.
+      if (rawLang === "markdown" || rawLang === "md" || rawLang === "text" || rawLang === "txt" || rawLang === "") {
+        const md = new Markdown(token.text || "", this.paddingX ?? 0, this.paddingY ?? 0, this.theme);
+        const rendered = md.render(width);
+        if (nextTokenType && nextTokenType !== "space") {
+          rendered.push("");
+        }
+        return rendered;
+      }
+
       const lines = renderCodeBlockBox({
         text: token.text || "",
         lang: token.lang,
@@ -108,6 +126,7 @@ export function installAssistantCopyPatch(): boolean {
   const origHandleMouse = proto[ORIG_ASSISTANT_MOUSE];
 
   proto.render = function (width: number): string[] {
+    clearRenderedBlockQueue();
     const lines = origRender.call(this, width);
     if (!lines || lines.length <= 1) return lines;
 
@@ -125,6 +144,7 @@ export function installAssistantCopyPatch(): boolean {
 
     for (let y = 0; y < lines.length; y++) {
       const line = lines[y] ?? "";
+      // Detección 1: mediante marker APC si existiera
       const topMatch = line.match(topMarkerRegex);
       if (topMatch) {
         const id = parseInt(topMatch[1]!, 10);
@@ -150,11 +170,41 @@ export function installAssistantCopyPatch(): boolean {
             break;
           }
         }
+        continue;
+      }
+
+      // Detección 2 canónica y limpia: por borde de caja ╭─ y ╰─ con 📋 (cero residuos de escape en terminal)
+      if (line.includes("╭─") && (line.includes("▲") || line.includes("▼"))) {
+        const topY = y;
+        const boxW = visibleWidth(line);
+        for (let by = y + 1; by < lines.length; by++) {
+          const bLine = lines[by] ?? "";
+          if (bLine.includes("╰") && bLine.includes("📋")) {
+            const bottomY = by;
+            const blockId = takeRenderedBlock();
+            if (blockId !== undefined) {
+              const data = getStoredCodeBlock(blockId);
+              if (data) {
+                codeBlockRegions.push({
+                  id: blockId,
+                  topY,
+                  bottomY,
+                  boxW,
+                  code: data.code,
+                  lang: data.lang,
+                });
+              }
+            }
+            y = bottomY;
+            break;
+          }
+        }
       }
     }
     (this as any)[CODE_BLOCK_REGIONS] = codeBlockRegions;
 
-    return lines;
+    // Limpiar defensivamente cualquier residuo antes de emitir a la terminal
+    return lines.map((l: string) => (l ? l.replace(/\x1b_dc:code:\d+:(?:top|bot)\x1b\\/g, "") : l));
   };
 
   proto.handleMouse = function (event: TuiMouseEvent): TuiMouseEventResult | undefined {

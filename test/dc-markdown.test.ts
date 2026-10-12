@@ -50,7 +50,7 @@ test("prettifyErrorContent formats embedded JSON cleanly", () => {
   assert.ok(pretty.includes("  \"code\": 503"));
 });
 
-test("renderCodeBlockBox produces card with title, copy button and APC markers", () => {
+test("renderCodeBlockBox produces clean card with title and copy button without APC leaks", () => {
   const lines = renderCodeBlockBox({
     text: "const a = 123;",
     lang: "ts",
@@ -61,11 +61,33 @@ test("renderCodeBlockBox produces card with title, copy button and APC markers",
   assert.ok(lines.length >= 3);
   // Header with rounded corner ╭─, icon and arrow
   assert.ok(lines[0]!.includes("╭─") && lines[0]!.includes("ts") && lines[0]!.includes("▲"));
-  // Top APC marker
-  assert.ok(lines[0]!.includes("\x1b_dc:code:"));
-  // Bottom border with copy button and bot APC marker
+  // No APC escape leakage in rendered strings to protect terminal layout
+  assert.ok(!lines[0]!.includes("\x1b_dc:code:"), "Top row must not leak APC sequence");
+  // Code block includes line numbers for code
+  assert.ok(lines.some((l: string) => l.includes("1 │")));
+  // Bottom border with copy button
   assert.ok(lines[lines.length - 1]!.includes("╰") && lines[lines.length - 1]!.includes("📋"));
-  assert.ok(lines[lines.length - 1]!.includes(":bot\x1b\\"));
+  assert.ok(!lines[lines.length - 1]!.includes(":bot\x1b\\"), "Bottom row must not leak APC sequence");
+});
+
+test("renderCodeBlockBox for markdown (lang: 'markdown' | 'md') renders formatted headings and bullet points", () => {
+  const lines = renderCodeBlockBox({
+    text: "# Documento Markdown\n\n- Lista item 1\n- Lista item 2",
+    lang: "markdown",
+    width: 60,
+    indent: "  ",
+  });
+
+  assert.ok(lines.length >= 3);
+  // Header displays markdown tag
+  assert.ok(lines[0]!.includes("markdown"));
+  // Must NOT include code gutter numbers (1 │)
+  assert.ok(!lines.some((l: string) => l.includes("1 │")), "Markdown blocks must not have line numbers");
+  // Must render formatted heading without literal '#' prefix
+  assert.ok(!lines.some((l: string) => l.includes("# Documento")), "Must not show literal '#' character");
+  assert.ok(lines.some((l: string) => l.includes("Documento Markdown")), "Must show formatted heading text");
+  // Must render bullet point '•' instead of raw dash '-'
+  assert.ok(lines.some((l: string) => l.includes("•")), "Must render bullet point symbol");
 });
 
 test("storeCodeBlock stores and retrieves clean code by id", () => {
