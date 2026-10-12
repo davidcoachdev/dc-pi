@@ -72,7 +72,7 @@ export default function dcChangesExtension(pi: ExtensionAPI): void {
   });
 
   try {
-    pi.registerShortcut("alt+f" as never, {
+    pi.registerShortcut("alt+shift+f" as never, {
       description: "Visor de cambios Git (DC Studio)",
       handler: async (ctx) => {
         await showChanges(ctx);

@@ -228,12 +228,33 @@ export function syncDcSkills(
       return result;
     }
 
+    const entries = fs.readdirSync(sourceDir, { withFileTypes: true });
+    const skillDirs = entries.filter((e) => e.isDirectory()).map((e) => e.name);
+
+    // Si el destino es el directorio global ~/.pi/agent/skills/ y dc-pi ya está declarado como paquete
+    // (provee "skills": ["./skills"] en package.json), evitamos duplicar para prevenir alertas [Skill conflicts].
+    if (path.resolve(targetDir) === path.resolve(getPiTargetSkillsDir())) {
+      // Limpiar copias redundantes previas en ~/.pi/agent/skills/ que coincidan exactamente con las del paquete
+      for (const skillName of skillDirs) {
+        const redundantPath = path.join(targetDir, skillName);
+        if (fs.existsSync(redundantPath)) {
+          try {
+            fs.rmSync(redundantPath, { recursive: true, force: true });
+          } catch {
+            /* ignore cleanup error */
+          }
+        }
+      }
+      return {
+        synced: [],
+        skipped: skillDirs,
+        errors: [],
+      };
+    }
+
     if (!fs.existsSync(targetDir)) {
       fs.mkdirSync(targetDir, { recursive: true });
     }
-
-    const entries = fs.readdirSync(sourceDir, { withFileTypes: true });
-    const skillDirs = entries.filter((e) => e.isDirectory()).map((e) => e.name);
 
     for (const skillName of skillDirs) {
       const srcSkillPath = path.join(sourceDir, skillName);

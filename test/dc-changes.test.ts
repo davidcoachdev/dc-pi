@@ -105,7 +105,7 @@ test("DcChangesPanel multi-worktree navigation with w/W keys", () => {
   assert.ok(lines.some((l) => l.includes("Worktrees:") && l.includes("feat-x")));
 });
 
-test("dcChangesExtension registers only /dc-changes with Alt+F", () => {
+test("dcChangesExtension registers only /dc-changes with Alt+Shift+F", () => {
   const registeredCommands: string[] = [];
   let registeredShortcut: string | undefined;
 
@@ -120,5 +120,5 @@ test("dcChangesExtension registers only /dc-changes with Alt+F", () => {
 
   dcChangesExtension(mockPi);
   assert.deepEqual(registeredCommands, ["dc-changes"]);
-  assert.equal(registeredShortcut, "alt+f");
+  assert.equal(registeredShortcut, "alt+shift+f");
 });

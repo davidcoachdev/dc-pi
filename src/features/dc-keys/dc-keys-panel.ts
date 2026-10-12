@@ -27,7 +27,7 @@ export function getDefaultCategories(): ShortcutCategory[] {
         { key: "Alt+Shift+G", action: "visor de memorias Engram (Engram Manager)" },
         { key: "Alt+H", action: "visor de historial Git y grafo (Git Graph)" },
         { key: "Alt+O", action: "explorador de seguridad OWASP (OWASP Cheat Sheets)" },
-        { key: "Alt+F", action: "control de cambios y diff Git (Changes)" },
+        { key: "Alt+Shift+F", action: "control de cambios y diff Git (Changes)" },
         { key: "Alt+M", action: "selector de modelos y reasoning (Models)" },
         { key: "Alt+Shift+Q", action: "monitor de cuotas de modelos (Quota)" },
         { key: "Alt+Shift+B", action: "alternar visibilidad del sidebar DC Studio" },
