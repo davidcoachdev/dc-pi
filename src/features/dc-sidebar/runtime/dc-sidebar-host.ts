@@ -56,6 +56,13 @@ export function isRailActive(tui?: any): boolean {
 
 export function enforceBar(tui: any): void {
   if (!tui || !tui.terminal) return;
+
+  const active = isRailActive(tui);
+  (globalThis as any)[Symbol.for("dc.sidebar.rail-visible")] = active;
+  if (tui.terminal) {
+    tui.terminal[Symbol.for("dc.sidebar.rail-visible")] = active;
+  }
+
   const state = tui.terminal[G_SIDEBAR_STATE] as SidebarState | undefined;
   if (!state) return;
 
@@ -83,12 +90,7 @@ export function enforceBar(tui: any): void {
     };
   }
 
-  const active = isRailActive(tui);
   state.active = active;
-  (globalThis as any)[Symbol.for("dc.sidebar.rail-visible")] = active;
-  if (tui.terminal) {
-    tui.terminal[Symbol.for("dc.sidebar.rail-visible")] = active;
-  }
   // No forzar ownsHost = () => true cuando el rail está inactivo/oculto,
   // permitiendo que los widgets en dock (aboveEditor) se rendericen normalmente.
   if (state.ownsHost && (state.ownsHost as any)[BAR_FORCED]) {
@@ -168,8 +170,6 @@ export function tryWrap(tui: any): boolean {
     return false;
   }
 
-  if (!isGentleRail(node)) return false;
-
   const actualRailNode = extractRailNode(node);
   try {
     const idx = railIndex(actualRailNode);
@@ -184,6 +184,35 @@ export function tryWrap(tui: any): boolean {
   const originalLayout = root[LAYOUT_NODE];
   (root as any)[G_NATIVE_NODE] = originalLayout;
 
+  let standaloneRail: Component | undefined;
+  let standaloneLeft: Component | undefined;
+  let currentRawLayout: any;
+
+  const getStandaloneLeft = (): Component => {
+    if (!standaloneLeft) {
+      standaloneLeft = {
+        render: (w: number) => ((root as any).render ? (root as any).render(w) : []),
+        invalidate: () => {
+          try {
+            tui.chatContainer?.invalidate?.();
+            (root as any).invalidate?.();
+          } catch {
+            /* noop */
+          }
+        },
+        [LAYOUT_NODE]: () => currentRawLayout,
+      } as unknown as Component;
+    }
+    return standaloneLeft;
+  };
+
+  const getStandaloneRail = (): Component => {
+    if (!standaloneRail) {
+      standaloneRail = framedRail(tui);
+    }
+    return standaloneRail;
+  };
+
   const wrapped: LayoutNodeFn = function () {
     try {
       enforceBar(tui);
@@ -194,44 +223,47 @@ export function tryWrap(tui: any): boolean {
       const cols = getTerminalColumns(tui);
       const breakpoint = getSidebarBreakpoint();
       const isTooNarrow = cols > 0 && cols < breakpoint;
+      const isGentle = isGentleRail(raw);
 
       if (prefs.hidden || isTooNarrow) {
-        if (raw.type === "hstack" && Array.isArray(raw.entries)) {
-          const idx = railIndex(raw);
-          if (idx >= 0) {
-            const entries = raw.entries
-              .filter((_: unknown, i: number) => i !== idx)
-              .map((e: any) => ({ ...e, grow: 1, shrink: 1 }));
-            return { ...raw, gap: 0, entries };
-          }
-        }
-        if (raw.type === "vstack" && Array.isArray(raw.entries)) {
-          const entries = raw.entries.map((entry: any) => {
-            const comp = entry?.component;
-            if (!comp || typeof comp[LAYOUT_NODE] !== "function") return entry;
-            try {
-              const inner = comp[LAYOUT_NODE]();
-              if (inner?.type === "hstack" && Array.isArray(inner.entries)) {
-                const idx = railIndex(inner);
-                if (idx >= 0) {
-                  const filtered = inner.entries
-                    .filter((_: any, i: number) => i !== idx)
-                    .map((e: any) => ({ ...e, grow: 1, shrink: 1 }));
-                  const newComp: Component = {
-                    ...comp,
-                    render: (w: number) => (comp.render ? comp.render(w) : []),
-                    invalidate: () => comp.invalidate?.(),
-                    [LAYOUT_NODE]: () => ({ ...inner, gap: 0, entries: filtered }),
-                  };
-                  return { ...entry, component: newComp, grow: 1, shrink: 1 };
-                }
-              }
-            } catch {
-              /* noop */
+        if (isGentle) {
+          if (raw.type === "hstack" && Array.isArray(raw.entries)) {
+            const idx = railIndex(raw);
+            if (idx >= 0) {
+              const entries = raw.entries
+                .filter((_: unknown, i: number) => i !== idx)
+                .map((e: any) => ({ ...e, grow: 1, shrink: 1 }));
+              return { ...raw, gap: 0, entries };
             }
-            return entry;
-          });
-          return { ...raw, entries };
+          }
+          if (raw.type === "vstack" && Array.isArray(raw.entries)) {
+            const entries = raw.entries.map((entry: any) => {
+              const comp = entry?.component;
+              if (!comp || typeof comp[LAYOUT_NODE] !== "function") return entry;
+              try {
+                const inner = comp[LAYOUT_NODE]();
+                if (inner?.type === "hstack" && Array.isArray(inner.entries)) {
+                  const idx = railIndex(inner);
+                  if (idx >= 0) {
+                    const filtered = inner.entries
+                      .filter((_: any, i: number) => i !== idx)
+                      .map((e: any) => ({ ...e, grow: 1, shrink: 1 }));
+                    const newComp: Component = {
+                      ...comp,
+                      render: (w: number) => (comp.render ? comp.render(w) : []),
+                      invalidate: () => comp.invalidate?.(),
+                      [LAYOUT_NODE]: () => ({ ...inner, gap: 0, entries: filtered }),
+                    };
+                    return { ...entry, component: newComp, grow: 1, shrink: 1 };
+                  }
+                }
+              } catch {
+                /* noop */
+              }
+              return entry;
+            });
+            return { ...raw, entries };
+          }
         }
         return raw;
       }
@@ -244,56 +276,73 @@ export function tryWrap(tui: any): boolean {
         /* noop */
       }
 
-      if (raw.type === "hstack" && Array.isArray(raw.entries)) {
-        const idx = railIndex(raw);
-        if (idx >= 0) {
-          const railEntry = raw.entries[idx] as { component: Component };
-          const { scroll } = railParts(railEntry.component);
-          scroll?.setScrollbar?.("hidden");
-          (globalThis as any)[G_SCROLL] = scroll;
+      // Modo coexistencia: si gentle-shell ya montó un rail, reemplazarlo
+      if (isGentle) {
+        if (raw.type === "hstack" && Array.isArray(raw.entries)) {
+          const idx = railIndex(raw);
+          if (idx >= 0) {
+            const railEntry = raw.entries[idx] as { component: Component };
+            const { scroll } = railParts(railEntry.component);
+            scroll?.setScrollbar?.("hidden");
+            (globalThis as any)[G_SCROLL] = scroll;
 
-          const framed = framedRail(tui, railEntry.component);
-          const entries = raw.entries.slice();
-          entries[idx] = { ...railEntry, component: framed, basis: RAIL_WIDTH + 2 };
-          return { ...raw, gap: 0, entries };
+            const framed = framedRail(tui, railEntry.component);
+            const entries = raw.entries.slice();
+            entries[idx] = { ...railEntry, component: framed, basis: RAIL_WIDTH + 2 };
+            return { ...raw, gap: 0, entries };
+          }
+        }
+
+        if (raw.type === "vstack" && Array.isArray(raw.entries)) {
+          const entries = raw.entries.map((entry: any) => {
+            const comp = entry?.component;
+            if (!comp || typeof comp[LAYOUT_NODE] !== "function") return entry;
+            try {
+              const inner = comp[LAYOUT_NODE]();
+              if (inner?.type === "hstack" && Array.isArray(inner.entries)) {
+                const idx = railIndex(inner);
+                if (idx >= 0) {
+                  const railEntry = inner.entries[idx] as { component: Component };
+                  const { scroll } = railParts(railEntry.component);
+                  scroll?.setScrollbar?.("hidden");
+                  (globalThis as any)[G_SCROLL] = scroll;
+
+                  const framed = framedRail(tui, railEntry.component);
+                  const subEntries = inner.entries.slice();
+                  subEntries[idx] = { ...railEntry, component: framed, basis: RAIL_WIDTH + 2 };
+                  const newComp: Component = {
+                    ...comp,
+                    render: (w: number) => (comp.render ? comp.render(w) : []),
+                    invalidate: () => comp.invalidate?.(),
+                    [LAYOUT_NODE]: () => ({ ...inner, gap: 0, entries: subEntries }),
+                  };
+                  return { ...entry, component: newComp };
+                }
+              }
+            } catch {
+              /* noop */
+            }
+            return entry;
+          });
+          return { ...raw, entries };
         }
       }
 
-      if (raw.type === "vstack" && Array.isArray(raw.entries)) {
-        const entries = raw.entries.map((entry: any) => {
-          const comp = entry?.component;
-          if (!comp || typeof comp[LAYOUT_NODE] !== "function") return entry;
-          try {
-            const inner = comp[LAYOUT_NODE]();
-            if (inner?.type === "hstack" && Array.isArray(inner.entries)) {
-              const idx = railIndex(inner);
-              if (idx >= 0) {
-                const railEntry = inner.entries[idx] as { component: Component };
-                const { scroll } = railParts(railEntry.component);
-                scroll?.setScrollbar?.("hidden");
-                (globalThis as any)[G_SCROLL] = scroll;
+      // Modo Autónomo (gentle-shell desactivado o ausente):
+      // Montar directamente hstack con el layout nativo a la izquierda y el sidebar DC Studio a la derecha
+      currentRawLayout = raw;
+      const left = getStandaloneLeft();
+      const rail = getStandaloneRail();
 
-                const framed = framedRail(tui, railEntry.component);
-                const subEntries = inner.entries.slice();
-                subEntries[idx] = { ...railEntry, component: framed, basis: RAIL_WIDTH + 2 };
-                const newComp: Component = {
-                  ...comp,
-                  render: (w: number) => (comp.render ? comp.render(w) : []),
-                  invalidate: () => comp.invalidate?.(),
-                  [LAYOUT_NODE]: () => ({ ...inner, gap: 0, entries: subEntries }),
-                };
-                return { ...entry, component: newComp };
-              }
-            }
-          } catch {
-            /* noop */
-          }
-          return entry;
-        });
-        return { ...raw, entries };
-      }
-
-      return raw;
+      return {
+        type: "hstack",
+        gap: 0,
+        align: "stretch",
+        entries: [
+          { component: left, basis: 0, grow: 1, shrink: 1, minSize: 1 },
+          { component: rail, basis: RAIL_WIDTH + 2, grow: 0, shrink: 0, minSize: RAIL_WIDTH + 2 },
+        ],
+      };
     } catch {
       return originalLayout.call(root);
     }
