@@ -145,6 +145,8 @@ test("DcTtsPanel renders tabs, status card, and handles keyboard navigation", ()
   const linesShortcuts = panel.render(84).join("\n");
   assert.ok(linesShortcuts.includes("Alt+U"));
   assert.ok(linesShortcuts.includes("Alt+V"));
+  assert.ok(!linesShortcuts.includes("Alt+←"));
+  assert.ok(!linesShortcuts.includes("Alt+→"));
 
   // Close with q
   panel.handleInput("q");

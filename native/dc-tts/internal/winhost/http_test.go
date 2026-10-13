@@ -34,7 +34,7 @@ func TestHTTPBridgeEndpointsForDcFaceAndAssistant(t *testing.T) {
 		t.Fatalf("unexpected /status: %+v", st)
 	}
 
-	// 2. POST /read (Markdown cleaning + paragraph navigation buffer)
+	// 2. POST /read (Markdown cleaning + full multi-paragraph sequential playback)
 	readBody, _ := json.Marshal(map[string]any{
 		"text": "# Hola\n\nPrimer párrafo con **negrita**.\n\n```ts\nconst x = 1;\n```\n\nSegundo párrafo de prueba.",
 	})
@@ -47,6 +47,9 @@ func TestHTTPBridgeEndpointsForDcFaceAndAssistant(t *testing.T) {
 	_ = json.NewDecoder(resp2.Body).Decode(&readRes)
 	if readRes["status"] != "playing" {
 		t.Fatalf("expected status playing after POST /read, got %+v", readRes)
+	}
+	if len(eng.spoken) != 3 {
+		t.Fatalf("expected all 3 paragraphs queued on POST /read, got %d (%v)", len(eng.spoken), eng.spoken)
 	}
 
 	// 3. POST /nav (next paragraph)

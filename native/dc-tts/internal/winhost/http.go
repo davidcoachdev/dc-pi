@@ -98,16 +98,19 @@ func (b *HTTPBridge) speakParagraphLocked(idx int) (protocol.StatusResponse, int
 		return st, 0, err
 	}
 	_, _ = b.engine.Command("stop")
-	chunks := b.paragraphs[idx]
 	var lastSt protocol.StatusResponse
 	var err error
-	for _, ch := range chunks {
-		lastSt, err = b.engine.Command("speak:" + ch)
-		if err != nil {
-			return lastSt, 0, err
+	totalChunks := 0
+	for pIdx := idx; pIdx < len(b.paragraphs); pIdx++ {
+		for _, ch := range b.paragraphs[pIdx] {
+			lastSt, err = b.engine.Command("speak:" + ch)
+			if err != nil {
+				return lastSt, totalChunks, err
+			}
+			totalChunks++
 		}
 	}
-	return lastSt, len(chunks), nil
+	return lastSt, totalChunks, nil
 }
 
 func (b *HTTPBridge) handleRead(w http.ResponseWriter, r *http.Request) {

@@ -47,6 +47,7 @@ function Apply-SynthSettings {
   $synth.Rate   = $intRate
   $synth.Volume = [int]$state.volume
 }
+Apply-SynthSettings
 
 function Sync-SynthState {
   $st = $synth.State.ToString()
@@ -168,7 +169,6 @@ while ($true) {
     if ($cmd.StartsWith("speak64:")) {
       $b64 = $cmd.Substring(8)
       $text = [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String($b64))
-      Apply-SynthSettings
       if ($synth.State.ToString() -eq "Paused") {
         $synth.Resume()
       }
