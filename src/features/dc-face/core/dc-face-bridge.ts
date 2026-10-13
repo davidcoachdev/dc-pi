@@ -105,4 +105,8 @@ export class TtsBridgeClient {
   }
 }
 
-export const ttsBridgeClient = new TtsBridgeClient();
+export const G_TTS_BRIDGE_CLIENT = Symbol.for("dc.face.tts-bridge-client");
+
+export const ttsBridgeClient: TtsBridgeClient =
+  (globalThis as any)[G_TTS_BRIDGE_CLIENT] ??
+  ((globalThis as any)[G_TTS_BRIDGE_CLIENT] = new TtsBridgeClient());
