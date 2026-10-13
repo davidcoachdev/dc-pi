@@ -6,6 +6,7 @@ export type TtsStatus = "idle" | "playing";
 
 export class TtsBridgeClient {
   private status: TtsStatus = "idle";
+  private rate: number = 1.0;
   private available: boolean | null = null;
   private pollTimer: ReturnType<typeof setInterval> | null = null;
   private listeners = new Set<(status: TtsStatus) => void>();
@@ -14,6 +15,38 @@ export class TtsBridgeClient {
 
   getStatus(): TtsStatus {
     return this.status;
+  }
+
+  getRate(): number {
+    return this.rate;
+  }
+
+  setRate(nextRate: number): void {
+    if (!Number.isFinite(nextRate) || nextRate <= 0) return;
+    const clamped = Math.min(2.5, Math.max(0.4, nextRate));
+    if (clamped !== this.rate) {
+      this.rate = clamped;
+      this.notify();
+    }
+  }
+
+  setStatus(next: TtsStatus, nextRate?: number): void {
+    this.available = true;
+    let changed = false;
+    if (typeof nextRate === "number" && Number.isFinite(nextRate) && nextRate > 0) {
+      const clamped = Math.min(2.5, Math.max(0.4, nextRate));
+      if (clamped !== this.rate) {
+        this.rate = clamped;
+        changed = true;
+      }
+    }
+    if (next !== this.status) {
+      this.status = next;
+      changed = true;
+    }
+    if (changed) {
+      this.notify();
+    }
   }
 
   isAvailable(): boolean | null {
@@ -27,16 +60,13 @@ export class TtsBridgeClient {
 
   async checkStatus(): Promise<TtsStatus> {
     try {
-      const res = await fetchJson<{ status?: string; state?: string }>(`${this.url}/status`, {
+      const res = await fetchJson<{ status?: string; state?: string; rate?: number }>(`${this.url}/status`, {
         timeoutMs: 1000,
       });
       this.available = true;
       const st = String(res.status ?? res.state ?? "idle").toLowerCase();
-      const newStatus: TtsStatus = st === "playing" || st === "paused" ? "playing" : "idle";
-      if (newStatus !== this.status) {
-        this.status = newStatus;
-        this.notify();
-      }
+      const newStatus: TtsStatus = st === "playing" ? "playing" : "idle";
+      this.setStatus(newStatus, res.rate);
       return this.status;
     } catch {
       this.available = false;

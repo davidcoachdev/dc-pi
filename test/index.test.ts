@@ -38,6 +38,7 @@ import dcStudioExtension, {
   dcPromptExtension,
   dcDialogsExtension,
   dcStateMonitorExtension,
+  dcTtsExtension,
 } from "../src/index.ts";
 
 test("src/index.ts exports all public primitives, classes, and helpers", () => {
@@ -82,6 +83,7 @@ test("src/index.ts exports all public primitives, classes, and helpers", () => {
   assert.equal(typeof dcPromptExtension, "function");
   assert.equal(typeof dcDialogsExtension, "function");
   assert.equal(typeof dcStateMonitorExtension, "function");
+  assert.equal(typeof dcTtsExtension, "function");
 
   // Default and named unified extension
   assert.equal(typeof dcStudioExtension, "function");
@@ -146,6 +148,7 @@ test("dcStudioExtension registers all canonical commands and keybindings", () =>
     "dc-plan",
     "dc-body",
     "dc-agents",
+    "dc-tts",
   ];
 
   for (const cmd of expectedCanonicalCommands) {
@@ -165,5 +168,7 @@ test("dcStudioExtension registers all canonical commands and keybindings", () =>
   assert.ok(shortcuts.has("alt+t"), "Expected Alt+T shortcut for plan");
   assert.ok(shortcuts.has("alt+e"), "Expected Alt+E shortcut for status");
   assert.ok(shortcuts.has("alt+c"), "Expected Alt+C shortcut for faces");
+  assert.ok(shortcuts.has("alt+u"), "Expected Alt+U shortcut for TTS monitor");
+  assert.ok(shortcuts.has("alt+v"), "Expected Alt+V shortcut for voice dictation");
   assert.ok(shortcuts.has("alt+shift+b"), "Expected Alt+Shift+B shortcut for sidebar");
 });

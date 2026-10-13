@@ -18,6 +18,17 @@ export type ProfileId = string;
 export const BIG_FACE_MIN_ROWS = 46;
 
 export const ANIM_MS = 900;
+export const TALK_ANIM_MS = 120;
+
+/**
+ * Calcula el intervalo en milisegundos por frame para el modo 'hablando'
+ * en proporción inversa a la velocidad de lectura (rate: 0.5x .. 2.0x).
+ * Base: 120ms a 1.0x (~8.3 transiciones de boca/seg = ~4.1 sílabas/seg).
+ */
+export function computeTalkAnimMs(rate: number = 1.0): number {
+  const safeRate = Number.isFinite(rate) && rate > 0 ? Math.min(2.5, Math.max(0.4, rate)) : 1.0;
+  return Math.max(50, Math.min(300, Math.round(TALK_ANIM_MS / safeRate)));
+}
 
 export const DOT: Record<FaceMode, string> = {
   feliz: "●",
@@ -63,6 +74,7 @@ export function mapAgentStateToFaceMode(state: AgentState): FaceMode {
 }
 
 export const G_FACE_FRAME = Symbol.for("dc.face.frame-idx");
+export const G_FACE_MODE = Symbol.for("dc.face.active-mode");
 
 export function getFaceFrameIndex(): number {
   return (globalThis as any)[G_FACE_FRAME] ?? 0;
@@ -70,6 +82,14 @@ export function getFaceFrameIndex(): number {
 
 export function setFaceFrameIndex(idx: number): void {
   (globalThis as any)[G_FACE_FRAME] = idx;
+}
+
+export function getActiveFaceMode(): FaceMode | undefined {
+  return (globalThis as any)[G_FACE_MODE];
+}
+
+export function setActiveFaceMode(mode: FaceMode | undefined): void {
+  (globalThis as any)[G_FACE_MODE] = mode;
 }
 
 export interface FaceProfile {

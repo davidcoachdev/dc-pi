@@ -59,6 +59,7 @@ import dcApiExtension from "./features/dc-api/dc-api.ts";
 import dcServicesExtension from "./features/dc-services/dc-services.ts";
 import dcYoutubeExtension from "./features/dc-youtube/dc-youtube.ts";
 import dcAudioExtension from "./features/dc-audio/dc-audio.ts";
+import dcTtsExtension from "./features/dc-tts/dc-tts.ts";
 import dcDateExtension from "./features/dc-date/dc-date.ts";
 import dcCodegraphExtension from "./features/dc-codegraph/dc-codegraph.ts";
 import dcScanGuardExtension from "./features/dc-scan-guard/index.ts";
@@ -112,6 +113,7 @@ export {
   dcServicesExtension,
   dcYoutubeExtension,
   dcAudioExtension,
+  dcTtsExtension,
   dcDateExtension,
   dcCodegraphExtension,
   dcScanGuardExtension,
@@ -137,6 +139,7 @@ export * from "./features/dc-api/index.ts";
 export * from "./features/dc-services/index.ts";
 export * from "./features/dc-youtube/index.ts";
 export * from "./features/dc-audio/index.ts";
+export * from "./features/dc-tts/index.ts";
 export * from "./features/dc-date/index.ts";
 export * from "./features/dc-codegraph/index.ts";
 export * from "./features/dc-scan-guard/index.ts";
@@ -185,6 +188,7 @@ export function dcStudioExtension(pi: ExtensionAPI, ctx?: ExtensionContext): voi
   dcServicesExtension(pi);
   dcYoutubeExtension(pi);
   dcAudioExtension(pi);
+  dcTtsExtension(pi);
   dcDateExtension(pi);
   dcCodegraphExtension(pi);
   dcScanGuardExtension(pi);

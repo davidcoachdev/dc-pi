@@ -4,9 +4,11 @@ import { dcNotifier } from "../../integrations/dc-notify/dc-notifier.ts";
 import { agentVisualStateStore, type AgentState } from "../../core/dc-agent-state/index.ts";
 import {
   ANIM_MS,
+  computeTalkAnimMs,
   DOT,
   type FaceMode,
   setFaceFrameIndex,
+  setActiveFaceMode,
   mapAgentStateToFaceMode,
 } from "./core/dc-face-types.ts";
 import { readFacePrefs, writeFacePrefs } from "./core/dc-face-prefs.ts";
@@ -39,6 +41,7 @@ export default function dcFaceExtension(pi: ExtensionAPI): void {
 
   let frameIdx = 0;
   let activeMode: FaceMode = "feliz";
+  let animIntervalMs = 0;
   let isDemoActive = false;
 
   const getProfile = () => readFacePrefs().profile ?? "dcdev";
@@ -46,6 +49,7 @@ export default function dcFaceExtension(pi: ExtensionAPI): void {
 
   const publishMiniFace = () => {
     setFaceFrameIndex(frameIdx);
+    setActiveFaceMode(activeMode);
     const raw = getMiniFaceFrame(activeMode, frameIdx);
     const tts = ttsBridgeClient.getStatus() === "playing" ? " ▶" : "";
     const plain = `${activeMode} ${raw}${tts}`;
@@ -73,7 +77,8 @@ export default function dcFaceExtension(pi: ExtensionAPI): void {
       } else if (activeMode === "escribiendo" || activeMode === "hablando") {
         ctxRef.ui.setWorkingIndicator({
           frames: ["·", "•", "●", "•"].map((s) => (theme ? theme.fg("accent", s) : s)),
-          intervalMs: 150,
+          intervalMs:
+            activeMode === "hablando" ? computeTalkAnimMs(ttsBridgeClient.getRate()) : 150,
         });
       } else {
         ctxRef.ui.setWorkingIndicator(undefined); // default spinner
@@ -94,8 +99,12 @@ export default function dcFaceExtension(pi: ExtensionAPI): void {
   };
 
   const syncFaceMode = (mode: FaceMode) => {
+    const modeChanged = activeMode !== mode;
     activeMode = mode;
-    frameIdx = 0;
+    if (modeChanged) {
+      // Para 'hablando', iniciar en frame 1 (boca abierta) para respuesta visual inmediata
+      frameIdx = mode === "hablando" ? 1 : 0;
+    }
     publishMiniFace();
     paintIndicator();
     const tui = getTui();
@@ -104,10 +113,18 @@ export default function dcFaceExtension(pi: ExtensionAPI): void {
       tui.requestRender?.();
     }
 
-    // Animar continuamente cualquier modo que tenga múltiples frames (incluido 'dormido')
-    // Pausar el timer únicamente en 'feliz' (reposo inicial de 1 solo frame)
+    // Animar continuamente cualquier modo que tenga múltiples frames (incluido 'dormido' y 'hablando')
+    // 'hablando' escala dinámicamente con computeTalkAnimMs(rate); el resto usa ANIM_MS (900ms)
     const shouldAnimate = hasAnimatedFrames(activeMode) && !isDemoActive;
-    if (shouldAnimate && !animTimer) {
+    const targetInterval =
+      activeMode === "hablando" ? computeTalkAnimMs(ttsBridgeClient.getRate()) : ANIM_MS;
+
+    if (shouldAnimate && (!animTimer || animIntervalMs !== targetInterval)) {
+      if (animTimer) {
+        clearInterval(animTimer);
+        animTimer = null;
+      }
+      animIntervalMs = targetInterval;
       animTimer = setInterval(() => {
         if (!isDemoActive) {
           frameIdx = (frameIdx + 1) % 10000;
@@ -118,11 +135,12 @@ export default function dcFaceExtension(pi: ExtensionAPI): void {
             t.requestRender?.();
           }
         }
-      }, ANIM_MS);
+      }, targetInterval);
       animTimer.unref?.();
     } else if (!shouldAnimate && animTimer) {
       clearInterval(animTimer);
       animTimer = null;
+      animIntervalMs = 0;
     }
   };
 
@@ -133,7 +151,9 @@ export default function dcFaceExtension(pi: ExtensionAPI): void {
     }
     isDemoActive = false;
     const currentState = agentVisualStateStore.getState() ?? "idle";
-    syncFaceMode(mapAgentStateToFaceMode(currentState));
+    const nextMode: FaceMode =
+      ttsBridgeClient.getStatus() === "playing" ? "hablando" : mapAgentStateToFaceMode(currentState);
+    syncFaceMode(nextMode);
   };
 
   const startDemo = (ctx: ExtensionContext, only?: FaceMode) => {
@@ -208,17 +228,24 @@ export default function dcFaceExtension(pi: ExtensionAPI): void {
     // Sincronización de estado con AgentVisualStateStore
     unsubStore = agentVisualStateStore.subscribe((state) => {
       if (!isDemoActive) {
-        syncFaceMode(mapAgentStateToFaceMode(state));
+        if (ttsBridgeClient.getStatus() === "playing") {
+          syncFaceMode("hablando");
+        } else {
+          syncFaceMode(mapAgentStateToFaceMode(state));
+        }
       }
     });
 
-    // Sincronización con TTS bridge
+    // Sincronización con TTS bridge (tiene prioridad visual mientras la voz está hablando)
     unsubTts = ttsBridgeClient.subscribe((ttsStatus) => {
       if (!isDemoActive) {
-        if (ttsStatus === "playing" && activeMode === "feliz") {
+        if (ttsStatus === "playing") {
           syncFaceMode("hablando");
-        } else if (ttsStatus === "idle" && activeMode === "hablando") {
-          syncFaceMode(mapAgentStateToFaceMode(agentVisualStateStore.getState() ?? "idle"));
+        } else if (activeMode === "hablando") {
+          const fallbackState = agentVisualStateStore.getState() ?? "idle";
+          syncFaceMode(
+            fallbackState === "talking" ? "feliz" : mapAgentStateToFaceMode(fallbackState),
+          );
         }
       }
     });
@@ -231,7 +258,11 @@ export default function dcFaceExtension(pi: ExtensionAPI): void {
     });
 
     // Inicializar estado reactivo sin polling ciego
-    syncFaceMode(mapAgentStateToFaceMode(agentVisualStateStore.getState() ?? "idle"));
+    const initMode: FaceMode =
+      ttsBridgeClient.getStatus() === "playing"
+        ? "hablando"
+        : mapAgentStateToFaceMode(agentVisualStateStore.getState() ?? "idle");
+    syncFaceMode(initMode);
   });
 
   pi.on("session_shutdown", () => {
@@ -240,7 +271,9 @@ export default function dcFaceExtension(pi: ExtensionAPI): void {
     if (animTimer) {
       clearInterval(animTimer);
       animTimer = null;
+      animIntervalMs = 0;
     }
+    setActiveFaceMode(undefined);
     unsubStore?.();
     unsubStore = null;
     unsubTts?.();

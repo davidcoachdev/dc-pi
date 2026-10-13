@@ -47,7 +47,7 @@ export const MINI_FACES: Record<FaceMode, readonly string[]> = {
     " ( ʘ◡ʘ )    ",
     " ( ʘoʘ )    ",
     " ( ʘ_ʘ )    ",
-    " ( ʘ.ʘ )    ",
+    " ( ʘOʘ )    ",
   ],
   permiso: [
     " ( ◐‿◐ )!  ",
