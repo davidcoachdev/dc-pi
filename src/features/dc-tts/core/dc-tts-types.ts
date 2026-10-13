@@ -91,3 +91,180 @@ export function extractAssistantMessageText(message: any): string {
   }
   return "";
 }
+
+export interface QuestionOptionInput {
+  label?: string;
+  description?: string;
+}
+
+export interface QuestionItemInput {
+  question?: string;
+  header?: string;
+  multiSelect?: boolean;
+  options?: QuestionOptionInput[];
+}
+
+interface InternalQuestionState {
+  prompt: string;
+  optionCount: number;
+  multiSelect: boolean;
+  answered: boolean;
+  cursorRow: number;
+  editingCustom: boolean;
+  customTextLen: number;
+}
+
+/**
+ * Gestiona la lectura secuencial (una por una) de las preguntas de `ask_user_question` y `ask_user_choice`.
+ * Lee únicamente la pregunta activa, espera a que el usuario conteste con Enter (o cambie de pestaña con Tab),
+ * y al avanzar lee la siguiente pregunta.
+ */
+export class QuestionQueueStepper {
+  private items: InternalQuestionState[] = [];
+  private currentIndex = 0;
+  private active = false;
+
+  constructor(rawQuestions: QuestionItemInput[]) {
+    const valid = (rawQuestions || []).filter(
+      (q) => q && typeof q.question === "string" && q.question.trim().length > 0,
+    );
+    const total = valid.length;
+    this.items = valid.map((q, idx) => {
+      const opts = Array.isArray(q.options)
+        ? q.options
+            .map((o, i) => `Opción ${i + 1}: ${o?.label ?? ""}`)
+            .join(". ")
+        : "";
+      const prefix = total > 1 ? `Pregunta ${idx + 1} de ${total}: ` : "";
+      const prompt = `${prefix}${q.question!.trim()}${opts ? `. ${opts}` : ""}`;
+      return {
+        prompt,
+        optionCount: Array.isArray(q.options) ? q.options.length : 0,
+        multiSelect: Boolean(q.multiSelect),
+        answered: false,
+        cursorRow: 0,
+        editingCustom: false,
+        customTextLen: 0,
+      };
+    });
+    this.active = this.items.length > 0;
+  }
+
+  isActive(): boolean {
+    return this.active && this.items.length > 0;
+  }
+
+  getCurrentIndex(): number {
+    return this.currentIndex;
+  }
+
+  currentPrompt(): string | null {
+    if (!this.isActive()) return null;
+    return this.items[this.currentIndex]?.prompt ?? null;
+  }
+
+  clear(): void {
+    this.active = false;
+  }
+
+  handleKey(data: string): string | "__DONE__" | null {
+    if (!this.isActive() || !data) return null;
+    const cur = this.items[this.currentIndex];
+    if (!cur) return null;
+
+    if (cur.editingCustom) {
+      if (data === "\x1b") {
+        cur.editingCustom = false;
+        cur.customTextLen = 0;
+        return null;
+      }
+      if (data === "\x7f" || data === "\b") {
+        cur.customTextLen = Math.max(0, cur.customTextLen - 1);
+        return null;
+      }
+      if (data === "\r" || data === "\n") {
+        if (cur.customTextLen > 0) {
+          return this.commitCurrentAndAdvance();
+        }
+        return null;
+      }
+      if (data.length >= 1 && data.charCodeAt(0) >= 32) {
+        cur.customTextLen += data.length;
+      }
+      return null;
+    }
+
+    // Cancelación con Esc o Ctrl+C
+    if (data === "\x1b" || data === "\x03") {
+      this.active = false;
+      return "__DONE__";
+    }
+
+    // Cambio de pestaña de pregunta con Tab / Shift+Tab
+    if (data === "\t") {
+      if (this.items.length <= 1) return null;
+      this.currentIndex = (this.currentIndex + 1) % this.items.length;
+      return this.currentPrompt();
+    }
+    if (data === "\x1b[Z") {
+      if (this.items.length <= 1) return null;
+      this.currentIndex = (this.currentIndex - 1 + this.items.length) % this.items.length;
+      return this.currentPrompt();
+    }
+
+    // Navegación vertical entre opciones (0 .. optionCount, donde optionCount es "Type something.")
+    if (data === "\x1b[B" || data === "\x1bOB" || data === "j") {
+      cur.cursorRow = Math.min(cur.optionCount, cur.cursorRow + 1);
+      return null;
+    }
+    if (data === "\x1b[A" || data === "\x1bOA" || data === "k") {
+      cur.cursorRow = Math.max(0, cur.cursorRow - 1);
+      return null;
+    }
+
+    // Espacio en multiSelect marca/desmarca sin avanzar de pregunta
+    if (data === " " && cur.multiSelect) {
+      return null;
+    }
+
+    // Si está posicionado en la fila "Type something." y empieza a escribir texto
+    if (
+      cur.cursorRow === cur.optionCount &&
+      data.length === 1 &&
+      data.charCodeAt(0) >= 32 &&
+      data !== " "
+    ) {
+      cur.editingCustom = true;
+      cur.customTextLen = 1;
+      return null;
+    }
+
+    // Confirmación con Enter
+    if (data === "\r" || data === "\n") {
+      if (cur.cursorRow === cur.optionCount && cur.customTextLen === 0) {
+        cur.editingCustom = true;
+        return null;
+      }
+      return this.commitCurrentAndAdvance();
+    }
+
+    return null;
+  }
+
+  private commitCurrentAndAdvance(): string | "__DONE__" {
+    const cur = this.items[this.currentIndex];
+    if (cur) {
+      cur.answered = true;
+    }
+    for (let offset = 1; offset < this.items.length; offset++) {
+      const candidate = (this.currentIndex + offset) % this.items.length;
+      if (!this.items[candidate]?.answered) {
+        this.currentIndex = candidate;
+        return this.currentPrompt() ?? "__DONE__";
+      }
+    }
+    this.active = false;
+    return "__DONE__";
+  }
+}
+

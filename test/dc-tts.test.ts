@@ -13,6 +13,7 @@ import {
   writeTtsPrefs,
   resetTtsPrefsCache,
   resolveTtsDaemonPaths,
+  QuestionQueueStepper,
   type TtsStatus,
 } from "../src/features/dc-tts/index.ts";
 
@@ -185,3 +186,50 @@ test("dcTtsExtension registers /dc-tts command, shortcuts, and prevents duplicat
   assert.ok(shortcuts.has("alt+v"));
   assert.equal(events.get("agent_settled")?.length, 1);
 });
+
+test("QuestionQueueStepper reads one question at a time and advances on Enter or Tab", () => {
+  const stepper = new QuestionQueueStepper([
+    {
+      question: "¿Qué arquitectura prefieres?",
+      options: [{ label: "Opción A" }, { label: "Opción B" }],
+    },
+    {
+      question: "¿Cómo arrancamos el daemon?",
+      options: [{ label: "Auto-start" }, { label: "Manual" }],
+    },
+    {
+      question: "¿Autorizas escritura?",
+      options: [{ label: "Sí" }, { label: "No" }],
+    },
+  ]);
+
+  assert.equal(stepper.isActive(), true);
+  const q1 = stepper.currentPrompt();
+  assert.ok(q1?.includes("Pregunta 1 de 3: ¿Qué arquitectura prefieres?"));
+  assert.ok(!q1?.includes("¿Cómo arrancamos el daemon?"));
+
+  // Arrow down moves cursor to second option without advancing question
+  assert.equal(stepper.handleKey("\x1b[B"), null);
+  assert.equal(stepper.getCurrentIndex(), 0);
+
+  // Enter on option 2 commits Q1 and returns Q2 prompt
+  const q2 = stepper.handleKey("\r");
+  assert.ok(q2?.includes("Pregunta 2 de 3: ¿Cómo arrancamos el daemon?"));
+  assert.equal(stepper.getCurrentIndex(), 1);
+
+  // Tab jumps to Q3 and returns Q3 prompt
+  const q3 = stepper.handleKey("\t");
+  assert.ok(q3?.includes("Pregunta 3 de 3: ¿Autorizas escritura?"));
+  assert.equal(stepper.getCurrentIndex(), 2);
+
+  // Enter on Q3 answers Q3; since Q2 is still unanswered, jumps to Q2
+  const backToQ2 = stepper.handleKey("\r");
+  assert.ok(backToQ2?.includes("Pregunta 2 de 3: ¿Cómo arrancamos el daemon?"));
+  assert.equal(stepper.getCurrentIndex(), 1);
+
+  // Enter on Q2 finishes all questions
+  const done = stepper.handleKey("\r");
+  assert.equal(done, "__DONE__");
+  assert.equal(stepper.isActive(), false);
+});
+

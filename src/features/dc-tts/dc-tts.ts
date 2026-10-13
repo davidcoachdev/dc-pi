@@ -10,6 +10,7 @@ import { readTtsPrefs, writeTtsPrefs } from "./core/dc-tts-prefs.ts";
 import {
   extractAssistantMessageText,
   formatOpenCodeTtsBadge,
+  QuestionQueueStepper,
   type TranscriptionEvent,
   type TtsStatus,
 } from "./core/dc-tts-types.ts";
@@ -28,8 +29,15 @@ export default function dcTtsExtension(pi: ExtensionAPI): void {
   let unsubInput: (() => void) | null = null;
   let paragraphCursor = 0;
   let paragraphTotal = 0;
+  let questionStepper: QuestionQueueStepper | null = null;
 
   const isSoundOn = (): boolean => readTtsPrefs().soundOn;
+
+  const speakSingleQuestion = async (prompt: string, ctx?: ExtensionContext) => {
+    await callTtsBridge("/stop", "POST", {});
+    await callTtsBridge("/read", "POST", { text: prompt, force: true });
+    startSpeechWatch(ctx);
+  };
 
   const syncVisualStatus = async (): Promise<TtsStatus | null> => {
     const st = await fetchTtsStatus();
@@ -255,6 +263,15 @@ export default function dcTtsExtension(pi: ExtensionAPI): void {
           void dictateAndSend(ctx);
           return { consume: true };
         }
+        if (questionStepper?.isActive()) {
+          const nextPrompt = questionStepper.handleKey(data);
+          if (nextPrompt === "__DONE__") {
+            questionStepper = null;
+            void callTtsBridge("/stop", "POST", {}).then(() => syncVisualStatus());
+          } else if (typeof nextPrompt === "string" && nextPrompt.length > 0) {
+            void speakSingleQuestion(nextPrompt, ctx);
+          }
+        }
         return undefined;
       });
     } catch {
@@ -279,6 +296,7 @@ export default function dcTtsExtension(pi: ExtensionAPI): void {
 
   pi.on("agent_settled", async (_ev, ctx) => {
     if (ctx) activeCtx = ctx;
+    questionStepper = null;
     if (!latestAssistantText || latestAssistantText === lastSpokenText) return;
     lastSpokenText = latestAssistantText;
 
@@ -309,25 +327,27 @@ export default function dcTtsExtension(pi: ExtensionAPI): void {
 
     if (name === "ask_user_choice" && typeof input.question === "string") {
       if (isSoundOn()) void callTtsBridge("/beep", "POST", { kind: "alert" });
-      const opts = Array.isArray(input.options)
-        ? input.options.map((o: any, i: number) => `Opción ${i + 1}: ${o?.label ?? ""}`).join(". ")
-        : "";
-      await callTtsBridge("/speak", "POST", { text: `${input.question}. ${opts}` });
-      startSpeechWatch(ctx);
+      questionStepper = new QuestionQueueStepper([
+        { question: input.question, options: input.options },
+      ]);
+      const first = questionStepper.currentPrompt();
+      if (first) {
+        await speakSingleQuestion(first, ctx);
+      }
     } else if (name === "ask_user_question" && Array.isArray(input.questions)) {
       if (isSoundOn()) void callTtsBridge("/beep", "POST", { kind: "alert" });
-      const parts: string[] = [];
-      for (const q of input.questions) {
-        if (!q?.question) continue;
-        const opts = Array.isArray(q.options)
-          ? q.options.map((o: any, i: number) => `Opción ${i + 1}: ${o?.label ?? ""}`).join(". ")
-          : "";
-        parts.push(`${q.question}. ${opts}`);
+      questionStepper = new QuestionQueueStepper(input.questions);
+      const first = questionStepper.currentPrompt();
+      if (first) {
+        await speakSingleQuestion(first, ctx);
       }
-      if (parts.length > 0) {
-        await callTtsBridge("/speak", "POST", { text: parts.join(". ") });
-        startSpeechWatch(ctx);
-      }
+    }
+  });
+
+  pi.on("tool_result", async (event: any) => {
+    const name = event?.toolName;
+    if (name === "ask_user_question" || name === "ask_user_choice") {
+      questionStepper = null;
     }
   });
 
