@@ -100,12 +100,13 @@ export function createSidebarFooter(tui: any, totalWidth: number, options: Sideb
         /* fallback al componente nativo */
       }
 
-      // 2. Determinar modo del agente y perfil activo
+      // 2. Determinar modo del agente y perfil activo (TTS playing tiene prioridad para animar 'hablando')
       const agentState = agentVisualStateStore.getState() ?? "idle";
-      const mode = mapAgentStateToFaceMode(agentState);
+      const ttsStatus = ttsBridgeClient.getStatus();
+      const mode: FaceMode =
+        ttsStatus === "playing" ? "hablando" : mapAgentStateToFaceMode(agentState);
       const prefs = readFacePrefs();
       const profile = prefs.profile ?? "dcdev";
-      const ttsStatus = ttsBridgeClient.getStatus();
       const dot = DOT[mode] ?? "●";
 
       // 3. Evaluar responsividad al alto de la terminal

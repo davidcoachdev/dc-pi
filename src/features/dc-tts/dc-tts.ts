@@ -33,15 +33,22 @@ export default function dcTtsExtension(pi: ExtensionAPI): void {
 
   const isSoundOn = (): boolean => readTtsPrefs().soundOn;
 
+  const markSpeakingStarted = (ctx?: ExtensionContext) => {
+    if (ctx) activeCtx = ctx;
+    ttsBridgeClient.setStatus("playing", readTtsPrefs().rate);
+    agentVisualStateStore.setState("talking");
+    startSpeechWatch(ctx);
+  };
+
   const speakSingleQuestion = async (prompt: string, ctx?: ExtensionContext) => {
     await callTtsBridge("/stop", "POST", {});
+    markSpeakingStarted(ctx);
     await callTtsBridge("/read", "POST", { text: prompt, force: true });
     startSpeechWatch(ctx);
   };
 
   const syncVisualStatus = async (): Promise<TtsStatus | null> => {
     const st = await fetchTtsStatus();
-    await ttsBridgeClient.checkStatus();
 
     try {
       activeCtx?.ui?.setStatus?.("dc-tts", formatOpenCodeTtsBadge(st, isSoundOn()));
@@ -50,11 +57,18 @@ export default function dcTtsExtension(pi: ExtensionAPI): void {
     }
 
     if (st?.status === "playing") {
-      if (!agentVisualStateStore.isBusy()) {
-        agentVisualStateStore.setState("talking");
+      ttsBridgeClient.setStatus("playing", st.rate);
+      agentVisualStateStore.setState("talking");
+    } else {
+      ttsBridgeClient.setStatus("idle", st?.rate);
+      if (agentVisualStateStore.getState() === "talking") {
+        const nextState = questionStepper?.isActive()
+          ? "prompting"
+          : agentVisualStateStore.isBusy()
+            ? "thinking"
+            : "idle";
+        agentVisualStateStore.setState(nextState);
       }
-    } else if (agentVisualStateStore.getState() === "talking") {
-      agentVisualStateStore.setState(agentVisualStateStore.isBusy() ? "thinking" : "idle");
     }
     return st;
   };
@@ -75,7 +89,7 @@ export default function dcTtsExtension(pi: ExtensionAPI): void {
       if (!st || st.status === "idle") {
         stopSpeechWatch();
       }
-    }, 500);
+    }, 250);
     (watchTimer as any).unref?.();
   };
 
@@ -157,6 +171,7 @@ export default function dcTtsExtension(pi: ExtensionAPI): void {
               const res = await callTtsBridge(path, "POST", body ?? {});
               if (res && typeof res.status === "string" && typeof res.autoRead === "boolean") {
                 liveSt = res as TtsStatus;
+                ttsBridgeClient.setRate(liveSt.rate);
                 writeTtsPrefs({
                   autoRead: liveSt.autoRead,
                   voice: liveSt.voice,
@@ -197,6 +212,7 @@ export default function dcTtsExtension(pi: ExtensionAPI): void {
   pi.on("session_start", async (_ev, ctx) => {
     activeCtx = ctx;
     const prefs = readTtsPrefs();
+    ttsBridgeClient.setRate(prefs.rate);
     if (prefs.autoStart) {
       void ensureTtsDaemonRunning().then(() => syncVisualStatus());
     } else {
@@ -314,7 +330,7 @@ export default function dcTtsExtension(pi: ExtensionAPI): void {
       }
       paragraphTotal = res.paragraphs ?? 1;
       paragraphCursor = res.paragraphIndex ?? 0;
-      startSpeechWatch(ctx);
+      markSpeakingStarted(ctx);
     } else {
       await syncVisualStatus();
     }

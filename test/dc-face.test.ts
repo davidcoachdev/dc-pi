@@ -17,6 +17,8 @@ import {
   openProfilePicker,
   dcFaceExtension,
   mapAgentStateToFaceMode,
+  ttsBridgeClient,
+  computeTalkAnimMs,
 } from "../src/features/dc-face/index.ts";
 import {
   createSidebarFooter,
@@ -409,6 +411,96 @@ test("dcFaceExtension: continuous animation in dormant mode does NOT invalidate 
     handler();
   }
 });
+
+test("dc-face and Sidebar Footer synchronize talking ('hablando') animation when TTS plays in any agent state", async () => {
+  writeFacePrefs({ profile: "dcdev" });
+
+  // All 3 profiles must have talking frames
+  for (const prof of ["dcdev", "cubis", "neko"]) {
+    const talkFrames = bigFramesFor(prof, "hablando");
+    assert.ok(talkFrames && talkFrames.length >= 2, `Expected ${prof} to have >=2 'hablando' frames`);
+  }
+
+  const events = new Map<string, Array<(...args: any[]) => any>>();
+  const mockPi: any = {
+    on: (evt: string, handler: any) => {
+      const arr = events.get(evt) || [];
+      arr.push(handler);
+      events.set(evt, arr);
+    },
+    registerCommand: () => {},
+    registerShortcut: () => {},
+  };
+
+  const mockTui = {
+    terminal: {
+      rows: 50,
+      [Symbol.for("gentle-pi.experimental-sidebar.cache")]: { revision: 0 },
+    },
+    requestRender: () => {},
+  };
+
+  const mockCtx: any = {
+    hasUI: true,
+    ui: {
+      theme: { fg: (_r: string, t: string) => t },
+      setWorkingIndicator: () => {},
+      setWidget: (name: string, factory: any) => {
+        if (name === "dc-face-anchor") factory(mockTui);
+      },
+      onTerminalInput: () => () => {},
+      notify: () => {},
+    },
+  };
+
+  dcFaceExtension(mockPi);
+  for (const handler of events.get("session_start") || []) {
+    await handler({}, mockCtx);
+  }
+
+  const footer = createSidebarFooter(mockTui, 50);
+
+  // Even while agent is prompting (e.g. ask_user_question) or working, TTS playing must force 'hablando'
+  agentVisualStateStore.setState("prompting");
+  (ttsBridgeClient as any).setStatus("playing");
+
+  const faceKey = Symbol.for("dc.face.mini");
+  assert.ok(String((globalThis as any)[faceKey]).includes("hablando"));
+
+  const linesTalking = footer.render(50).join("\n");
+  assert.ok(linesTalking.includes("hablando"), "Footer label must show hablando while TTS is playing");
+  assert.ok(linesTalking.includes("▶ tts"), "Footer label must show ▶ tts while playing");
+
+  // Stopping TTS restores underlying state ('pregunta' for prompting)
+  (ttsBridgeClient as any).setStatus("idle");
+  const linesAfter = footer.render(50).join("\n");
+  assert.ok(linesAfter.includes("pregunta"));
+
+  agentVisualStateStore.setState("idle");
+  for (const handler of events.get("session_shutdown") || []) {
+    handler();
+  }
+});
+
+test("dc-face talking animation speed scales with TTS reading rate", () => {
+  const slowMs = computeTalkAnimMs(0.5);
+  const normalMs = computeTalkAnimMs(1.0);
+  const fast125Ms = computeTalkAnimMs(1.25);
+  const fast200Ms = computeTalkAnimMs(2.0);
+
+  assert.ok(slowMs > normalMs, `Expected 0.5x (${slowMs}ms) > 1.0x (${normalMs}ms)`);
+  assert.ok(normalMs > fast125Ms, `Expected 1.0x (${normalMs}ms) > 1.25x (${fast125Ms}ms)`);
+  assert.ok(fast125Ms > fast200Ms, `Expected 1.25x (${fast125Ms}ms) > 2.0x (${fast200Ms}ms)`);
+  assert.equal(normalMs, 120);
+  assert.equal(fast125Ms, 96);
+  assert.equal(fast200Ms, 60);
+
+  (ttsBridgeClient as any).setRate(1.5);
+  assert.equal((ttsBridgeClient as any).getRate(), 1.5);
+  (ttsBridgeClient as any).setRate(1.0);
+});
+
+
 
 
 
