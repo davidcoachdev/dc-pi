@@ -209,4 +209,8 @@ export class AgentVisualStateStore {
   }
 }
 
-export const agentVisualStateStore = new AgentVisualStateStore();
+export const G_AGENT_STATE_STORE = Symbol.for("dc.agent-state.store");
+
+export const agentVisualStateStore: AgentVisualStateStore =
+  (globalThis as any)[G_AGENT_STATE_STORE] ??
+  ((globalThis as any)[G_AGENT_STATE_STORE] = new AgentVisualStateStore());

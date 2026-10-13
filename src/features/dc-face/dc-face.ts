@@ -19,6 +19,7 @@ import { openProfilePicker } from "./views/dc-profile-duel.ts";
 
 export const FACE_KEY = Symbol.for("dc.face.mini");
 export const FACE_DEMO_KEY = Symbol.for("dc.face.demo");
+const G_FACE_CLEANUP = Symbol.for("dc.face.cleanup");
 
 function bumpCache(tui: any): void {
   try {
@@ -152,7 +153,11 @@ export default function dcFaceExtension(pi: ExtensionAPI): void {
     isDemoActive = false;
     const currentState = agentVisualStateStore.getState() ?? "idle";
     const nextMode: FaceMode =
-      ttsBridgeClient.getStatus() === "playing" ? "hablando" : mapAgentStateToFaceMode(currentState);
+      ttsBridgeClient.getStatus() === "playing"
+        ? "hablando"
+        : currentState === "talking"
+          ? "feliz"
+          : mapAgentStateToFaceMode(currentState);
     syncFaceMode(nextMode);
   };
 
@@ -210,6 +215,11 @@ export default function dcFaceExtension(pi: ExtensionAPI): void {
   };
 
   pi.on("session_start", async (_event, ctx) => {
+    try {
+      (globalThis as any)[G_FACE_CLEANUP]?.();
+    } catch {
+      /* noop */
+    }
     ctxRef = ctx;
 
     try {
@@ -231,7 +241,7 @@ export default function dcFaceExtension(pi: ExtensionAPI): void {
         if (ttsBridgeClient.getStatus() === "playing") {
           syncFaceMode("hablando");
         } else {
-          syncFaceMode(mapAgentStateToFaceMode(state));
+          syncFaceMode(state === "talking" ? "feliz" : mapAgentStateToFaceMode(state));
         }
       }
     });
@@ -241,7 +251,10 @@ export default function dcFaceExtension(pi: ExtensionAPI): void {
       if (!isDemoActive) {
         if (ttsStatus === "playing") {
           syncFaceMode("hablando");
-        } else if (activeMode === "hablando") {
+        } else {
+          if (agentVisualStateStore.getState() === "talking") {
+            agentVisualStateStore.setState(agentVisualStateStore.isBusy() ? "thinking" : "idle");
+          }
           const fallbackState = agentVisualStateStore.getState() ?? "idle";
           syncFaceMode(
             fallbackState === "talking" ? "feliz" : mapAgentStateToFaceMode(fallbackState),
@@ -258,14 +271,17 @@ export default function dcFaceExtension(pi: ExtensionAPI): void {
     });
 
     // Inicializar estado reactivo sin polling ciego
+    const initState = agentVisualStateStore.getState() ?? "idle";
     const initMode: FaceMode =
       ttsBridgeClient.getStatus() === "playing"
         ? "hablando"
-        : mapAgentStateToFaceMode(agentVisualStateStore.getState() ?? "idle");
+        : initState === "talking"
+          ? "feliz"
+          : mapAgentStateToFaceMode(initState);
     syncFaceMode(initMode);
   });
 
-  pi.on("session_shutdown", () => {
+  const cleanupFaceSession = () => {
     stopDemo();
     ttsBridgeClient.stopPolling();
     if (animTimer) {
@@ -281,6 +297,12 @@ export default function dcFaceExtension(pi: ExtensionAPI): void {
     unsubInput?.();
     unsubInput = null;
     ctxRef = null;
+  };
+
+  (globalThis as any)[G_FACE_CLEANUP] = cleanupFaceSession;
+
+  pi.on("session_shutdown", () => {
+    cleanupFaceSession();
   });
 
   // Comando canónico /dc-face

@@ -17,10 +17,16 @@ import {
 import { DcTtsPanel } from "./views/dc-tts-panel.ts";
 
 const DC_TTS_REGISTERED = Symbol.for("dc.tts.registered");
+const G_TTS_CLEANUP = Symbol.for("dc.tts.cleanup");
+const G_TTS_OWNER_ID = Symbol.for("dc.tts.owner-id");
 
 export default function dcTtsExtension(pi: ExtensionAPI): void {
   if ((pi as any)[DC_TTS_REGISTERED]) return;
   (pi as any)[DC_TTS_REGISTERED] = true;
+
+  const ownerId = Symbol("dc-tts-instance");
+  (globalThis as any)[G_TTS_OWNER_ID] = ownerId;
+  const isOwner = () => (globalThis as any)[G_TTS_OWNER_ID] === ownerId;
 
   let lastSpokenText = "";
   let latestAssistantText = "";
@@ -30,47 +36,32 @@ export default function dcTtsExtension(pi: ExtensionAPI): void {
   let paragraphCursor = 0;
   let paragraphTotal = 0;
   let questionStepper: QuestionQueueStepper | null = null;
+  let speechGen = 0;
+  let syncInFlight = false;
+  let consecutiveNulls = 0;
 
   const isSoundOn = (): boolean => readTtsPrefs().soundOn;
 
-  const markSpeakingStarted = (ctx?: ExtensionContext) => {
-    if (ctx) activeCtx = ctx;
-    ttsBridgeClient.setStatus("playing", readTtsPrefs().rate);
-    agentVisualStateStore.setState("talking");
-    startSpeechWatch(ctx);
-  };
+  const resolvePostSpeechState = () =>
+    questionStepper?.isActive()
+      ? "prompting"
+      : agentVisualStateStore.isBusy()
+        ? "thinking"
+        : "idle";
 
-  const speakSingleQuestion = async (prompt: string, ctx?: ExtensionContext) => {
-    await callTtsBridge("/stop", "POST", {});
-    markSpeakingStarted(ctx);
-    await callTtsBridge("/read", "POST", { text: prompt, force: true });
-    startSpeechWatch(ctx);
-  };
-
-  const syncVisualStatus = async (): Promise<TtsStatus | null> => {
-    const st = await fetchTtsStatus();
-
+  const applyIdleVisualState = (rate?: number) => {
+    ttsBridgeClient.setStatus("idle", rate);
+    if (agentVisualStateStore.getState() === "talking") {
+      agentVisualStateStore.setState(resolvePostSpeechState());
+    }
     try {
-      activeCtx?.ui?.setStatus?.("dc-tts", formatOpenCodeTtsBadge(st, isSoundOn()));
+      const tui = (globalThis as any)[Symbol.for("dc.sidebar.tui-ref")];
+      const cache = tui?.terminal?.[Symbol.for("gentle-pi.experimental-sidebar.cache")];
+      if (cache) cache.revision = (cache.revision ?? 0) + 1;
+      tui?.requestRender?.();
     } catch {
       /* noop */
     }
-
-    if (st?.status === "playing") {
-      ttsBridgeClient.setStatus("playing", st.rate);
-      agentVisualStateStore.setState("talking");
-    } else {
-      ttsBridgeClient.setStatus("idle", st?.rate);
-      if (agentVisualStateStore.getState() === "talking") {
-        const nextState = questionStepper?.isActive()
-          ? "prompting"
-          : agentVisualStateStore.isBusy()
-            ? "thinking"
-            : "idle";
-        agentVisualStateStore.setState(nextState);
-      }
-    }
-    return st;
   };
 
   const stopSpeechWatch = () => {
@@ -80,16 +71,72 @@ export default function dcTtsExtension(pi: ExtensionAPI): void {
     }
   };
 
-  const startSpeechWatch = (ctx?: ExtensionContext) => {
+  const markSpeakingStarted = (ctx?: ExtensionContext) => {
     if (ctx) activeCtx = ctx;
-    void syncVisualStatus();
-    if (watchTimer) return;
-    watchTimer = setInterval(async () => {
-      const st = await syncVisualStatus();
-      if (!st || st.status === "idle") {
-        stopSpeechWatch();
+    speechGen += 1;
+    consecutiveNulls = 0;
+    ttsBridgeClient.setStatus("playing", readTtsPrefs().rate);
+    agentVisualStateStore.setState("talking");
+    startSpeechWatch(ctx, false);
+  };
+
+  const speakSingleQuestion = async (prompt: string, ctx?: ExtensionContext) => {
+    speechGen += 1;
+    await callTtsBridge("/stop", "POST", {});
+    await callTtsBridge("/read", "POST", { text: prompt, force: true });
+    markSpeakingStarted(ctx);
+  };
+
+  const syncVisualStatus = async (expectedGen = speechGen): Promise<TtsStatus | null> => {
+    const st = await fetchTtsStatus();
+    if (expectedGen !== speechGen) {
+      return st;
+    }
+
+    try {
+      activeCtx?.ui?.setStatus?.("dc-tts", formatOpenCodeTtsBadge(st, isSoundOn()));
+    } catch {
+      /* noop */
+    }
+
+    if (st?.status === "playing") {
+      consecutiveNulls = 0;
+      ttsBridgeClient.setStatus("playing", st.rate);
+      agentVisualStateStore.setState("talking");
+    } else if (st) {
+      consecutiveNulls = 0;
+      applyIdleVisualState(st.rate);
+    } else {
+      consecutiveNulls += 1;
+      if (consecutiveNulls >= 3) {
+        applyIdleVisualState();
       }
-    }, 250);
+    }
+    return st;
+  };
+
+  const startSpeechWatch = (ctx?: ExtensionContext, checkImmediate = true) => {
+    if (ctx) activeCtx = ctx;
+    stopSpeechWatch();
+    const gen = speechGen;
+    if (checkImmediate) {
+      void syncVisualStatus(gen);
+    }
+    watchTimer = setInterval(async () => {
+      if (syncInFlight) return;
+      syncInFlight = true;
+      try {
+        const currentGen = speechGen;
+        const st = await syncVisualStatus(currentGen);
+        if (currentGen !== speechGen) return;
+        if ((st && st.status !== "playing") || (!st && consecutiveNulls >= 3)) {
+          applyIdleVisualState(st?.rate);
+          stopSpeechWatch();
+        }
+      } finally {
+        syncInFlight = false;
+      }
+    }, 200);
     (watchTimer as any).unref?.();
   };
 
@@ -210,6 +257,12 @@ export default function dcTtsExtension(pi: ExtensionAPI): void {
   };
 
   pi.on("session_start", async (_ev, ctx) => {
+    if (!isOwner()) return;
+    try {
+      (globalThis as any)[G_TTS_CLEANUP]?.();
+    } catch {
+      /* noop */
+    }
     activeCtx = ctx;
     const prefs = readTtsPrefs();
     ttsBridgeClient.setRate(prefs.rate);
@@ -295,13 +348,20 @@ export default function dcTtsExtension(pi: ExtensionAPI): void {
     }
   });
 
-  pi.on("session_shutdown", () => {
+  const cleanupTtsSession = () => {
     stopSpeechWatch();
     unsubInput?.();
     unsubInput = null;
+  };
+
+  (globalThis as any)[G_TTS_CLEANUP] = cleanupTtsSession;
+
+  pi.on("session_shutdown", () => {
+    cleanupTtsSession();
   });
 
   pi.on("message_end", async (event: any) => {
+    if (!isOwner()) return;
     const msg = event?.message;
     if (!msg || msg.role !== "assistant") return;
     const text = extractAssistantMessageText(msg);
@@ -311,6 +371,7 @@ export default function dcTtsExtension(pi: ExtensionAPI): void {
   });
 
   pi.on("agent_settled", async (_ev, ctx) => {
+    if (!isOwner()) return;
     if (ctx) activeCtx = ctx;
     questionStepper = null;
     if (!latestAssistantText || latestAssistantText === lastSpokenText) return;
@@ -324,7 +385,7 @@ export default function dcTtsExtension(pi: ExtensionAPI): void {
       filtered?: boolean;
     }>("/read", "POST", { text: latestAssistantText });
 
-    if (res && !res.skipped && !res.filtered) {
+    if (res && !res.skipped && !res.filtered && res.status === "playing") {
       if (isSoundOn()) {
         void callTtsBridge("/beep", "POST", { kind: "result" });
       }
@@ -337,6 +398,7 @@ export default function dcTtsExtension(pi: ExtensionAPI): void {
   });
 
   pi.on("tool_call", async (event: any, ctx) => {
+    if (!isOwner()) return;
     const name = event?.toolName;
     const input = event?.input;
     if (!input) return;

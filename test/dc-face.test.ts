@@ -500,6 +500,92 @@ test("dc-face talking animation speed scales with TTS reading rate", () => {
   (ttsBridgeClient as any).setRate(1.0);
 });
 
+test("dc-face and Sidebar Footer immediately return to default 'feliz' face when TTS finishes ('idle')", async () => {
+  writeFacePrefs({ profile: "dcdev" });
+
+  // Singletons must be anchored on globalThis to survive jiti reloads and multi-extension loads
+  assert.equal(
+    (globalThis as any)[Symbol.for("dc.face.tts-bridge-client")],
+    ttsBridgeClient,
+    "ttsBridgeClient must be a globalThis singleton",
+  );
+  assert.equal(
+    (globalThis as any)[Symbol.for("dc.agent-state.store")],
+    agentVisualStateStore,
+    "agentVisualStateStore must be a globalThis singleton",
+  );
+
+  const events = new Map<string, Array<(...args: any[]) => any>>();
+  const mockPi: any = {
+    on: (evt: string, handler: any) => {
+      const arr = events.get(evt) || [];
+      arr.push(handler);
+      events.set(evt, arr);
+    },
+    registerCommand: () => {},
+    registerShortcut: () => {},
+  };
+
+  const mockTui = {
+    terminal: {
+      rows: 50,
+      [Symbol.for("gentle-pi.experimental-sidebar.cache")]: { revision: 0 },
+    },
+    requestRender: () => {},
+  };
+
+  const mockCtx: any = {
+    hasUI: true,
+    ui: {
+      theme: { fg: (_r: string, t: string) => t },
+      setWorkingIndicator: () => {},
+      setWidget: (name: string, factory: any) => {
+        if (name === "dc-face-anchor") factory(mockTui);
+      },
+      onTerminalInput: () => () => {},
+      notify: () => {},
+    },
+  };
+
+  dcFaceExtension(mockPi);
+  for (const handler of events.get("session_start") || []) {
+    await handler({}, mockCtx);
+  }
+
+  const footer = createSidebarFooter(mockTui, 50);
+
+  // Start TTS speaking (both ttsBridgeClient="playing" and agentVisualStateStore="talking")
+  (ttsBridgeClient as any).setStatus("playing");
+  agentVisualStateStore.setState("talking");
+
+  const linesWhileSpeaking = footer.render(50).join("\n");
+  assert.ok(linesWhileSpeaking.includes("hablando"), "Must show hablando while TTS is playing");
+
+  // TTS finishes -> status becomes "idle" (even before or without manual store reset)
+  (ttsBridgeClient as any).setStatus("idle");
+
+  const faceKey = Symbol.for("dc.face.mini");
+  assert.ok(
+    String((globalThis as any)[faceKey]).includes("feliz"),
+    `Expected mini face to revert to 'feliz', got: ${String((globalThis as any)[faceKey])}`,
+  );
+
+  const linesAfterFinish = footer.render(50).join("\n");
+  assert.ok(
+    linesAfterFinish.includes("feliz"),
+    `Expected footer to revert to 'feliz' after TTS finishes, got:\n${linesAfterFinish}`,
+  );
+  assert.ok(
+    linesAfterFinish.includes("♥"),
+    "Expected default dcdev face with heart eyes (♥) after TTS finishes",
+  );
+
+  for (const handler of events.get("session_shutdown") || []) {
+    handler();
+  }
+});
+
+
 
 
 

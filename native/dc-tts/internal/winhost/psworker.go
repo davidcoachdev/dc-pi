@@ -32,13 +32,13 @@ if ($preferred) {
 }
 
 $state = [hashtable]::Synchronized(@{
-  status        = "idle"
-  autoRead      = $true
-  voice         = $synth.Voice.Name
-  rate          = 1.0
-  volume        = 100
-  lastSpeakTick = [long]0
-  queue         = (New-Object System.Collections.Queue)
+  status     = "idle"
+  autoRead   = $true
+  voice      = $synth.Voice.Name
+  rate       = 1.0
+  volume     = 100
+  lastPrompt = $null
+  queue      = (New-Object System.Collections.Queue)
 })
 
 function Apply-SynthSettings {
@@ -52,11 +52,11 @@ Apply-SynthSettings
 
 function Sync-SynthState {
   $st = $synth.State.ToString()
-  $elapsed = [Environment]::TickCount64 - [long]$state.lastSpeakTick
-  if ($st -eq "Speaking" -or ($st -eq "Ready" -and [long]$state.lastSpeakTick -gt 0 -and $elapsed -ge 0 -and $elapsed -lt 600)) {
-    $state.status = "playing"
-  } elseif ($st -eq "Paused") {
+  $hasPending = ($null -ne $state.lastPrompt -and (-not $state.lastPrompt.IsCompleted))
+  if ($st -eq "Paused") {
     $state.status = "paused"
+  } elseif ($st -eq "Speaking" -or $hasPending) {
+    $state.status = "playing"
   } else {
     $state.status = "idle"
   }
@@ -174,8 +174,7 @@ while ($true) {
       if ($synth.State.ToString() -eq "Paused") {
         $synth.Resume()
       }
-      $state.lastSpeakTick = [Environment]::TickCount64
-      $synth.SpeakAsync($text) | Out-Null
+      $state.lastPrompt = $synth.SpeakAsync($text)
       $state.status = "playing"
       [Console]::Out.WriteLine((Get-StatusJson))
       continue
@@ -195,7 +194,7 @@ while ($true) {
       continue
     }
     if ($cmd -eq "stop") {
-      $state.lastSpeakTick = [long]0
+      $state.lastPrompt = $null
       if ($synth.State.ToString() -eq "Paused") {
         $synth.Resume()
       }
@@ -215,6 +214,7 @@ while ($true) {
     if ($cmd -eq "autoread") {
       $state.autoRead = -not [bool]$state.autoRead
       if (-not $state.autoRead) {
+        $state.lastPrompt = $null
         if ($synth.State.ToString() -eq "Paused") { $synth.Resume() }
         $synth.SpeakAsyncCancelAll()
       }
