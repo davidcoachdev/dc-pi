@@ -79,6 +79,34 @@ test("classifyShellCommand blocks root-rooted scans and allows scoped scans", ()
   assert.equal(safe3.block, false);
 });
 
+test("classifyShellCommand blocks destructive rm -rf on roots and global wildcards (dual-encoding)", () => {
+  const rmRoot = classifyShellCommand("rm -rf /");
+  assert.equal(rmRoot.block, true);
+  assert.match(rmRoot.reason!, /destructivo/);
+
+  const rmHome = classifyShellCommand("rm -rf ~");
+  assert.equal(rmHome.block, true);
+
+  const rmDollarHome = classifyShellCommand("rm -rf $HOME");
+  assert.equal(rmDollarHome.block, true);
+
+  const rmSlashStar = classifyShellCommand("rm -fr /*");
+  assert.equal(rmSlashStar.block, true);
+
+  const rmWildcardRoot = classifyShellCommand("rm -rf /home/dc-studio");
+  assert.equal(rmWildcardRoot.block, true);
+
+  // Safe scoped removals
+  const safeRmBuild = classifyShellCommand("rm -rf .test-build");
+  assert.equal(safeRmBuild.block, false);
+
+  const safeRmFile = classifyShellCommand("rm -f temp.txt");
+  assert.equal(safeRmFile.block, false);
+
+  const safeRmDir = classifyShellCommand("rm -rf ./tmp/cache");
+  assert.equal(safeRmDir.block, false);
+});
+
 test("checkNodeVersion detects supported node version", () => {
   const result = checkNodeVersion("v22.19.0", "20.6.0");
   assert.equal(result.ok, true);

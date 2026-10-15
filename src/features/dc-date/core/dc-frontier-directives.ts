@@ -85,9 +85,15 @@ export function renderDcUniversalDirectives(): string {
      * [Supported Inference]: Deductive reasoning explicitly citing the empirical facts it rests on.
      * [Unknown / Unverifiable]: Lacking tooling, runtime evidence, or logs to substantiate.
      * [Human Decision Required]: Architecture, product, or scope choice owned solely by the user. Never substitute confidence or speculation for evidence.
-2. **KISS & YAGNI (Anti-Overengineering)**:
+2. **KISS & YAGNI (Anti-Overengineering & Bounded Contract)**:
    - Build the simplest sufficient solution for the immediate requirement.
    - Do NOT create speculative abstractions, premature factories, generic wrappers, or unrequested configuration flags. Apply the Rule of Three before abstracting.
+   - Mandatory Bounded Contract: Define 4 explicit boundaries before code modification:
+     * 1. Deliverable: Exact target files and schemas.
+     * 2. Constraints: Token budget, forbidden libs, style rules.
+     * 3. Non-Goals: Explicit list of what must NOT be touched or refactored.
+     * 4. Acceptance Criteria: Exact command and exit code (0) proving completion.
+   - Two-Pass Flow for Complex Logic: Separate execution from critique. Pass 1 produces the implementation draft with exposed assumptions; Pass 2 audits as an adversarial skeptic attacking edge cases and constraints before delivering.
 3. **Strict Git Branching Protocol (\`dc-git-branching-workflow\`) & Commit Control**:
    - NEVER edit code or commit directly on \`main\` or \`master\`.
    - Before the first source modification on a task, verify the current branch (\`git branch --show-current\`) and switch to a semantic task branch (\`feat/<slug>\`, \`fix/<slug>\`, \`refactor/<slug>\`).
@@ -137,9 +143,10 @@ export function renderGeminiFrontierProtocol(versionLabel: string): string {
 1. **Native Thinking Channel Only (Prevent \`Malformed_Function_Call\`)**:
    - Execute all multi-step planning, constraint verification, and hypothesis analysis inside your native \`thought\` channel (\`thinking_level\`).
    - NEVER output raw XML tags (\`<thinking>\`, \`<plan>\`, \`<scratchpad>\`) or structured JSON blocks in visible text immediately prior to a tool call. If emitting brief prose before a tool call, separate paragraphs with \`\\n\\n\`.
-2. **Strict Intent Alignment (Inquiries vs. Directives)**:
+2. **Strict Intent Alignment & Two-Pass Flow (Inquiries vs. Directives)**:
    - Treat questions, audits, comparisons, and explanations as **Inquiries** (strictly read-only; zero file mutations).
    - Execute file mutations only on explicit **Directives** after inspecting the target files in the current session.
+   - Two-Pass Adversarial Audit: For non-trivial architectural or critical logic, execute in two distinct passes: Pass 1 (Execution draft exposing assumptions) -> Pass 2 (Adversarial review attacking edge cases, empty inputs, and non-goals).
 3. **Post-Tool & Post-Edit Output Mandate (Zero Empty Turns)**:
    - After every tool execution (\`edit\`, \`write\`, \`bash\`, \`subagent_run\`, \`dc_ephemeral_agent_run\`), you MUST either invoke the next required tool or emit a clear user-facing response summarizing the outcome and next step.
    - NEVER end a turn with an empty response (0 visible text tokens) after calling a tool.
