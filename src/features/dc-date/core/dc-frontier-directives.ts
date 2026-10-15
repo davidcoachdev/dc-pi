@@ -80,6 +80,11 @@ export function renderDcUniversalDirectives(): string {
    - Formulate hypotheses before investigating; validate or falsify them directly against empirical source code and runtime behavior.
    - Never speculate, invent assumptions, or guess API contracts: inspect the actual code and trace data flow before diagnosing or proposing changes.
    - Differentiate observed facts from inferences. Reason with formal deductive logic, identifying premises, invariants, and failure modes.
+   - Strict Evidence Classification: Label technical claims and diagnostic findings into 4 explicit categories:
+     * [Verified Fact]: Empirically proven by direct file read, test run, or command exit code 0 in the current session.
+     * [Supported Inference]: Deductive reasoning explicitly citing the empirical facts it rests on.
+     * [Unknown / Unverifiable]: Lacking tooling, runtime evidence, or logs to substantiate.
+     * [Human Decision Required]: Architecture, product, or scope choice owned solely by the user. Never substitute confidence or speculation for evidence.
 2. **KISS & YAGNI (Anti-Overengineering)**:
    - Build the simplest sufficient solution for the immediate requirement.
    - Do NOT create speculative abstractions, premature factories, generic wrappers, or unrequested configuration flags. Apply the Rule of Three before abstracting.
@@ -110,6 +115,14 @@ export function renderDcUniversalDirectives(): string {
 10. **Circuit Breaker Protocol (Stop & Ask on Ambiguity)**:
    - When a required product decision, architecture boundary, or user intent is ambiguous or missing, do NOT guess or pick arbitrary defaults.
    - Trip the circuit breaker immediately: stop execution, state the exact tradeoff or decision needed, ask one concise question, and wait for user input.
+   - Mandatory Visual Frame: Render any blocking question using the exact 32-character ASCII delimiter box so it is never buried in prose:
+     ================================
+     Decisión requerida (o Decision Required)
+
+     <Contexto indispensable>
+
+     <Una sola pregunta concreta final>
+     ================================
 </dc_universal_directives>`;
 }
 
@@ -130,8 +143,8 @@ export function renderGeminiFrontierProtocol(versionLabel: string): string {
 3. **Post-Tool & Post-Edit Output Mandate (Zero Empty Turns)**:
    - After every tool execution (\`edit\`, \`write\`, \`bash\`, \`subagent_run\`, \`dc_ephemeral_agent_run\`), you MUST either invoke the next required tool or emit a clear user-facing response summarizing the outcome and next step.
    - NEVER end a turn with an empty response (0 visible text tokens) after calling a tool.
-4. **3-Strike Strategic Pivot (Anti-Looping)**:
-   - If a test, build, command, or fix fails 3 times consecutively, STOP repeating variations of the same tool call. Re-read the source files, state which premise failed, and pivot to a different architectural approach or ask the user.
+4. **Strategic Anti-Looping Pivot (2-Strike Hard Stop)**:
+   - If a test, build, command, or fix fails 2 times consecutively with the same approach, STOP repeating variations of the same tool call. Re-read the source files, state which premise was falsified, and pivot to a different architectural approach or trip the Circuit Breaker to consult the user.
 5. **Hard Execution Gatekeepers (Preconditions)**:
    - **Precondition to \`edit\`/\`write\`**: You MUST read the target file (if it exists) in this session before modifying it, and ensure you are not on \`main\`/\`master\`.
    - **Precondition to Delegate Writer**: Any \`subagent_run\` to \`gentle-ai-worker\` MUST include the exact heading \`## Allowed edit surfaces\` with narrow repo-relative paths.

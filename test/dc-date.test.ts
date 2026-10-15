@@ -85,6 +85,11 @@ test("buildDcHarnessPromptBlock builds universal directives + Gemini protocol fo
   assert.ok(block37.includes(GEMINI_FRONTIER_PROTOCOL_MARKER));
   assert.ok(block37.includes("Gemini 3.7"));
   assert.ok(block37.includes("Malformed_Function_Call"));
+  assert.ok(block37.includes("Strict Evidence Classification"));
+  assert.ok(block37.includes("[Verified Fact]"));
+  assert.ok(block37.includes("[Supported Inference]"));
+  assert.ok(block37.includes("================================"));
+  assert.ok(block37.includes("2-Strike Hard Stop"));
 
   const block31 = buildDcHarnessPromptBlock({
     dateString: "2026-10-09 (Viernes)",
