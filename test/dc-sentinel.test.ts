@@ -10,6 +10,9 @@ import {
   scoreObservation,
   performPreFlightRecall,
   formatRecallPromptSection,
+  extractReferencedFiles,
+  verifyItemFreshness,
+  DEFAULT_MAX_RECALL_CHARS,
 } from "../src/features/dc-sentinel/core/dc-sentinel-recall.ts";
 import {
   SentinelRecorder,
@@ -107,6 +110,109 @@ test("dc-sentinel: performPreFlightRecall filters and formats top memories", () 
   assert.ok(result.formattedBlock.includes("Arquitectura de Subagentes Efímeros"));
   assert.ok(result.formattedBlock.includes("<!-- dc:sentinel:recall:start -->"));
   assert.ok(result.formattedBlock.includes("<!-- dc:sentinel:recall:end -->"));
+});
+
+test("dc-sentinel: Grounding Gate flags and deprioritizes memories with missing/deleted files", () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "dc-grounding-test-"));
+  // Crear un archivo real y dejar otro inexistente
+  fs.writeFileSync(path.join(tmpDir, "active-module.ts"), "// active code");
+
+  // 1. Test de extracción de referencias de archivos
+  const refs = extractReferencedFiles("Refactorizar src/features/old-foo.ts y active-module.ts para mejorar rendimiento");
+  assert.ok(refs.includes("src/features/old-foo.ts"));
+  assert.ok(refs.includes("active-module.ts"));
+
+  // 2. Test de verificación de frescura
+  const freshItem = {
+    id: 1,
+    type: "feature",
+    title: "Módulo Activo",
+    content: "Usar active-module.ts para procesar datos",
+    scope: "project",
+    score: 5,
+  };
+  const freshCheck = verifyItemFreshness(freshItem, tmpDir);
+  assert.equal(freshCheck.isStale, false);
+
+  const staleItem = {
+    id: 2,
+    type: "bugfix",
+    title: "Fix en archivo borrado",
+    content: "Corregido en deleted-file.ts y src/legacy.ts",
+    scope: "project",
+    score: 5,
+  };
+  const staleCheck = verifyItemFreshness(staleItem, tmpDir);
+  assert.equal(staleCheck.isStale, true);
+  assert.ok(staleCheck.reason?.includes("deleted-file.ts") || staleCheck.reason?.includes("src/legacy.ts"));
+
+  // 3. Pre-Flight Recall con Grounding Gate: la nota fresca debe ganarle a la obsoleta
+  const mockObservations: EngramObservation[] = [
+    {
+      id: 201,
+      type: "bugfix",
+      title: "Solución en deleted-file.ts",
+      content: "Ver deleted-file.ts para la solución",
+      scope: "project",
+      created_at: "2026-09-01",
+    },
+    {
+      id: 202,
+      type: "decision",
+      title: "Arquitectura en active-module.ts",
+      content: "Ver active-module.ts para la solución",
+      scope: "project",
+      created_at: "2026-10-01",
+    },
+  ];
+
+  const result = performPreFlightRecall("solucion", {
+    cwd: tmpDir,
+    observationsLoader: () => mockObservations,
+    minScore: 1,
+    limit: 1,
+  });
+
+  // El Grounding Gate debe seleccionar la nota fresca que existe en disco (202), descartando o penalizando la que apunta al archivo inexistente
+  assert.equal(result.items.length, 1);
+  assert.equal(result.items[0]?.id, 202);
+
+  fs.rmSync(tmpDir, { recursive: true, force: true });
+});
+
+test("dc-sentinel: formatRecallPromptSection enforces a strict token/character budget", () => {
+  const longItems = [
+    {
+      id: 1,
+      type: "decision",
+      title: "Decisión con texto larguísimo 1",
+      content: "A".repeat(500),
+      scope: "project",
+      score: 10,
+    },
+    {
+      id: 2,
+      type: "decision",
+      title: "Decisión con texto larguísimo 2",
+      content: "B".repeat(500),
+      scope: "project",
+      score: 8,
+    },
+    {
+      id: 3,
+      type: "decision",
+      title: "Decisión con texto larguísimo 3",
+      content: "C".repeat(500),
+      scope: "project",
+      score: 6,
+    },
+  ];
+
+  const budget = 450;
+  const formatted = formatRecallPromptSection(longItems, budget);
+  assert.ok(formatted.length <= budget, `El bloque formateado (${formatted.length}) debe respetar el presupuesto (${budget})`);
+  assert.ok(formatted.includes("Decisión con texto larguísimo 1"));
+  assert.ok(formatted.includes("<!-- dc:sentinel:recall:end -->"));
 });
 
 test("dc-sentinel: appendRecallToPromptOptions is strictly idempotent", () => {

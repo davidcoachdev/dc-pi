@@ -1,6 +1,83 @@
+import * as fs from "node:fs";
+import * as path from "node:path";
 import { getProjectObservations, type EngramObservation } from "../../dc-engram/dc-engram-db.ts";
 import type { SentinelRecallItem, SentinelRecallResult } from "./dc-sentinel-types.ts";
 import { SentinelDatabase } from "./dc-sentinel-db.ts";
+
+/**
+ * Presupuesto de caracteres para el bloque de Pre-Flight Recall en el prompt de sistema.
+ * 800 caracteres equivalen aproximadamente a 180-200 tokens, protegiendo la ventana de atención.
+ */
+export const DEFAULT_MAX_RECALL_CHARS = 800;
+
+/**
+ * Extrae rutas o nombres de archivo candidatos referenciados en un texto de nota técnica.
+ */
+export function extractReferencedFiles(text: string): string[] {
+  if (!text || typeof text !== "string") return [];
+  const files = new Set<string>();
+
+  // 1. Archivos con extensiones de código/configuración conocidas
+  const extRegex = /\b([a-zA-Z0-9_\-./]+\.[a-zA-Z0-9_-]+)\b/g;
+  let match: RegExpExecArray | null;
+  const KNOWN_EXTS = new Set([
+    "ts", "js", "tsx", "jsx", "json", "md", "py", "go", "rs", "yml", "yaml", "sh", "html", "css", "sql", "toml", "env"
+  ]);
+
+  while ((match = extRegex.exec(text)) !== null) {
+    const candidate = match[1]!;
+    const parts = candidate.split(".");
+    const ext = parts.pop()?.toLowerCase();
+    if (ext && KNOWN_EXTS.has(ext)) {
+      files.add(candidate.replace(/^[./]+/, ""));
+    }
+  }
+
+  // 2. Rutas que inicien con carpetas convencionales
+  const pathRegex = /\b((?:src|lib|test|tests|docs|config|features|native|core|scripts)\/[a-zA-Z0-9_\-./]+)\b/g;
+  while ((match = pathRegex.exec(text)) !== null) {
+    const candidate = match[1]!;
+    files.add(candidate.replace(/^[./]+/, ""));
+  }
+
+  return Array.from(files);
+}
+
+/**
+ * Grounding Gate: Verifica si los archivos referenciados en una nota existen en el disco del proyecto.
+ * Previene inducir alucinaciones al agente con notas obsoletas de archivos ya eliminados o movidos.
+ */
+export function verifyItemFreshness(
+  item: { title?: string; content?: string; filesAffected?: string[] },
+  projectRoot?: string,
+): { isStale: boolean; reason?: string } {
+  const root = projectRoot || process.cwd();
+  const text = `${item.title || ""} ${item.content || ""}`;
+  const extracted = extractReferencedFiles(text);
+  const declared = item.filesAffected || [];
+  const allFiles = Array.from(new Set([...extracted, ...declared]));
+
+  if (allFiles.length === 0) {
+    return { isStale: false };
+  }
+
+  const missing: string[] = [];
+  for (const file of allFiles) {
+    const fullPath = path.isAbsolute(file) ? file : path.resolve(root, file);
+    if (!fs.existsSync(fullPath)) {
+      missing.push(file);
+    }
+  }
+
+  if (missing.length > 0) {
+    return {
+      isStale: true,
+      reason: `Archivos referenciados no encontrados en disco: ${missing.join(", ")}`,
+    };
+  }
+
+  return { isStale: false };
+}
 
 const STOP_WORDS = new Set([
   // Español
@@ -110,20 +187,34 @@ export function performPreFlightRecall(
   if (!options.observationsLoader) {
     try {
       const db = new SentinelDatabase(options.projectName, options.cwd);
-      const dbResults = db.searchNotes(prompt, { limit: maxItems });
+      const dbResults = db.searchNotes(prompt, { limit: maxItems * 2 });
       db.close();
 
       if (dbResults.length > 0) {
-        const topItems: SentinelRecallItem[] = dbResults.map((n) => ({
-          id: n.id ?? 0,
-          type: n.type,
-          title: n.title,
-          content: n.content,
-          scope: n.scope || "project",
-          score: 5,
-          createdAt: n.createdAt,
-        }));
+        // Grounding Gate: evaluar frescura de los ítems de base de datos
+        const evaluatedItems = dbResults.map((n) => {
+          const freshness = verifyItemFreshness(n, options.cwd);
+          return {
+            item: {
+              id: n.id ?? 0,
+              type: n.type,
+              title: n.title,
+              content: n.content,
+              scope: n.scope || "project",
+              score: freshness.isStale ? 1 : 5,
+              createdAt: n.createdAt,
+            },
+            isStale: freshness.isStale,
+          };
+        });
 
+        // Priorizar notas frescas sobre las obsoletas
+        evaluatedItems.sort((a, b) => {
+          if (a.isStale !== b.isStale) return a.isStale ? 1 : -1;
+          return b.item.score - a.item.score;
+        });
+
+        const topItems = evaluatedItems.slice(0, maxItems).map((e) => e.item);
         const formattedBlock = formatRecallPromptSection(topItems);
         return { prompt, keywords, items: topItems, formattedBlock };
       }
@@ -147,13 +238,17 @@ export function performPreFlightRecall(
   for (const obs of observations) {
     const score = scoreObservation(obs, keywords);
     if (score >= minScore) {
+      // Grounding Gate: evaluar frescura contra el filesystem
+      const freshness = verifyItemFreshness(obs, options.cwd);
+      const adjustedScore = freshness.isStale ? score - 10 : score;
+
       scoredItems.push({
         id: obs.id,
         type: obs.type,
         title: obs.title,
         content: obs.content,
         scope: obs.scope,
-        score,
+        score: adjustedScore,
         createdAt: obs.created_at,
       });
     }
@@ -178,25 +273,52 @@ export function performPreFlightRecall(
 /**
  * Formatea las observaciones recuperadas en un bloque Markdown conciso
  * para inyectar en event.systemPromptOptions.appendSystemPrompt sin desperdiciar tokens.
+ * Aplica un presupuesto estricto (maxChars) para garantizar que el recall nunca desborde la atención.
  */
-export function formatRecallPromptSection(items: SentinelRecallItem[]): string {
+export function formatRecallPromptSection(
+  items: SentinelRecallItem[],
+  maxChars: number = DEFAULT_MAX_RECALL_CHARS,
+): string {
   if (!items || items.length === 0) return "";
 
-  const lines: string[] = [
+  const header = [
     "<!-- dc:sentinel:recall:start -->",
     "## ⛩️ Memoria Histórica del Proyecto (DC Sentinel Pre-Flight Recall)",
     "> Lecciones, decisiones y arquitectura relevantes recuperadas de Engram para guiar esta respuesta y evitar alucinaciones:",
-  ];
+  ].join("\n");
+
+  const footer = "\n<!-- dc:sentinel:recall:end -->";
+  const overhead = header.length + footer.length + 1; // +1 por \n
+
+  if (overhead >= maxChars) {
+    return `<!-- dc:sentinel:recall:start -->\n## ⛩️ Memoria (Recall)${footer}`;
+  }
+
+  const availableForItems = maxChars - overhead;
+  let currentItemsText = "";
 
   for (const item of items) {
-    // Truncar contenido para que no sea un dump gigante
     const cleanContent = (item.content || "")
       .replace(/\r?\n+/g, " ")
       .trim();
-    const snippet = cleanContent.length > 250 ? `${cleanContent.slice(0, 247)}...` : cleanContent;
-    lines.push(`- **[${item.type.toUpperCase()}] ${item.title}**: ${snippet}`);
+
+    const titlePrefix = `- **[${item.type.toUpperCase()}] ${item.title}**: `;
+    const remaining = availableForItems - currentItemsText.length - (currentItemsText ? 1 : 0);
+
+    if (remaining <= titlePrefix.length + 10) {
+      break;
+    }
+
+    const maxSnippetLen = remaining - titlePrefix.length;
+    const snippet = cleanContent.length > maxSnippetLen
+      ? `${cleanContent.slice(0, Math.max(0, maxSnippetLen - 3))}...`
+      : cleanContent;
+
+    const line = `${titlePrefix}${snippet}`;
+    currentItemsText = currentItemsText ? `${currentItemsText}\n${line}` : line;
   }
 
-  lines.push("<!-- dc:sentinel:recall:end -->");
-  return lines.join("\n");
+  if (!currentItemsText) return "";
+
+  return `${header}\n${currentItemsText}${footer}`;
 }
