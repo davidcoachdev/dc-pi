@@ -303,7 +303,8 @@ export type DcBehaviorBrick =
   | "bounded-worker"
   | "dag-planning"
   | "verify-independent"
-  | "scoped-search";
+  | "scoped-search"
+  | "clean-sandbox";
 
 export const DC_BEHAVIOR_BRICKS: Record<DcBehaviorBrick, string> = {
   "strict-tdd":
@@ -324,6 +325,8 @@ export const DC_BEHAVIOR_BRICKS: Record<DcBehaviorBrick, string> = {
     "Opera como auditor independiente sin asumir que los reportes previos son ciertos. Ejecuta personalmente los tests y aserciones. Audita la disciplina TDD y rechaza tajantemente pruebas con tautologías (assert.ok(true)), tests que solo comprueben tipos sin comportamiento, o suites vacías.",
   "scoped-search":
     "Prohibido terminantemente ejecutar grep, find o escaneos recursivos en la raíz del sistema (/), en raíz de usuario (~ o /home/*) o en directorios padre genéricos. Todo comando de búsqueda o análisis debe acotarse estrictamente al directorio relativo del proyecto actual o a una subcarpeta concreta (ej: 'src/', 'lib/', 'test/').",
+  "clean-sandbox":
+    "Cuando ejecutes verificación de código o suites de prueba, aísla la ejecución en un directorio temporal limpio (mktemp -d) para evitar efectos colaterales o contaminación de caché en el workspace activo, comprobando que los invariantes y la salida previa permanezcan intactos.",
 };
 
 export type DcAgentArchetype =
@@ -348,7 +351,12 @@ export type DcAgentArchetype =
   | "dc-media"
   | "dc-service-ops"
   | "dc-security-auditor"
-  | "dc-api-tester";
+  | "dc-api-tester"
+  // DC Studio Review Lenses (RDD 4R Specialization)
+  | "dc-lens-risk"
+  | "dc-lens-resilience"
+  | "dc-lens-readability"
+  | "dc-lens-reliability";
 
 export const DC_ARCHETYPE_ALIASES: Record<string, DcAgentArchetype> = {
   "odd-scout": "dc-odd-scout",
@@ -360,6 +368,10 @@ export const DC_ARCHETYPE_ALIASES: Record<string, DcAgentArchetype> = {
   "pr-comment-analyst": "dc-pr-comment-analyst",
   "security-auditor": "dc-security-auditor",
   "api-tester": "dc-api-tester",
+  "dc-lens-risk": "dc-lens-risk",
+  "dc-lens-resilience": "dc-lens-resilience",
+  "dc-lens-readability": "dc-lens-readability",
+  "dc-lens-reliability": "dc-lens-reliability",
 };
 
 export interface DcArchetypeDefinition {
@@ -530,6 +542,40 @@ export const DC_AGENT_ARCHETYPES: Record<DcAgentArchetype, DcArchetypeDefinition
     recommendedModel: "gemini-3.8-flash-high",
     defaultEffort: "medium",
   },
+
+  // --- DC Studio Review Lenses (RDD 4R Specialization) ---
+  "dc-lens-risk": {
+    name: "dc-lens-risk",
+    description: "Auditoría de solo lectura para la lente 'risk': inspecciona persistencia de datos, migraciones irreversibles, auth, permisos y secretos.",
+    toolBricks: ["fs-read", "code-intel", "security"],
+    behaviorBricks: ["read-only-analyst", "artifact-contract", "non-empty-response"],
+    recommendedModel: "gemini-3.8-flash-high",
+    defaultEffort: "high",
+  },
+  "dc-lens-resilience": {
+    name: "dc-lens-resilience",
+    description: "Auditoría de solo lectura para la lente 'resilience': inspecciona timeouts, concurrencia, reintentos, caídas de red y manejo de fallos.",
+    toolBricks: ["fs-read", "code-intel"],
+    behaviorBricks: ["read-only-analyst", "artifact-contract", "non-empty-response"],
+    recommendedModel: "gemini-3.8-flash-high",
+    defaultEffort: "high",
+  },
+  "dc-lens-readability": {
+    name: "dc-lens-readability",
+    description: "Auditoría de solo lectura para la lente 'readability': inspecciona contratos de APIs públicas, formato de exports, mensajes de error y documentación.",
+    toolBricks: ["fs-read", "code-intel", "docs"],
+    behaviorBricks: ["read-only-analyst", "artifact-contract", "non-empty-response"],
+    recommendedModel: "gemini-3.8-flash-high",
+    defaultEffort: "medium",
+  },
+  "dc-lens-reliability": {
+    name: "dc-lens-reliability",
+    description: "Auditoría de solo lectura para la lente 'reliability': inspecciona lógica medular que las pruebas deben fijar para prevenir regresiones silenciosas.",
+    toolBricks: ["fs-read", "code-intel"],
+    behaviorBricks: ["read-only-analyst", "artifact-contract", "non-empty-response"],
+    recommendedModel: "gemini-3.8-flash-high",
+    defaultEffort: "high",
+  },
 };
 
 export type DcReasoningEffort = "low" | "medium" | "high" | "off";
@@ -553,6 +599,7 @@ export interface DcEphemeralTaskOptions {
   timeoutMs?: number;
   sessionId?: string;
   cwd?: string;
+  enforceEditSurfaces?: boolean;
 }
 
 export interface DcBatchSubagentItem {

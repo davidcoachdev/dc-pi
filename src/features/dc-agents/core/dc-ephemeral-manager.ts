@@ -184,6 +184,7 @@ export function deriveSemanticSubagentName(
     if (arch.includes("apply") || arch.includes("worker")) return `dc-sub-worker-${shortHash}`;
     if (arch.includes("verify") || arch.includes("verifier")) return `dc-sub-verify-${shortHash}`;
     if (arch.includes("researcher") || arch.includes("search")) return `dc-sub-search-${shortHash}`;
+    if (arch.includes("lens") || arch.includes("risk") || arch.includes("resilience")) return `dc-sub-lens-${shortHash}`;
     if (arch.includes("security") || arch.includes("owasp")) return `dc-sub-security-${shortHash}`;
     if (arch.includes("api")) return `dc-sub-api-${shortHash}`;
     if (arch.includes("news")) return `dc-sub-news-${shortHash}`;
@@ -223,6 +224,72 @@ export function deriveSemanticSubagentName(
 
   // Fallback estándar
   return `dc-sub-task-${shortHash}`;
+}
+
+/**
+ * Expresión canónica para detectar el encabezado de superficies permitidas.
+ */
+export const ALLOWED_EDIT_SURFACES_REGEX = /^## Allowed edit surfaces[ \t]*$/im;
+
+export interface BoundedWriterValidationResult {
+  valid: boolean;
+  surfaces?: string[];
+  reason?: string;
+}
+
+/**
+ * Compuerta de Admisión Bounded (Bounded Writer Admission Gate):
+ * Valida que cualquier subagente con permisos de escritura contenga explícitamente
+ * el bloque delimitado '## Allowed edit surfaces' para evitar derivas de código.
+ */
+export function validateBoundedWriterAdmission(
+  task: string,
+  seedContext?: string,
+  tools?: string[],
+): BoundedWriterValidationResult {
+  const hasMutationTools = tools?.some((t) => t === "write" || t === "edit");
+  if (!hasMutationTools) {
+    return { valid: true };
+  }
+
+  // Bypass explícito para testing o tareas sintéticas no vinculadas a código real
+  if (task.includes("[mock-unbounded]") || seedContext?.includes("[mock-unbounded]")) {
+    return { valid: true, surfaces: ["*"] };
+  }
+
+  const combined = `${task}\n\n${seedContext || ""}`;
+  const match = combined.match(ALLOWED_EDIT_SURFACES_REGEX);
+  if (!match || match.index === undefined) {
+    return {
+      valid: false,
+      reason:
+        "Error de Admisión de Worker (DC Studio): Todo subagente con herramientas de escritura ('write'/'edit') requiere especificar obligatoriamente el encabezado Markdown '## Allowed edit surfaces' en 'task' o 'seedContext' con las rutas relativas o globs autorizados (uno por línea). Esto previene sobreescrituras accidentales fuera de alcance.",
+    };
+  }
+
+  // Extraer las líneas de rutas posteriores al encabezado
+  const linesAfterHeading = combined.slice(match.index + match[0].length).split(/\r?\n/);
+  const surfaces: string[] = [];
+  for (const line of linesAfterHeading) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    if (/^#{1,6}\s/.test(trimmed)) break; // El siguiente encabezado Markdown cierra la sección
+    // Limpiar marcadores de lista o comillas inversas
+    const cleanPath = trimmed.replace(/^[-*+]\s+/, "").replace(/^`|`$/g, "").trim();
+    if (cleanPath) {
+      surfaces.push(cleanPath);
+    }
+  }
+
+  if (surfaces.length === 0) {
+    return {
+      valid: false,
+      reason:
+        "Error de Admisión de Worker (DC Studio): La sección '## Allowed edit surfaces' está presente pero vacía. Debes listar al menos una ruta relativa o glob permitido.",
+    };
+  }
+
+  return { valid: true, surfaces };
 }
 
 /**
@@ -293,6 +360,15 @@ export function prepareEphemeralAgent(
   // 1. Ensamblar plan de herramientas y directivas vía Motor de Legos
   const legoPlan = assembleLegoAgentPlan(options);
   const tools = legoPlan.tools;
+
+  // 1b. Compuerta de Admisión Bounded (Bounded Writer Admission Gate):
+  // Si el subagente posee herramientas de mutación de código ('write' o 'edit'),
+  // se exige obligatoriamente delimitar las superficies de edición en task o seedContext
+  // mediante el encabezado canónico '## Allowed edit surfaces'.
+  const admission = validateBoundedWriterAdmission(options.task, options.seedContext, tools);
+  if (!admission.valid && options.enforceEditSurfaces !== false) {
+    throw new Error(admission.reason);
+  }
 
   // 2. Resolver modelo base y arriendo de Taxi
   const requestedModel = options.model || legoPlan.recommendedModel;

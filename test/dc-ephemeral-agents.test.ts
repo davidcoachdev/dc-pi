@@ -1690,10 +1690,10 @@ test("dc-ephemeral-manager: assembleLegoAgentPlan builds archetypes and custom l
   assert.ok(customPlan.directives.some((d) => d.includes("fuente primaria")));
   assert.ok(customPlan.directives.some((d) => d.includes("solo lectura")));
 
-  // 5. prepareEphemeralAgent con arquetipo dc-odd-worker
+  // 5. prepareEphemeralAgent con arquetipo dc-odd-worker y superficies delimitadas
   const plan = prepareEphemeralAgent(
     {
-      task: "Refactorizar modulo de pagos",
+      task: "Refactorizar modulo de pagos\n\n## Allowed edit surfaces\nsrc/payments/processor.ts\nsrc/payments/types.ts",
       archetype: "dc-odd-worker",
     },
     {

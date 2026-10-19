@@ -92,7 +92,22 @@ export function calibrateEffortForTask(
   parentEffort?: string,
   modelName?: string,
 ): DcReasoningEffort {
-  // 1. Prioridad: override explícito en la llamada
+  // Blindaje de Seguridad para Verificadores (Shield for Independent Verifiers):
+  // La auditoría y verificación independiente no debe correr jamás con esfuerzo 'low' u 'off',
+  // independientemente de lo que haya solicitado el llamador, para evitar falsas aprobaciones ciegas.
+  const isVerifierRole =
+    preset === "verifier" ||
+    /verifier|verificad|verificaci|audit|verify/i.test(task);
+
+  if (isVerifierRole) {
+    if (explicitEffort === "low" || explicitEffort === "off") {
+      // Blindaje activo: elevar a high para garantizar rigor y ejecución real de tests
+      return "high";
+    }
+    return explicitEffort || "high";
+  }
+
+  // 1. Prioridad: override explícito en la llamada para roles ordinarios
   if (explicitEffort) {
     return explicitEffort;
   }
@@ -113,6 +128,7 @@ export function calibrateEffortForTask(
       case "research":
       case "scout":
       case "codegraph":
+      case "worker":
         return "high";
     }
   }

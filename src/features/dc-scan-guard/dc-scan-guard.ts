@@ -88,6 +88,36 @@ function isRootedRecursiveSearch(tokens: string[]): boolean {
   return tokens.some((t) => !t.startsWith("-") && isRootPath(t));
 }
 
+/**
+ * Regla de Doble Codificación: bloquea mecánicamente comandos destructivos masivos
+ * (rm -rf sobre raíz, home, variables de entorno globales o wildcards raíz).
+ */
+function isDestructiveRm(tokens: string[]): boolean {
+  const rmIdx = tokens.findIndex((t) => t === "rm" || /[/\\]rm$/.test(t));
+  if (rmIdx === -1) return false;
+
+  // Verificar si tiene flag recursivo (-r, -rf, -fr, -R, etc.)
+  const hasRecursive = tokens.some((t, i) => i > rmIdx && /^-[a-zA-Z]*[rR]/.test(t));
+  if (!hasRecursive) return false;
+
+  // Verificar si alguno de los argumentos objetivo es una raíz, wildcard de raíz o home
+  for (let i = rmIdx + 1; i < tokens.length; i++) {
+    const tok = tokens[i]!;
+    if (tok.startsWith("-")) continue;
+    if (isRootPath(tok)) return true;
+    if (tok === "/*" || tok === "~/*" || tok === ".*" || tok === "$HOME/*" || tok === "${HOME}/*") return true;
+  }
+  return false;
+}
+
+export function destructiveRmReason(command: string): string {
+  return (
+    `dc-scan-guard (dual-encoding): se bloqueó un comando destructivo masivo (\`${command}\`). ` +
+    `Ejecutar \`rm -rf\` sobre \`/\`, \`~\`, \`$HOME\` o wildcards globales está mecánicamente prohibido ` +
+    `para proteger el sistema operativo y el entorno del desarrollador. Acotá la eliminación a rutas relativas específicas.`
+  );
+}
+
 export function blockReason(command: string): string {
   const offending = splitSegments(command).find((seg) => {
     const tokens = tokenize(seg);
@@ -109,6 +139,9 @@ export function classifyShellCommand(command: unknown): ScanGuardDecision {
 
   for (const segment of splitSegments(command)) {
     const tokens = tokenize(segment);
+    if (isDestructiveRm(tokens)) {
+      return { block: true, reason: destructiveRmReason(segment) };
+    }
     if (isRootedFind(tokens) || isRootedRecursiveSearch(tokens)) {
       return { block: true, reason: blockReason(command) };
     }
