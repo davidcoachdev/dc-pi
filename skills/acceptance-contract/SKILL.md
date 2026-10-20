@@ -26,6 +26,7 @@ Do not use for standard unit test authoring (use TDD / language-specific test su
 - **Public Interface Verification**: Test through the public interface (HTTP endpoints, CLI commands, generated build outputs, or exported module APIs). Do not assert against internal private implementation details.
 - **Deterministic**: The test must not depend on non-deterministic external network conditions without mocks or local sandboxes.
 - **Location Convention**: Store acceptance scripts under `qa/acceptance/test-<ticket-or-feature>.sh` (or language equivalent).
+- **Anti-Leakage Tripwire (Harness² Pattern)**: Nunca expongas rubros, claves de respuesta o calificadores finales en el contexto conversacional del agente que implementa la tarea. Mantén los datos de evaluación herméticos en el script o fixture externo para prevenir data leakage y optimizaciones sobre atajos.
 
 ## Decision Gates
 

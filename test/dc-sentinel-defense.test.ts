@@ -33,6 +33,27 @@ describe("dc-sentinel-defense: Memory Defense, Privacidad y Redactor de Ruido", 
     assert.equal(res.redactedCount, 5);
   });
 
+  it("censura marcadores y veredictos de evaluación para evitar fuga de datos (Harness² Tripwire)", () => {
+    const raw = `
+      Resultado de la ejecución de pruebas:
+      deterministic_eval_summary: total 10
+      deterministic_eval_result: passed
+      "pass_rate": 0.95
+      "test_pass_rate": 1.0
+      Judge findings on the rendered result: perfecto
+    `;
+
+    const res = sanitizeMemoryDefense(raw);
+
+    assert.ok(!res.text.includes("deterministic_eval_summary"));
+    assert.ok(!res.text.includes("deterministic_eval_result"));
+    assert.ok(!res.text.includes('"pass_rate"'));
+    assert.ok(!res.text.includes('"test_pass_rate"'));
+    assert.ok(!res.text.includes("Judge findings on the rendered result"));
+    assert.ok(res.text.includes("[REDACTED:eval_grader_verdict]"));
+    assert.equal(res.redactedCount, 5);
+  });
+
   it("elimina quirúrgicamente bloques envueltos en <private>...</private>", () => {
     const raw = `
       El servidor corre en puerto 3000.
