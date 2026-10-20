@@ -178,7 +178,7 @@ test("dcTtsExtension registers /dc-tts command, shortcuts, and prevents duplicat
 
   assert.ok(commands.has("dc-tts"));
   assert.ok(shortcuts.has("alt+u"));
-  assert.ok(shortcuts.has("alt+p"));
+  assert.ok(shortcuts.has("alt+k"));
   assert.ok(shortcuts.has("alt+,"));
   assert.ok(shortcuts.has("alt+."));
   assert.ok(shortcuts.has("alt+r"));

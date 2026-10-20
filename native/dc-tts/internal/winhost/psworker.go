@@ -211,8 +211,14 @@ while ($true) {
       [Console]::Out.WriteLine((Get-StatusJson))
       continue
     }
-    if ($cmd -eq "autoread") {
-      $state.autoRead = -not [bool]$state.autoRead
+    if ($cmd -eq "autoread" -or $cmd.StartsWith("autoread ")) {
+      if ($cmd -eq "autoread on" -or $cmd -eq "autoread:on" -or $cmd -eq "autoread true") {
+        $state.autoRead = $true
+      } elseif ($cmd -eq "autoread off" -or $cmd -eq "autoread:off" -or $cmd -eq "autoread false") {
+        $state.autoRead = $false
+      } else {
+        $state.autoRead = -not [bool]$state.autoRead
+      }
       if (-not $state.autoRead) {
         $state.lastPrompt = $null
         if ($synth.State.ToString() -eq "Paused") { $synth.Resume() }
@@ -297,7 +303,17 @@ func ResolvePowerShellBinary(explicit string) string {
 func NewPowerShellEngine(psBinary string) (*PowerShellEngine, error) {
 	psBinary = ResolvePowerShellBinary(psBinary)
 
-	cmd := exec.Command(psBinary, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", psWorkerScript)
+	cmd := exec.Command(
+		psBinary,
+		"-NoProfile",
+		"-NonInteractive",
+		"-WindowStyle",
+		"Hidden",
+		"-ExecutionPolicy",
+		"Bypass",
+		"-Command",
+		psWorkerScript,
+	)
 	configureHiddenProcess(cmd)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {

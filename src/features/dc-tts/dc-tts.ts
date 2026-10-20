@@ -279,7 +279,7 @@ export default function dcTtsExtension(pi: ExtensionAPI): void {
           void openTtsModal(ctx);
           return { consume: true };
         }
-        if (matchesKey(data, "alt+p")) {
+        if (matchesKey(data, "alt+k")) {
           void callTtsBridge<TtsStatus>("/toggle", "POST", {}).then((r) => {
             if (r?.status === "paused") dcNotifier.notify(ctx, "DC TTS", "⏸ Pausado", "info");
             else if (r?.status === "playing") dcNotifier.notify(ctx, "DC TTS", "▶ Reanudado", "info");
@@ -352,6 +352,7 @@ export default function dcTtsExtension(pi: ExtensionAPI): void {
     stopSpeechWatch();
     unsubInput?.();
     unsubInput = null;
+    void callTtsBridge("/stop", "POST", {}).catch(() => {});
   };
 
   (globalThis as any)[G_TTS_CLEANUP] = cleanupTtsSession;
@@ -485,7 +486,7 @@ export default function dcTtsExtension(pi: ExtensionAPI): void {
         await openTtsModal(ctx);
       },
     });
-    pi.registerShortcut("alt+p" as never, {
+    pi.registerShortcut("alt+k" as never, {
       description: "Pausar / Reanudar lectura TTS actual",
       handler: async (ctx) => {
         await callTtsBridge("/toggle", "POST", {});

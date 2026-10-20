@@ -65,6 +65,41 @@ test("DcNotifier falls back to ctx.ui.notify when Herdr is unavailable", () => {
   }
 });
 
+test("DcNotifier getHerdrBin falls back to 'herdr' when HERDR_BIN_PATH does not exist on disk", () => {
+  const originalBin = process.env.HERDR_BIN_PATH;
+  try {
+    process.env.HERDR_BIN_PATH = "/tmp/non-existent-herdr-binary-path-12345";
+    const notifier = new DcNotifier();
+    // @ts-expect-error accessing private property for verification
+    assert.equal(notifier.getHerdrBin(), "herdr");
+  } finally {
+    if (originalBin !== undefined) process.env.HERDR_BIN_PATH = originalBin;
+    else delete process.env.HERDR_BIN_PATH;
+  }
+});
+
+test("DcNotifier notifyHerdr returns false in testMode", () => {
+  const notifier = new DcNotifier();
+  notifier.testMode = true;
+  assert.equal(notifier.notifyHerdr("Title", "Body"), false);
+});
+
+test("DcNotifier notifyHerdr safely suppresses spawn error when binary is missing", () => {
+  const originalEnv = process.env.HERDR_ENV;
+  try {
+    process.env.HERDR_ENV = "1";
+    const notifier = new DcNotifier(() => "/tmp/non-existent-binary-enoent-test");
+    notifier.testMode = false;
+    // Should not throw uncaughtException
+    assert.doesNotThrow(() => {
+      notifier.notifyHerdr("Test Notification", "Body");
+    });
+  } finally {
+    if (originalEnv !== undefined) process.env.HERDR_ENV = originalEnv;
+    else delete process.env.HERDR_ENV;
+  }
+});
+
 test("dcNotifyExtension registers /dc-notify-test", () => {
   let registeredCommand: string | undefined;
   let commandHandler: Function | undefined;

@@ -150,6 +150,7 @@ export async function ensureTtsDaemonRunning(options?: {
         detached: true,
         stdio: ["ignore", outFd, outFd],
       });
+      child.on("error", () => {});
       child.unref();
       try {
         fs.closeSync(outFd);

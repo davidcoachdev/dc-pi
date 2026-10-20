@@ -380,6 +380,7 @@ export class DcLazywebClient {
               stdio: "ignore",
             },
           );
+          child.on("error", () => {});
           child.unref();
         }
       } catch {

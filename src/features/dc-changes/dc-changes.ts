@@ -42,6 +42,9 @@ export async function openChangesViewer(ctx: ExtensionContext): Promise<void> {
           const fullPath = path.resolve(baseDir, file);
           try {
             const child = spawn(editor, [fullPath], { stdio: "inherit" });
+            child.on("error", (err) => {
+              dcNotifier.notify(ctx, "DC Cambios", `No se pudo abrir el editor (${editor}): ${err.message}`, "error");
+            });
             child.on("exit", () => {
               tui.requestRender();
             });

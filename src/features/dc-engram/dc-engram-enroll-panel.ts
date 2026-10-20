@@ -15,7 +15,7 @@ import { DcProgressBar } from "../../ui/dc-progress-bar.ts";
 export function openUrl(url: string): void {
   try {
     if (process.env.WSL_DISTRO_NAME || fs.existsSync("/mnt/c/Windows/System32/cmd.exe")) {
-      spawn("/mnt/c/Windows/System32/cmd.exe", ["/c", "start", "", url], { cwd: "/tmp", stdio: "ignore", detached: true }).unref();
+      spawn("/mnt/c/Windows/System32/cmd.exe", ["/c", "start", "", url], { cwd: "/tmp", stdio: "ignore", detached: true }).on("error", () => {}).unref();
       return;
     }
   } catch {}

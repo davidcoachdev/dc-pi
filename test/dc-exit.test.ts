@@ -83,3 +83,26 @@ test("dcExitExtension arms on real quit and writes CLEAR_SCREEN on exit", () => 
   exitCallback!();
   assert.equal(writtenData, CLEAR_SCREEN);
 });
+
+test("dcExitExtension registers /exit command that calls ctx.shutdown()", async () => {
+  const commands = new Map<string, { handler: Function }>();
+  let shutdownCalled = false;
+
+  const mockPi = {
+    on() {},
+    registerCommand(name: string, def: any) {
+      commands.set(name, def);
+    },
+  } as unknown as ExtensionAPI;
+
+  dcExitExtension(mockPi);
+
+  assert.ok(commands.has("exit"));
+  const exitCmd = commands.get("exit")!;
+  await exitCmd.handler("", {
+    shutdown: () => {
+      shutdownCalled = true;
+    },
+  });
+  assert.equal(shutdownCalled, true);
+});

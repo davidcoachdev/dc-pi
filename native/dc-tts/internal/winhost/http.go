@@ -37,7 +37,7 @@ func NewHTTPHandler(engine Engine) http.Handler {
 	mux.HandleFunc("/resume", b.handleSimpleCmd("resume"))
 	mux.HandleFunc("/stop", b.handleSimpleCmd("stop"))
 	mux.HandleFunc("/toggle", b.handleSimpleCmd("toggle"))
-	mux.HandleFunc("/autoread", b.handleSimpleCmd("autoread"))
+	mux.HandleFunc("/autoread", b.handleAutoread)
 	mux.HandleFunc("/voice", b.handleVoice)
 	mux.HandleFunc("/rate", b.handleRate)
 	mux.HandleFunc("/volume", b.handleVolume)
@@ -218,6 +218,28 @@ func (b *HTTPBridge) handleNav(w http.ResponseWriter, r *http.Request) {
 		"action": nav.Action,
 		"target": nav.Target,
 	})
+}
+
+func (b *HTTPBridge) handleAutoread(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Enabled *bool `json:"enabled"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&body)
+
+	cmd := "autoread"
+	if body.Enabled != nil {
+		if *body.Enabled {
+			cmd = "autoread on"
+		} else {
+			cmd = "autoread off"
+		}
+	}
+	st, err := b.engine.Command(cmd)
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, st)
 }
 
 func (b *HTTPBridge) handleSimpleCmd(cmd string) http.HandlerFunc {

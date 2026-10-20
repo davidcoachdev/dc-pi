@@ -68,6 +68,12 @@ func (s *stubEngine) Command(cmd string) (protocol.StatusResponse, error) {
 	case cmd == "autoread":
 		s.status.AutoRead = !s.status.AutoRead
 		return s.status, nil
+	case cmd == "autoread on":
+		s.status.AutoRead = true
+		return s.status, nil
+	case cmd == "autoread off":
+		s.status.AutoRead = false
+		return s.status, nil
 	default:
 		return s.status, nil
 	}

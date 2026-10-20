@@ -45,6 +45,17 @@ export default function dcExitExtension(
     }
   });
 
+  try {
+    pi.registerCommand?.("exit", {
+      description: "Cierra la sesión y sale ordenadamente de Pi",
+      handler: async (_args, ctx) => {
+        ctx.shutdown();
+      },
+    });
+  } catch {
+    /* fallback si el host no lo soporta */
+  }
+
   pi.on("session_shutdown", (event) => {
     const reason = (event as { reason?: string } | undefined)?.reason;
     if (isSessionChangeReason(reason)) return;

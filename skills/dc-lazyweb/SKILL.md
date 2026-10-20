@@ -1,6 +1,10 @@
 ---
 name: dc-lazyweb
-description: Trigger: lazyweb, referencias ui, diseñar ui, inspiracion ui, pricing page, onboarding flow, paywall, checkout ui, experimentos ab, patrones de diseño. Consulta +281k pantallas reales, flujos de producto y experimentos A/B de Lazyweb usando un becario efímero con el ladrillo de Lego 'lazyweb' sin ensuciar el contexto principal.
+description: "Trigger: lazyweb, referencias ui, diseñar ui, inspiracion ui, pricing page, onboarding flow, paywall, checkout ui, experimentos ab, patrones de diseño. Consulta +281k pantallas reales, flujos de producto y experimentos A/B de Lazyweb usando un becario efímero con el ladrillo de Lego 'lazyweb' sin ensuciar el contexto principal."
+license: MIT
+metadata:
+  author: dc-studio
+  version: "1.0"
 ---
 
 # DC Lazyweb — Evidencia Real de UI/UX y Conversión para Becarios

@@ -1,5 +1,5 @@
-import * as fs from "node:fs";
-import * as os from "node:os";
+import fs from "node:fs";
+import os from "node:os";
 import * as path from "node:path";
 import { fetchBridgeQuota, fetchZenQuota, readPiAuthKey } from "../../dc-quota/dc-quota.ts";
 import { humanizeReset } from "../../dc-quota/dc-quota-types.ts";
@@ -23,6 +23,13 @@ const cachedQuotas = new Map<string, AccountQuotaSummary>();
 let cachedOpenCode: AccountQuotaSummary | null = null;
 let lastFetchTime = 0;
 let isFetching = false;
+
+export function clearCachedQuotasForTesting(): void {
+  cachedQuotas.clear();
+  cachedOpenCode = null;
+  lastFetchTime = 0;
+  isFetching = false;
+}
 
 /**
  * Descubre los prefijos de cuenta activos a consultar según el modelo activo

@@ -97,4 +97,18 @@ func TestHTTPBridgeEndpointsForDcFaceAndAssistant(t *testing.T) {
 	if arSt.AutoRead != false {
 		t.Fatalf("expected autoRead=false after toggle, got %+v", arSt)
 	}
+
+	// 6. POST /autoread with explicit enabled: true
+	resp6, err := http.Post(ts.URL+"/autoread", "application/json", bytes.NewReader([]byte(`{"enabled":true}`)))
+	if err != nil {
+		t.Fatalf("POST /autoread enabled=true error: %v", err)
+	}
+	defer resp6.Body.Close()
+	var arSt2 protocol.StatusResponse
+	if err := json.NewDecoder(resp6.Body).Decode(&arSt2); err != nil {
+		t.Fatalf("decode /autoread enabled=true error: %v", err)
+	}
+	if arSt2.AutoRead != true {
+		t.Fatalf("expected autoRead=true after explicit enabled:true, got %+v", arSt2)
+	}
 }

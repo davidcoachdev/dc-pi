@@ -1,5 +1,6 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { execFileSync, spawn } from "node:child_process";
+import { existsSync } from "node:fs";
 import { patchPiLoadedResources } from "./dc-resources-patch.ts";
 import { patchTextNotificationFilter, patchPiClearCommand } from "./dc-text-patch.ts";
 import {
@@ -31,20 +32,31 @@ export interface Notifier {
 
 export class DcNotifier implements Notifier {
   public testMode = false;
-  constructor(private readonly getHerdrBin = () => process.env.HERDR_BIN_PATH ?? "herdr") {}
+  constructor(
+    private readonly getHerdrBin = () => {
+      const envBin = process.env.HERDR_BIN_PATH;
+      if (envBin && existsSync(envBin)) {
+        return envBin;
+      }
+      return "herdr";
+    },
+  ) {}
 
   isHerdrAvailable(): boolean {
     return Boolean(process.env.HERDR_SOCKET_PATH || process.env.HERDR_ENV);
   }
 
   notifyHerdr(title: string, body?: string): boolean {
-    if (!this.isHerdrAvailable()) return false;
+    if (this.testMode || !this.isHerdrAvailable()) return false;
     const args = ["notification", "show", title];
     if (body) args.push("--body", body);
     const bin = this.getHerdrBin();
 
     try {
       const child = spawn(bin, args, { stdio: "ignore", detached: true });
+      child.on("error", () => {
+        // Defensive: ignore asynchronous spawn failures (e.g. ENOENT, EACCES)
+      });
       child.unref?.();
       return true;
     } catch {

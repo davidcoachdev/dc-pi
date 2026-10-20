@@ -7,7 +7,7 @@ import { syncBuiltinESMExports } from "node:module";
 import { getEffectiveTodoTasks, createTodoCard } from "../src/features/dc-sidebar/components/dc-sidebar-todo-card.ts";
 import { getEffectiveAgents, createAgentsCard, openSubagentsView } from "../src/features/dc-sidebar/components/dc-sidebar-agents-card.ts";
 import { createStatusCard } from "../src/features/dc-sidebar/components/dc-sidebar-status-card.ts";
-import { getCachedAccountQuotas } from "../src/features/dc-sidebar/providers/dc-quota-provider.ts";
+import { getCachedAccountQuotas, clearCachedQuotasForTesting } from "../src/features/dc-sidebar/providers/dc-quota-provider.ts";
 import {
   formatFleetSummaryText,
   formatElapsedDuration,
@@ -67,6 +67,7 @@ test("openSubagentsView invokes shortcut handler or notifies gracefully", () => 
 });
 
 test("Status sidebar refreshes quota values on the same card instance", async () => {
+  clearCachedQuotasForTesting();
   const originalFetch = globalThis.fetch;
   const originalExistsSync = fs.existsSync;
   const originalHomedir = os.homedir;
@@ -74,7 +75,8 @@ test("Status sidebar refreshes quota values on the same card instance", async ()
   os.homedir = () => testHome;
   const settingsPath = path.join(testHome, ".pi", "agent", "settings.json");
   fs.existsSync = ((filePath: fs.PathLike) => {
-    if (String(filePath) === settingsPath) return false;
+    const p = String(filePath);
+    if (p === settingsPath || p.endsWith(path.join(".pi", "agent", "settings.json"))) return false;
     return originalExistsSync(filePath);
   }) as typeof fs.existsSync;
   syncBuiltinESMExports();
@@ -201,6 +203,7 @@ test("Status sidebar refreshes quota values on the same card instance", async ()
     assert.match(collapsedEmptyEntries, /Restante/);
     assert.match(collapsedEmptyEntries, /100%/);
   } finally {
+    clearCachedQuotasForTesting();
     globalThis.fetch = originalFetch;
     fs.existsSync = originalExistsSync;
     os.homedir = originalHomedir;
