@@ -5,6 +5,10 @@ import type {
   SentinelToolExecution,
   SentinelTurnRecord,
 } from "./dc-sentinel-types.ts";
+import {
+  compactTurnHistory,
+  scrubTurnRecord,
+} from "./dc-sentinel-scrub-edge.ts";
 
 export class SentinelRecorder {
   private sessionId: string;
@@ -36,6 +40,13 @@ export class SentinelRecorder {
 
   getTurns(): SentinelTurnRecord[] {
     return [...this.turns];
+  }
+
+  /**
+   * Retorna el historial de turnos con compactación inteligente a profundidad 1 (Artemis Scrub Edge).
+   */
+  getCompactedTurns(recentWindowSize: number = 3): SentinelTurnRecord[] {
+    return compactTurnHistory(this.turns, recentWindowSize);
   }
 
   /**
@@ -132,7 +143,8 @@ export class SentinelRecorder {
       this.activeTurn.assistantSummary = clean.length > 500 ? `${clean.slice(0, 497)}...` : clean;
     }
 
-    const completed = this.activeTurn;
+    // Aplica Scrub Edge: filtra avisos efímeros antes de incorporar el turno al historial
+    const completed = scrubTurnRecord(this.activeTurn, true);
     this.turns.push(completed);
     this.activeTurn = null;
     return completed;
