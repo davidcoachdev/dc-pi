@@ -304,6 +304,7 @@ export type DcBehaviorBrick =
   | "dag-planning"
   | "verify-independent"
   | "scoped-search"
+  | "syntax-preflight"
   | "clean-sandbox";
 
 export const DC_BEHAVIOR_BRICKS: Record<DcBehaviorBrick, string> = {
@@ -325,6 +326,8 @@ export const DC_BEHAVIOR_BRICKS: Record<DcBehaviorBrick, string> = {
     "Opera como auditor independiente sin asumir que los reportes previos son ciertos. Ejecuta personalmente los tests y aserciones. Audita la disciplina TDD y rechaza tajantemente pruebas con tautologías (assert.ok(true)), tests que solo comprueben tipos sin comportamiento, o suites vacías.",
   "scoped-search":
     "Prohibido terminantemente ejecutar grep, find o escaneos recursivos en la raíz del sistema (/), en raíz de usuario (~ o /home/*) o en directorios padre genéricos. Todo comando de búsqueda o análisis debe acotarse estrictamente al directorio relativo del proyecto actual o a una subcarpeta concreta (ej: 'src/', 'lib/', 'test/').",
+  "syntax-preflight":
+    "Control de Calidad Pre-Vuelo: Antes de concluir una tarea que modifique o cree archivos ejecutables (.ts, .js, .py, etc.), ejecuta siempre una validación sintáctica determinista (ej: 'node --check' o 'python3 -m py_compile'). Si detectas un error de compilación o sintaxis, corrígelo de inmediato antes de reportar la tarea.",
   "clean-sandbox":
     "Cuando ejecutes verificación de código o suites de prueba, aísla la ejecución en un directorio temporal limpio (mktemp -d) para evitar efectos colaterales o contaminación de caché en el workspace activo, comprobando que los invariantes y la salida previa permanezcan intactos.",
 };

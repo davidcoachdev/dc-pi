@@ -100,6 +100,12 @@ export const DEFENSE_PATTERNS: DefensePattern[] = [
   // 8. PII
   { type: "ssn_us", regex: /\b\d{3}-\d{2}-\d{4}\b/g },
   { type: "credit_card", regex: /\b(?:4[0-9]{12}(?:[0-9]{3})?|5[1-5][0-9]{14}|3[47][0-9]{13})\b/g },
+
+  // 9. Evaluation & Grader Verdict Anti-Leakage (Harness² Anti-Contamination Tripwire)
+  {
+    type: "eval_grader_verdict",
+    regex: /(?:deterministic_eval_(?:summary|result)|judge_scope_and_deterministic_status|Judge findings on the rendered result|"(?:passed_count|pass_rate|test_pass_rate)")/g,
+  },
 ];
 
 /**
