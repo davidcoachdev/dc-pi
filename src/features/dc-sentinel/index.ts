@@ -7,6 +7,7 @@ export * from "./core/dc-sentinel-db.ts";
 export * from "./core/dc-sentinel-defense.ts";
 export * from "./core/dc-sentinel-deterministic-extractor.ts";
 export * from "./core/dc-sentinel-ephemeral.ts";
+export * from "./core/dc-sentinel-scrub-edge.ts";
 export * from "./core/dc-sentinel-lease.ts";
 export * from "./views/dc-sentinel-panel.ts";
 export * from "./views/dc-sentinel-modal.ts";
