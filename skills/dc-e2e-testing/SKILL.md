@@ -126,6 +126,24 @@ Cuando un comando `npx e2e run` falla:
 
 ---
 
+## 6. Heurísticas para Testing Móvil (Mindset Artemis)
+
+Al autorar o depurar flujos en dispositivos Android (reales o emulados), seguir las reglas probadas de ingeniería móvil derivadas de Google ARTEMIS:
+
+1. **Filosofía "Dynamic-First, Coordinate-Fallback":**
+   - Siempre priorizar selectores semánticos dinámicos (`accessibility-id`, texto, roles o etiquetas accesibles) para resistir cambios de layout y densidad de píxeles.
+   - Usar coordenadas relativas o absolutas únicamente como fallback secundario (patrón *Try-Catch Fallback*) cuando los elementos carecen de árbol accesible (ej: Flutter Canvas, WebViews o renderers gráficos).
+2. **Compensación de Latencia en Exploración vs. Determinismo en Código:**
+   - Durante la exploración agentica interactiva, el modelo introduce latencia natural de inferencia (~3-5s en modelos Flash, ~25-30s en modelos de razonamiento profundo).
+   - En el código final de prueba (`.e2e.ts`), esa latencia del agente desaparece: se deben implementar esperas explícitas deterministas (`waitFor`, estados de carga, transiciones de pantalla) sin relying en retrasos artificiales.
+3. **Aislamiento por Dispositivo y Mutex:**
+   - Cada dispositivo físico o emulador debe ser direccionado mediante su serial ADB (`adb -s <serial>`).
+   - Nunca asumir un solo dispositivo conectado: ejecutar `adb devices -l` antes de iniciar la suite móvil para verificar autorización (`device` vs `unauthorized`/`offline`).
+4. **Diagnóstico Sistemático antes de Conjeturar:**
+   - Ante fallos de conexión o UI congelada en móvil, no reintentar a ciegas: verificar la conectividad de ADB, limpiar procesos colgados (`kill-server`) y revisar `logcat` enfocado en los crashes de la aplicación objetivo.
+
+---
+
 ## Referencias Detalladas
 
 Para directivas específicas de sintaxis y depuración avanzada, consultar los documentos en `references/`:
