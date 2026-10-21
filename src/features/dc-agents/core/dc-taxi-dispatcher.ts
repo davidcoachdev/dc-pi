@@ -551,6 +551,7 @@ export function acquireOrchestratorTaxi(
   allowedAccounts?: string[],
   fallbackBaseModel: string = "gemini-3.8-flash-high",
   fallbackProvider: string = "cpam",
+  excludedAccounts?: string[],
 ): { account: string; modelId: string; changed: boolean } | null {
   return withFleetLock(fleetPath, () => {
     const state = loadFleetState(fleetPath, allowedAccounts);
@@ -595,8 +596,10 @@ export function acquireOrchestratorTaxi(
       }
     }
 
-    // Caso 1: La cuenta preferida es de CPAM ac* y está libre o ya pertenece a este mismo proceso
-    if (currentAccount && state.fleet[currentAccount]) {
+    const isExcluded = (ac: string) => Array.isArray(excludedAccounts) && excludedAccounts.includes(ac);
+
+    // Caso 1: La cuenta preferida es de CPAM ac* y está libre o ya pertenece a este mismo proceso (y no está excluida)
+    if (currentAccount && state.fleet[currentAccount] && !isExcluded(currentAccount)) {
       const preferredUnit = state.fleet[currentAccount];
       const isMine =
         preferredUnit?.passenger?.pid === pid ||
@@ -629,44 +632,54 @@ export function acquireOrchestratorTaxi(
       }
     }
 
-    // Caso 2: Si el modelo no era de CPAM (ej: Kimi, OpenCode) O si su cuenta ac* está ocupada:
-    // ¡Tomar el primer Taxi LIBRE de la flota de CPAM!
-    for (const [ac, unit] of Object.entries(state.fleet)) {
-      if (unit.status === "libre") {
-        unit.status = "ocupado";
+    // Caso 2: Si el modelo no era de CPAM (ej: Kimi, OpenCode) O si su cuenta ac* está ocupada/excluida:
+    // ¡Tomar el Taxi LIBRE de la flota de CPAM con mayor cuota disponible!
+    const freeUnits = Object.entries(state.fleet)
+      .filter(([ac, unit]) => unit.status === "libre" && !isExcluded(ac))
+      .map(([ac, unit]) => {
+        const q = getCachedTaxiQuota(ac);
+        const quotaPct = typeof q?.gemini5hPct === "number" ? q.gemini5hPct : 100;
+        return { ac, unit, quotaPct };
+      })
+      .sort((a, b) => b.quotaPct - a.quotaPct);
 
-        let newModelId: string;
-        if (currentAccount && accountIndex >= 0 && parts.length > 0) {
-          const newParts = [...parts];
-          newParts[accountIndex] = ac;
-          newModelId = newParts.join("/");
-        } else {
-          newModelId = `${fallbackProvider}/${ac}/${fallbackBaseModel}`;
-        }
+    if (freeUnits.length > 0) {
+      const selected = freeUnits[0];
+      const ac = selected.ac;
+      const unit = selected.unit;
+      unit.status = "ocupado";
 
-        unit.passenger = {
-          type: "orchestrator",
-          sessionId,
-          pid,
-          model: newModelId,
-          taskLabel: "Sesión Principal (Orquestador)",
-          plate: `DC-HOST-${pid}`,
-          startedAt: Date.now(),
-          heartbeatAt: Date.now(),
-        };
-        saveFleetState(state, fleetPath);
-
-        appendTaxiLog("INFO", "TAXI_ORCHESTRATOR_AUTO_REASSIGNED", {
-          preferredAccount: currentAccount || "none (fallback)",
-          reassignedAccount: ac,
-          sessionId,
-          pid,
-          originalModelId: modelId || "none",
-          newModelId,
-        });
-
-        return { account: ac, modelId: newModelId, changed: true };
+      let newModelId: string;
+      if (currentAccount && accountIndex >= 0 && parts.length > 0) {
+        const newParts = [...parts];
+        newParts[accountIndex] = ac;
+        newModelId = newParts.join("/");
+      } else {
+        newModelId = `${fallbackProvider}/${ac}/${fallbackBaseModel}`;
       }
+
+      unit.passenger = {
+        type: "orchestrator",
+        sessionId,
+        pid,
+        model: newModelId,
+        taskLabel: "Sesión Principal (Orquestador)",
+        plate: `DC-HOST-${pid}`,
+        startedAt: Date.now(),
+        heartbeatAt: Date.now(),
+      };
+      saveFleetState(state, fleetPath);
+
+      appendTaxiLog("INFO", "TAXI_ORCHESTRATOR_AUTO_REASSIGNED", {
+        preferredAccount: currentAccount || "none (fallback)",
+        reassignedAccount: ac,
+        sessionId,
+        pid,
+        originalModelId: modelId || "none",
+        newModelId,
+      });
+
+      return { account: ac, modelId: newModelId, changed: true };
     }
 
     // Caso 3: Flota llena

@@ -13,6 +13,8 @@ export interface DcTaxiQuotaInfo {
   account: string;
   gemini5hPct: number | null;
   geminiWeeklyPct: number | null;
+  claude5hPct?: number | null;
+  claudeWeeklyPct?: number | null;
   resetTimeIso?: string;
   lastChecked: number;
 }
@@ -45,6 +47,10 @@ export async function fetchTaxiQuota(account: string): Promise<DcTaxiQuotaInfo> 
 
     let gemini5hPct: number | null = null;
     let geminiWeeklyPct: number | null = null;
+    let claude5hPct: number | null = null;
+    let claudeWeeklyPct: number | null = null;
+    let generic5hPct: number | null = null;
+    let genericWeeklyPct: number | null = null;
     let resetTimeIso: string | undefined;
 
     if (Array.isArray(d?.entries)) {
@@ -54,19 +60,44 @@ export async function fetchTaxiQuota(account: string): Promise<DcTaxiQuotaInfo> 
         const pct = rawPct > 0 && rawPct <= 1 ? rawPct * 100 : rawPct;
         const boundedPct = Math.max(0, Math.min(100, Math.round(pct * 10) / 10));
 
-        if (name.includes("5h") || name.includes("rate_limit")) {
-          gemini5hPct = boundedPct;
-          if (e.resetTimeIso) resetTimeIso = e.resetTimeIso;
-        } else if (name.includes("weekly") || name.includes("quota")) {
-          geminiWeeklyPct = boundedPct;
+        const is5h = name.includes("5h") || name.includes("rate_limit") || name.includes("primary");
+        const isWeekly = name.includes("weekly") || name.includes("quota") || name.includes("secondary");
+
+        if (name.includes("gemini")) {
+          if (is5h) {
+            gemini5hPct = boundedPct;
+            if (e.resetTimeIso) resetTimeIso = e.resetTimeIso;
+          } else if (isWeekly) {
+            geminiWeeklyPct = boundedPct;
+          }
+        } else if (name.includes("claude")) {
+          if (is5h) {
+            claude5hPct = boundedPct;
+            if (e.resetTimeIso) resetTimeIso = e.resetTimeIso;
+          } else if (isWeekly) {
+            claudeWeeklyPct = boundedPct;
+          }
+        } else {
+          if (is5h) {
+            generic5hPct = boundedPct;
+            if (e.resetTimeIso) resetTimeIso = e.resetTimeIso;
+          } else if (isWeekly) {
+            genericWeeklyPct = boundedPct;
+          }
         }
       }
     }
 
+    // Si no hubo entrada explícita de Gemini, usar la genérica si existe
+    if (gemini5hPct === null && generic5hPct !== null) gemini5hPct = generic5hPct;
+    if (geminiWeeklyPct === null && genericWeeklyPct !== null) geminiWeeklyPct = genericWeeklyPct;
+
     const info: DcTaxiQuotaInfo = {
       account,
-      gemini5hPct: gemini5hPct !== null ? gemini5hPct : 100,
-      geminiWeeklyPct: geminiWeeklyPct !== null ? geminiWeeklyPct : 100,
+      gemini5hPct: gemini5hPct !== null ? gemini5hPct : (generic5hPct !== null ? generic5hPct : 100),
+      geminiWeeklyPct: geminiWeeklyPct !== null ? geminiWeeklyPct : (genericWeeklyPct !== null ? genericWeeklyPct : 100),
+      claude5hPct,
+      claudeWeeklyPct,
       resetTimeIso,
       lastChecked: now,
     };
