@@ -413,6 +413,7 @@ export function prepareEphemeralAgent(
       agentName,
       model: resolvedModel.baseModelName,
       taskLabel: options.label || options.role || options.archetype || options.task.slice(0, 40),
+      plate: `DC-${uuidShort.toUpperCase()}`,
     },
     resolvedModel.requestedAccount,
   );

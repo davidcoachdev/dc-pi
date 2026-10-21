@@ -18,8 +18,6 @@ import {
   acquireOrchestratorTaxi,
   releaseOrchestratorTaxi,
   syncActivePiSessionsFromOs,
-  findDirectChildPid,
-  updateTaxiPassengerPid,
   withFleetLock,
 } from "../src/features/dc-agents/core/dc-taxi-dispatcher.ts";
 
@@ -61,6 +59,9 @@ import { DcTaxisPanel } from "../src/features/dc-agents/views/dc-taxis-panel.ts"
 import {
   registerDcEphemeralTools,
   extractSubagentMetrics,
+  activeBackgroundPlans,
+  ensureBackgroundSweeper,
+  sweepBackgroundPlansOnce,
 } from "../src/features/dc-agents/tools/dc-ephemeral-tools.ts";
 import {
   DC_TOOL_PRESETS,
@@ -68,6 +69,7 @@ import {
   DC_BEHAVIOR_BRICKS,
   DC_AGENT_ARCHETYPES,
 } from "../src/features/dc-agents/core/dc-ephemeral-types.ts";
+import { createTaxiUnitRows } from "../src/features/dc-sidebar/components/dc-sidebar-status-card.ts";
 
 function createTempDir(prefix: string): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), `dc-test-${prefix}-`));
@@ -712,8 +714,8 @@ test("dc-taxi-dispatcher: syncActivePiSessionsFromOs never auto-assigns unknown 
   }
 });
 
-test("dc-taxi-dispatcher: updateTaxiPassengerPid dynamically binds real spawned child PID", () => {
-  const tempDir = createTempDir("real-child-pid");
+test("dc-taxi-dispatcher: leased taxis retain host process.pid without false PID overwrites", () => {
+  const tempDir = createTempDir("host-pid-integrity");
   const fleetPath = path.join(tempDir, "dc-taxis.json");
 
   try {
@@ -724,7 +726,7 @@ test("dc-taxi-dispatcher: updateTaxiPassengerPid dynamically binds real spawned 
       {
         type: "ephemeral_subagent",
         sessionId: "sess-real",
-        pid: process.pid, // Arranca con el PID del padre
+        pid: process.pid, // El PID siempre es process.pid del host
         model: "gemini-3.8-flash-high",
       },
       "ac01",
@@ -735,20 +737,14 @@ test("dc-taxi-dispatcher: updateTaxiPassengerPid dynamically binds real spawned 
     assert.ok(lease);
     assert.equal(lease.unit.passenger?.pid, process.pid);
 
-    // Spawneamos un hijo real temporal
-    const child = spawn("sleep", ["2"]);
-    const realChildPid = child.pid!;
-    assert.ok(realChildPid > 0);
-
-    // Actualizamos al PID real del hijo en tiempo real
-    const updated = updateTaxiPassengerPid("ac01", realChildPid, fleetPath);
-    assert.equal(updated, true);
-
+    // Verificamos que el estado persistido en disco mantiene el process.pid del host
     const reloaded = loadFleetState(fleetPath, customAccounts);
-    assert.equal(reloaded.fleet["ac01"].passenger?.pid, realChildPid);
-    assert.notEqual(reloaded.fleet["ac01"].passenger?.pid, process.pid);
+    assert.equal(reloaded.fleet["ac01"].passenger?.pid, process.pid);
 
-    child.kill();
+    // Verificamos que reapAbandonedTaxis nunca lo elimina mientras el proceso host siga vivo
+    const reaped = reapAbandonedTaxis(reloaded, 300000, Date.now());
+    assert.equal(reaped, 0);
+    assert.equal(reloaded.fleet["ac01"].status, "ocupado");
   } finally {
     fs.rmSync(tempDir, { recursive: true, force: true });
   }
@@ -1850,4 +1846,378 @@ test("dc-ephemeral-tools: dc_ephemeral_agent_run y dc_ephemeral_batch_run tienen
   assert.equal(batchTool.parameters.properties.items.items.properties.archetype.enum, undefined);
   assert.ok(singleTool.parameters.properties.archetype.description.includes("catálogo oficial"));
 });
+
+test("dc-ephemeral-tools: ensureBackgroundSweeper emits heartbeatTaxi every 5s for running tasks preventing TTL zombie reaping", () => {
+  const tempDir = createTempDir("sweeper-heartbeat-test");
+  const tasksDir = path.join(tempDir, "tasks");
+  fs.mkdirSync(tasksDir, { recursive: true });
+
+  const testTaskId = `task-heartbeat-${Date.now()}`;
+  const taskFilePath = path.join(tasksDir, `${testTaskId}.json`);
+
+  // Crear la tarea con status: "running"
+  fs.writeFileSync(
+    taskFilePath,
+    JSON.stringify({
+      task: {
+        id: testTaskId,
+        status: "running",
+      },
+    }),
+    "utf8",
+  );
+
+  const fleetPath = path.join(tempDir, "dc-taxis.json");
+  const customAccounts = ["ac01"];
+  const fleetState = createInitialFleetState(customAccounts);
+
+  const mockPlan = {
+    agentName: "dc-sub-sweeper-test",
+    leasedAccount: "ac01",
+    agentFilePath: path.join(tempDir, "dc-sub-sweeper-test.md"),
+    ephemeralId: `ephem-${Date.now()}`,
+    fullModelRef: "cpam/ac01/gemini-3.8-flash-high",
+    mode: "background" as const,
+  } as any;
+
+  // Taxi arrendado hace 400s (más de los 300s de leaseTtlMs)
+  const initialTimestamp = Date.now() - 400_000;
+  fleetState.fleet["ac01"].status = "ocupado";
+  fleetState.fleet["ac01"].passenger = {
+    type: "ephemeral_subagent",
+    sessionId: "sess-heartbeat",
+    pid: process.pid,
+    model: "gemini-3.8-flash-high",
+    startedAt: initialTimestamp,
+    heartbeatAt: initialTimestamp,
+    agentName: mockPlan.agentName,
+  };
+  saveFleetState(fleetState, fleetPath);
+
+  // Registrar en activeBackgroundPlans
+  activeBackgroundPlans.set(mockPlan.ephemeralId, {
+    plan: mockPlan,
+    sessionId: "sess-heartbeat",
+    startedAt: initialTimestamp,
+    taskId: testTaskId,
+  });
+
+  try {
+    // 1. Antes del heartbeat, verificar que si avanzamos tiempo expiraría el TTL
+    const beforeState = loadFleetState(fleetPath, customAccounts);
+    assert.equal(beforeState.fleet["ac01"].passenger?.heartbeatAt, initialTimestamp);
+
+    // 2. Ejecutar un pase del sweeper apuntando a nuestro tasksDir
+    sweepBackgroundPlansOnce(tasksDir, fleetPath);
+
+    // 3. Comprobar que se emitió el heartbeatTaxi y el heartbeatAt se actualizó a ~now
+    const afterState = loadFleetState(fleetPath, customAccounts);
+    const updatedHeartbeatAt = afterState.fleet["ac01"].passenger?.heartbeatAt || 0;
+    assert.ok(updatedHeartbeatAt > initialTimestamp, "heartbeatAt must be updated by sweeper");
+    assert.ok(Date.now() - updatedHeartbeatAt < 5000, "heartbeatAt must be fresh");
+
+    // 4. reapAbandonedTaxis con leaseTtlMs de 300s NO debe reapear el taxi
+    const reaped = reapAbandonedTaxis(afterState, 300000, Date.now());
+    assert.equal(reaped, 0, "Running task must not be reaped as zombie");
+    assert.equal(afterState.fleet["ac01"].status, "ocupado");
+  } finally {
+    activeBackgroundPlans.delete(mockPlan.ephemeralId);
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("dc-ephemeral-tools: dc_ephemeral_batch_run in background mode registers all workers in activeBackgroundPlans with taskId and starts sweeper", async () => {
+  const registered: any[] = [];
+  const fakePi = {
+    registerTool(toolDef: any) {
+      registered.push(toolDef);
+    },
+  } as any;
+
+  registerDcEphemeralTools(fakePi);
+  const batchTool = registered.find((t) => t.name === "dc_ephemeral_batch_run");
+  assert.ok(batchTool);
+
+  const initialBgCount = activeBackgroundPlans.size;
+  const dispatchedWorkers: Array<{ agent: string; taskId: string }> = [];
+
+  const fakeCtx = {
+    sessionManager: { getSessionId: () => `sess-batch-bg-${Date.now()}` },
+    model: { provider: "cpam", id: "ac01/gemini-3.8-flash-high" },
+    executeTool: async (name: string, args: any) => {
+      assert.equal(name, "subagent_run");
+      assert.equal(args.mode, "background");
+      const assignedTaskId = `task-${args.label}-${Date.now()}`;
+      dispatchedWorkers.push({ agent: args.agent, taskId: assignedTaskId });
+      return {
+        toolCall: { id: `call-${args.label}`, name: "subagent_run", arguments: args },
+        result: {
+          content: [{ type: "text", text: `Subagent started in background with taskId ${assignedTaskId}` }],
+          details: { taskId: assignedTaskId, background: true },
+        },
+      };
+    },
+  } as any;
+
+  const result = await batchTool.execute(
+    "call-batch-bg-1",
+    {
+      items: [
+        { task: "Indexar repositorio A", role: "indexer-a" },
+        { task: "Indexar repositorio B", role: "indexer-b" },
+      ],
+      mode: "background",
+    },
+    undefined,
+    undefined,
+    fakeCtx,
+  );
+
+  assert.equal(dispatchedWorkers.length, 2);
+  assert.equal(activeBackgroundPlans.size, initialBgCount + 2);
+
+  const agentFilesToClean: string[] = [];
+  const accountsToClean: string[] = [];
+
+  try {
+    for (const worker of dispatchedWorkers) {
+      // 1. Cada subagente debe estar registrado en activeBackgroundPlans con su taskId
+      const matchingEntry = Array.from(activeBackgroundPlans.values()).find(
+        (v: any) => v.plan.agentName === worker.agent,
+      );
+      assert.ok(matchingEntry, `Worker ${worker.agent} must be tracked in activeBackgroundPlans`);
+      assert.equal(matchingEntry.taskId, worker.taskId);
+      assert.equal(matchingEntry.plan.mode, "background");
+
+      // 2. El archivo de agente NO debe haberse borrado en background
+      assert.equal(fs.existsSync(matchingEntry.plan.agentFilePath), true);
+      agentFilesToClean.push(matchingEntry.plan.agentFilePath);
+      accountsToClean.push(matchingEntry.plan.leasedAccount);
+
+      // 3. El taxi arrendado debe permanecer en estado ocupado
+      const fleet = loadFleetState();
+      assert.equal(fleet.fleet[matchingEntry.plan.leasedAccount].status, "ocupado");
+    }
+
+    // 4. Los logs de delegación en background deben haberse emitido para cada worker
+    const recentLogs = readRecentTaxiLogs(15);
+    for (const worker of dispatchedWorkers) {
+      const match = recentLogs.find(
+        (l) => l.includes("EPHEMERAL_AGENT_BACKGROUND_DELEGATED") && l.includes(worker.agent),
+      );
+      assert.ok(match, `Delegation log must exist for ${worker.agent}`);
+    }
+  } finally {
+    // Limpieza de planes y archivos de prueba
+    for (const worker of dispatchedWorkers) {
+      const entry = Array.from(activeBackgroundPlans.entries()).find(
+        ([_, v]: [string, any]) => v.plan.agentName === worker.agent,
+      );
+      if (entry) {
+        activeBackgroundPlans.delete(entry[0]);
+      }
+    }
+    for (const f of agentFilesToClean) {
+      try {
+        if (fs.existsSync(f)) fs.unlinkSync(f);
+      } catch {}
+    }
+    for (const acc of accountsToClean) {
+      try {
+        releaseTaxi(acc, "cleanup-test");
+      } catch {}
+    }
+  }
+});
+
+test("dc-taxi-dispatcher: assigns unique plates to orchestrator and leased taxis", () => {
+  const tempDir = createTempDir("taxi-plates");
+  const fleetPath = path.join(tempDir, "dc-taxis.json");
+
+  try {
+    const customAccounts = ["ac01", "ac02", "ac03"];
+    saveFleetState(createInitialFleetState(customAccounts), fleetPath);
+
+    // 1. acquireOrchestratorTaxi assigns DC-HOST-${pid}
+    const orcRes = acquireOrchestratorTaxi(
+      "sess-orc-plate",
+      "cpam/ac01/gemini-3.8-flash-high",
+      fleetPath,
+      99999,
+      customAccounts,
+    );
+    assert.ok(orcRes);
+    const stateOrc = loadFleetState(fleetPath, customAccounts);
+    assert.equal(stateOrc.fleet["ac01"].passenger?.plate, "DC-HOST-99999");
+
+    // 2. leaseTaxi with explicit plate
+    const lease1 = leaseTaxi(
+      {
+        type: "ephemeral_subagent",
+        sessionId: "sess-sub-1",
+        pid: 88888,
+        plate: "DC-CUSTOM1",
+      },
+      undefined,
+      fleetPath,
+      undefined,
+      customAccounts,
+    );
+    assert.ok(lease1);
+    assert.equal(lease1.unit.passenger?.plate, "DC-CUSTOM1");
+
+    // 3. leaseTaxi without plate generates DC-${6-char uppercase hex/alphanumeric}
+    const lease2 = leaseTaxi(
+      {
+        type: "ephemeral_subagent",
+        sessionId: "sess-sub-2",
+        pid: 77777,
+      },
+      undefined,
+      fleetPath,
+      undefined,
+      customAccounts,
+    );
+    assert.ok(lease2);
+    assert.ok(lease2.unit.passenger?.plate);
+    assert.match(lease2.unit.passenger.plate, /^DC-[0-9A-F]{6}$/);
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("dc-ephemeral-manager: prepareEphemeralAgent passes plate DC-${uuidShort.toUpperCase()}", () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "dc-ephem-plate-test-"));
+  try {
+    const plan = prepareEphemeralAgent(
+      {
+        task: "Verificar contratos de telemetría",
+        archetype: "dc-odd-worker",
+        seedContext: "## Allowed edit surfaces\ntest/dummy.ts",
+      },
+      {
+        sessionId: "sess-plate-ephemeral",
+      },
+    );
+
+    const fleet = loadFleetState();
+    const unit = fleet.fleet[plan.leasedAccount];
+    assert.ok(unit && unit.passenger);
+
+    // El nombre del subagente termina en uuidShort (6 chars)
+    const suffix = plan.agentName.slice(-6).toUpperCase();
+    assert.equal(unit.passenger.plate, `DC-${suffix}`);
+    assert.match(unit.passenger.plate, /^DC-[0-9A-F]{6}$/);
+
+    cleanupEphemeralAgent(plan, {
+      sessionId: "sess-plate-ephemeral",
+      startedAt: Date.now() - 1000,
+      endedAt: Date.now(),
+      status: "completed",
+    });
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("dc-taxis-panel: renders updated vehicular telemetry labels (Pasajero, Circuito, Conductor, Placa, Taxímetro)", () => {
+  const fakeTheme = {
+    bold: (s: string) => `*${s}*`,
+    fg: (_c: string, s: string) => s,
+    bg: (_c: string, s: string) => s,
+  } as any;
+
+  const panel = new DcTaxisPanel({
+    theme: fakeTheme,
+    onDone: () => {},
+    requestRender: () => {},
+  });
+
+  (panel as any).selectedDetailUnit = {
+    account: "ac03",
+    status: "ocupado",
+    passenger: {
+      type: "ephemeral_subagent",
+      sessionId: "sess-test-panel",
+      pid: 54321,
+      model: "cpam/ac03/gemini-3.8-flash-high",
+      taskLabel: "Ruta de prueba vehicular",
+      plate: "DC-TEST99",
+      tokens: 4500,
+      cost: 0.0035,
+      startedAt: Date.now() - 15000,
+      heartbeatAt: Date.now(),
+    },
+  };
+
+  const renderedLines = panel.render(100);
+
+  // 1. Verificar nuevas etiquetas
+  assert.ok(renderedLines.some((l: string) => l.includes("Pasajero:")), "Debe contener etiqueta Pasajero:");
+  assert.ok(renderedLines.some((l: string) => l.includes("Circuito:") && l.includes("Ruta de prueba vehicular")), "Debe contener etiqueta Circuito:");
+  assert.ok(renderedLines.some((l: string) => l.includes("Conductor:") && l.includes("gemini-3.8-flash-high")), "Debe contener etiqueta Conductor:");
+  assert.ok(renderedLines.some((l: string) => l.includes("Placa:") && l.includes("DC-TEST99")), "Debe contener etiqueta Placa con matricula DC-*");
+  assert.ok(renderedLines.some((l: string) => l.includes("Taxímetro:") && l.includes("15s") && l.includes("tokens") && l.includes("0.0035")), "Debe contener etiqueta Taxímetro con duración, tokens y costo");
+
+  // 2. Verificar que las etiquetas antiguas ya no se muestren
+  assert.ok(!renderedLines.some((l: string) => l.includes("Tipo Pasajero:")), "No debe contener Tipo Pasajero:");
+  assert.ok(!renderedLines.some((l: string) => l.includes("Tarea / Misión:")), "No debe contener Tarea / Misión:");
+  assert.ok(!renderedLines.some((l: string) => l.includes("Modelo Activo:")), "No debe contener Modelo Activo:");
+  assert.ok(!renderedLines.some((l: string) => l.includes("PID / Proceso:")), "No debe contener PID / Proceso:");
+
+  // 3. Fallback de placa cuando p.plate no está definido: debe usar DC-${p.pid}
+  (panel as any).selectedDetailUnit.passenger.plate = undefined;
+  const fallbackLines = panel.render(100);
+  assert.ok(fallbackLines.some((l: string) => l.includes("Placa:") && l.includes("DC-54321")), "Placa debe caer en DC-${p.pid} como fallback");
+});
+
+test("dc-sidebar-status-card: createTaxiUnitRows separates Placa DC-* and Taximetro with elapsed duration and tokens", () => {
+  const occupiedUnit = {
+    account: "ac02",
+    status: "ocupado" as const,
+    passenger: {
+      type: "ephemeral_subagent" as const,
+      sessionId: "sess-sidebar-test",
+      pid: 67890,
+      model: "cpam/ac02/gemini-3.8-flash-high",
+      taskLabel: "Refactorización de telemetría vehicular",
+      plate: "DC-SIDE99",
+      tokens: 3500,
+      startedAt: Date.now() - 25000,
+      heartbeatAt: Date.now(),
+    },
+  };
+
+  const rows = createTaxiUnitRows(occupiedUnit);
+  assert.equal(rows.length, 6, "Debe tener 6 filas: Pasajero, Circuito, Conductor, Placa, Taxímetro, y Telemetría en vivo");
+
+  const renderedRows = rows.map((r: any) => r.render(80).join(" "));
+
+  // Verificar Pasajero, Circuito, Conductor, Placa, Taxímetro
+  assert.ok(renderedRows.some((l: string) => l.includes("Pasajero:") && l.includes("efímero")), "Debe renderizar Pasajero con rol");
+  assert.ok(renderedRows.some((l: string) => l.includes("Circuito:") && l.includes("Refactorización")), "Debe renderizar Circuito con taskShort");
+  assert.ok(renderedRows.some((l: string) => l.includes("Conductor:") && l.includes("gemini-3.8-flash-high")), "Debe renderizar Conductor con modelClean");
+  assert.ok(renderedRows.some((l: string) => l.includes("Placa:") && l.includes("DC-SIDE99")), "Debe renderizar Placa con prefijo DC-*");
+  assert.ok(renderedRows.some((l: string) => l.includes("Taxímetro:") && l.includes("25s") && l.includes("3.5k")), "Debe renderizar Taxímetro con tiempo y tokens formateados");
+
+  // Fallback de placa cuando p.plate no existe
+  const fallbackUnit = {
+    account: "ac01",
+    status: "ocupado" as const,
+    passenger: {
+      type: "orchestrator" as const,
+      sessionId: "sess-orc-fallback",
+      pid: 12345,
+      model: "cpam/ac01/gemini-3.8-flash-high",
+      taskLabel: "Orquestador activo",
+      startedAt: Date.now() - 5000,
+      heartbeatAt: Date.now(),
+    },
+  };
+  const fallbackRows = createTaxiUnitRows(fallbackUnit);
+  const renderedFallback = fallbackRows.map((r: any) => r.render(80).join(" "));
+  assert.ok(renderedFallback.some((l: string) => l.includes("Placa:") && l.includes("DC-12345")), "Placa debe usar fallback DC-${p.pid}");
+  assert.ok(renderedFallback.some((l: string) => l.includes("Taxímetro:") && l.includes("5s")), "Taxímetro debe mostrar duración sin tokens cuando no hay tokens");
+});
+
 

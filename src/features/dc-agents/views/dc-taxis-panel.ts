@@ -480,16 +480,26 @@ export class DcTaxisPanel implements Component {
           ? "Subagente Efímero (Worker Paralelo)"
           : "Subagente Estático");
 
-      lines.push(`  Tipo Pasajero:    ${th.bold(pType)}`);
-      lines.push(`  Modelo Activo:    ${th.fg("accent", p.model || "gemini-3.8-flash-high")}`);
+      lines.push(`  Pasajero:         ${th.bold(pType)}`);
+      lines.push(`  Circuito:         ${th.bold(p.taskLabel || "Tarea interactiva")}`);
+      lines.push(`  Conductor:        ${th.fg("accent", p.model || "gemini-3.8-flash-high")}`);
+      const plateStr = p.plate || `DC-${p.pid}`;
+      lines.push(`  Placa:            ${th.bold(plateStr)}`);
 
-      const pidAnnotation = p.type === "orchestrator"
-        ? th.fg("success", "(Terminal Interactiva Principal)")
-        : th.fg("accent", "(Subproceso Spawned en SO)");
-      lines.push(`  PID / Proceso:    ${th.bold(String(p.pid))} ${pidAnnotation}`);
+      let taxiMeter = `${elapsedSec}s (~${elapsedMin}m)`;
+      const tokensCount = typeof p.tokens === "number"
+        ? p.tokens
+        : (typeof p.tokens === "object" && p.tokens !== null ? p.tokens.total : undefined);
+      if (tokensCount !== undefined && tokensCount !== null) {
+        taxiMeter += ` · ${tokensCount.toLocaleString("es-ES")} tokens`;
+      }
+      const costVal = p.cost ?? p.costEstimated;
+      if (costVal !== undefined && costVal !== null) {
+        taxiMeter += ` · $${costVal.toFixed(4)}`;
+      }
+
+      lines.push(`  Taxímetro:        ${th.bold(th.fg("accent", taxiMeter))}`);
       lines.push(`  Sesión ID:        ${th.fg("dim", p.sessionId)}`);
-      lines.push(`  Tarea / Misión:   ${th.bold(p.taskLabel || "Tarea interactiva")}`);
-      lines.push(`  Tiempo en Curso:  ${th.bold(th.fg("accent", `${elapsedSec}s (~${elapsedMin}m)`))}`);
     } else {
       lines.push(`  Pasajero:         ${th.fg("dim", "Sin pasajero a bordo · Lista para despacho")}`);
     }

@@ -17,6 +17,10 @@ export interface DcTaxiPassenger {
   agentName?: string;
   model?: string;
   taskLabel?: string;
+  plate?: string;
+  tokens?: number | DcTaxiTripTokens;
+  cost?: number;
+  costEstimated?: number;
   startedAt: number;
   heartbeatAt: number;
 }

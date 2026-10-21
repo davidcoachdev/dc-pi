@@ -11,6 +11,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
+import { randomUUID } from "node:crypto";
 import type {
   DcTaxiFleetState,
   DcTaxiPassenger,
@@ -603,6 +604,7 @@ export function acquireOrchestratorTaxi(
           pid,
           model: modelId!,
           taskLabel: "Sesión Principal (Orquestador)",
+          plate: `DC-HOST-${pid}`,
           startedAt: preferredUnit.passenger?.startedAt || Date.now(),
           heartbeatAt: Date.now(),
         };
@@ -641,6 +643,7 @@ export function acquireOrchestratorTaxi(
           pid,
           model: newModelId,
           taskLabel: "Sesión Principal (Orquestador)",
+          plate: `DC-HOST-${pid}`,
           startedAt: Date.now(),
           heartbeatAt: Date.now(),
         };
@@ -726,8 +729,10 @@ export function leaseTaxi(
     }
 
     const now = Date.now();
+    const plate = passengerData.plate || `DC-${randomUUID().slice(0, 6).toUpperCase()}`;
     const fullPassenger: DcTaxiPassenger = {
       ...passengerData,
+      plate,
       startedAt: now,
       heartbeatAt: now,
     };

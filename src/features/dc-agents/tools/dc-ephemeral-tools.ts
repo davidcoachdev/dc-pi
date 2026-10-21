@@ -33,8 +33,6 @@ import type {
 import { appendTaxiLog } from "../core/dc-taxi-logger.ts";
 import {
   heartbeatTaxi,
-  findDirectChildPid,
-  updateTaxiPassengerPid,
 } from "../core/dc-taxi-dispatcher.ts";
 
 export interface ExtractedSubagentMetrics {
@@ -47,78 +45,103 @@ export interface ExtractedSubagentMetrics {
   costEstimated?: number;
 }
 
-interface BackgroundEphemeralTracking {
+export interface BackgroundEphemeralTracking {
   plan: NonNullable<ReturnType<typeof prepareEphemeralAgent>>;
   sessionId: string;
   startedAt: number;
   taskId?: string;
 }
 
-const activeBackgroundPlans = new Map<string, BackgroundEphemeralTracking>();
+export const activeBackgroundPlans = new Map<string, BackgroundEphemeralTracking>();
 let backgroundSweeperTimer: NodeJS.Timeout | undefined;
+
+/**
+ * Ejecuta un ciclo del sweeper para tareas en background:
+ * 1. Verifica en gentle-agents/tasks/ el estado de cada tarea.
+ * 2. Si la tarea cambió a completed/failed/stopped/aborted (o timeout defensivo), libera el taxi y limpia el agente.
+ * 3. Mientras status === 'running', emite heartbeatTaxi(item.plan.leasedAccount) para prevenir que reapAbandonedTaxis
+ *    la marque como zombi por TTL.
+ */
+export function sweepBackgroundPlansOnce(tasksDirOverride?: string, fleetPath?: string): void {
+  if (activeBackgroundPlans.size === 0) return;
+
+  const now = Date.now();
+  const tasksDir = tasksDirOverride || path.join(os.homedir(), ".pi", "agent", "gentle-agents", "tasks");
+
+  for (const [key, item] of Array.from(activeBackgroundPlans.entries())) {
+    let isDone = false;
+    let finalStatus: "completed" | "failed" | "timeout" = "completed";
+    let status = "running";
+
+    if (item.taskId && fs.existsSync(tasksDir)) {
+      const taskFilePath = path.join(tasksDir, `${item.taskId}.json`);
+      if (fs.existsSync(taskFilePath)) {
+        try {
+          const raw = fs.readFileSync(taskFilePath, "utf8");
+          const parsed = JSON.parse(raw);
+          const parsedStatus = parsed?.task?.status;
+          if (parsedStatus) {
+            status = parsedStatus;
+          }
+          if (status === "completed" || status === "failed" || status === "stopped" || status === "aborted") {
+            isDone = true;
+            finalStatus = status === "completed" ? "completed" : "failed";
+          }
+        } catch {
+          /* ignore read error */
+        }
+      }
+    }
+
+    // Timeout defensivo de seguridad si la tarea desapareció o tardó más de 12 minutos
+    if (!isDone && now - item.startedAt > 12 * 60 * 1000) {
+      isDone = true;
+      finalStatus = "timeout";
+    }
+
+    if (isDone) {
+      activeBackgroundPlans.delete(key);
+      try {
+        cleanupEphemeralAgent(item.plan, {
+          sessionId: item.sessionId,
+          startedAt: item.startedAt,
+          endedAt: now,
+          status: finalStatus,
+          taskId: item.taskId,
+        });
+        appendTaxiLog("INFO", "EPHEMERAL_AGENT_BACKGROUND_REAPED", {
+          agent: item.plan.agentName,
+          account: item.plan.leasedAccount,
+          taskId: item.taskId,
+          durationMs: now - item.startedAt,
+          status: finalStatus,
+        });
+      } catch {
+        /* defensive */
+      }
+    } else if (status === "running") {
+      // Emitir pulso de vida (heartbeat) para mantener el taxi arrendado y prevenir que reapAbandonedTaxis
+      // lo marque como zombi por expiración de TTL
+      try {
+        heartbeatTaxi(item.plan.leasedAccount, fleetPath);
+      } catch {
+        /* defensive */
+      }
+    }
+  }
+}
 
 /**
  * Sweeper periódico de tareas en background: verifica gentle-agents/tasks/
  * y libera el taxi a la flota apenas la tarea cambia a 'completed', 'failed' o 'stopped'.
+ * Emite heartbeatTaxi(item.plan.leasedAccount) cada 5 segundos para tareas en activeBackgroundPlans
+ * mientras status === 'running', previniendo que reapAbandonedTaxis las marque como zombis por TTL.
  */
-function ensureBackgroundSweeper(): void {
+export function ensureBackgroundSweeper(): void {
   if (backgroundSweeperTimer) return;
 
   backgroundSweeperTimer = setInterval(() => {
-    if (activeBackgroundPlans.size === 0) return;
-
-    const now = Date.now();
-    const tasksDir = path.join(os.homedir(), ".pi", "agent", "gentle-agents", "tasks");
-
-    for (const [key, item] of Array.from(activeBackgroundPlans.entries())) {
-      let isDone = false;
-      let finalStatus: "completed" | "failed" | "timeout" = "completed";
-
-      if (item.taskId && fs.existsSync(tasksDir)) {
-        const taskFilePath = path.join(tasksDir, `${item.taskId}.json`);
-        if (fs.existsSync(taskFilePath)) {
-          try {
-            const raw = fs.readFileSync(taskFilePath, "utf8");
-            const parsed = JSON.parse(raw);
-            const status = parsed?.task?.status;
-            if (status === "completed" || status === "failed" || status === "stopped" || status === "aborted") {
-              isDone = true;
-              finalStatus = status === "completed" ? "completed" : "failed";
-            }
-          } catch {
-            /* ignore read error */
-          }
-        }
-      }
-
-      // Timeout defensivo de seguridad si la tarea desapareció o tardó más de 12 minutos
-      if (!isDone && now - item.startedAt > 12 * 60 * 1000) {
-        isDone = true;
-        finalStatus = "timeout";
-      }
-
-      if (isDone) {
-        activeBackgroundPlans.delete(key);
-        try {
-          cleanupEphemeralAgent(item.plan, {
-            sessionId: item.sessionId,
-            startedAt: item.startedAt,
-            endedAt: now,
-            status: finalStatus,
-            taskId: item.taskId,
-          });
-          appendTaxiLog("INFO", "EPHEMERAL_AGENT_BACKGROUND_REAPED", {
-            agent: item.plan.agentName,
-            account: item.plan.leasedAccount,
-            taskId: item.taskId,
-            durationMs: now - item.startedAt,
-            status: finalStatus,
-          });
-        } catch {
-          /* defensive */
-        }
-      }
-    }
+    sweepBackgroundPlansOnce();
   }, 5000);
 
   backgroundSweeperTimer.unref?.();
@@ -328,7 +351,6 @@ export function registerDcEphemeralTools(pi: ExtensionAPI): void {
         // 2. Ejecutar atómicamente el subagente vía ctx.executeTool si está disponible
         let subagentResult: any;
         let heartbeatTimer: NodeJS.Timeout | undefined;
-        let childPidDetector: NodeJS.Timeout | undefined;
         let taskStatus: "completed" | "failed" | "cancelled" | "timeout" = "completed";
         let executionError: string | undefined;
         let tokens: { input?: number; output?: number; reasoning?: number; total?: number } | undefined;
@@ -344,19 +366,6 @@ export function registerDcEphemeralTools(pi: ExtensionAPI): void {
           }
 
           if (typeof (ctx as any)?.executeTool === "function") {
-            // Intentar descubrir y asociar en tiempo real el PID real del subproceso hijo spawneado
-            let childPidChecked = false;
-            childPidDetector = setInterval(() => {
-              if (childPidChecked || !plan) return;
-              const childPid = findDirectChildPid(process.pid);
-              if (childPid && childPid > 0) {
-                childPidChecked = true;
-                if (childPidDetector) clearInterval(childPidDetector);
-                updateTaxiPassengerPid(plan.leasedAccount, childPid);
-              }
-            }, 100);
-            childPidDetector.unref?.();
-
             const rawOutcome = await (ctx as any).executeTool(
               "subagent_run",
               {
@@ -367,7 +376,6 @@ export function registerDcEphemeralTools(pi: ExtensionAPI): void {
               },
               { signal: _signal, onUpdate: _onUpdate },
             );
-            if (childPidDetector) clearInterval(childPidDetector);
 
             // Pi retorna NestedToolOutcome: { toolCall, result: { content, details }, isError }
             // Desenvolvemos para obtener el ToolResult canónico con .content en la raíz
@@ -439,7 +447,6 @@ export function registerDcEphemeralTools(pi: ExtensionAPI): void {
           throw execErr;
         } finally {
           if (heartbeatTimer) clearInterval(heartbeatTimer);
-          if (childPidDetector) clearInterval(childPidDetector);
 
           if (plan) {
             if (plan.mode === "background") {
@@ -683,6 +690,15 @@ export function registerDcEphemeralTools(pi: ExtensionAPI): void {
           );
 
           if (typeof (ctx as any)?.executeTool !== "function") {
+            if (mode === "background") {
+              activeBackgroundPlans.set(plan.ephemeralId, {
+                plan,
+                sessionId,
+                startedAt: Date.now(),
+                taskId: undefined,
+              });
+              ensureBackgroundSweeper();
+            }
             return {
               itemRole,
               agentName: plan.agentName,
@@ -714,7 +730,33 @@ export function registerDcEphemeralTools(pi: ExtensionAPI): void {
             textOutput = JSON.stringify(rawOutcome?.result || rawOutcome || "");
           }
 
-          if (mode !== "background") {
+          if (mode === "background") {
+            // Extraer el taskId asignado por subagent_run para el seguimiento de background
+            const extractedTaskId =
+              rawOutcome?.result?.details?.taskId ||
+              rawOutcome?.result?.details?.task_id ||
+              rawOutcome?.details?.taskId ||
+              rawOutcome?.details?.task_id ||
+              (typeof textOutput === "string"
+                ? textOutput.match(/[a-z0-9]{8}-[0-9]-[a-z0-9]+/i)?.[0]
+                : undefined);
+
+            activeBackgroundPlans.set(plan.ephemeralId, {
+              plan,
+              sessionId,
+              startedAt: Date.now(),
+              taskId: extractedTaskId,
+            });
+            ensureBackgroundSweeper();
+
+            appendTaxiLog("INFO", "EPHEMERAL_AGENT_BACKGROUND_DELEGATED", {
+              agent: plan.agentName,
+              account: plan.leasedAccount,
+              model: plan.fullModelRef,
+              sessionId,
+              taskId: extractedTaskId,
+            });
+          } else {
             cleanupEphemeralAgent(plan, {
               sessionId,
               startedAt: Date.now(),
