@@ -29,11 +29,16 @@ import type {
   DcToolBrick,
   DcBehaviorBrick,
   DcBatchSubagentItem,
+  TaxiHandoverPacket,
 } from "../core/dc-ephemeral-types.ts";
 import { appendTaxiLog } from "../core/dc-taxi-logger.ts";
 import {
   heartbeatTaxi,
 } from "../core/dc-taxi-dispatcher.ts";
+import {
+  evaluateTaxiHandoverRequired,
+  executeTaxiHandover,
+} from "../core/dc-taxi-supervisor.ts";
 
 export interface ExtractedSubagentMetrics {
   tokens?: {
@@ -50,6 +55,9 @@ export interface BackgroundEphemeralTracking {
   sessionId: string;
   startedAt: number;
   taskId?: string;
+  originalTaskId?: string;
+  handoverPacket?: TaxiHandoverPacket;
+  handoverCount?: number;
 }
 
 export const activeBackgroundPlans = new Map<string, BackgroundEphemeralTracking>();
@@ -72,6 +80,7 @@ export function sweepBackgroundPlansOnce(tasksDirOverride?: string, fleetPath?: 
     let isDone = false;
     let finalStatus: "completed" | "failed" | "timeout" = "completed";
     let status = "running";
+    let taskTokens: number | undefined;
 
     if (item.taskId && fs.existsSync(tasksDir)) {
       const taskFilePath = path.join(tasksDir, `${item.taskId}.json`);
@@ -82,6 +91,9 @@ export function sweepBackgroundPlansOnce(tasksDirOverride?: string, fleetPath?: 
           const parsedStatus = parsed?.task?.status;
           if (parsedStatus) {
             status = parsedStatus;
+          }
+          if (typeof parsed?.task?.tokens === "number") {
+            taskTokens = parsed.task.tokens;
           }
           if (status === "completed" || status === "failed" || status === "stopped" || status === "aborted") {
             isDone = true;
@@ -120,6 +132,39 @@ export function sweepBackgroundPlansOnce(tasksDirOverride?: string, fleetPath?: 
         /* defensive */
       }
     } else if (status === "running") {
+      // Evaluar relevo de guardia (Taxi Shift Handover) por superación de tokens (>120k) o cuota (<10%)
+      try {
+        const handoverEval = evaluateTaxiHandoverRequired({
+          account: item.plan.leasedAccount,
+          tokens: taskTokens,
+          transferredTokens: item.handoverPacket?.transferredTokens,
+          taskId: item.taskId,
+          tasksDir,
+          fleetPath,
+        });
+
+        if (handoverEval.required) {
+          executeTaxiHandover({
+            trackingItem: item,
+            plan: item.plan,
+            sessionId: item.sessionId,
+            originalTaskId: item.originalTaskId || item.taskId,
+            previousAccount: item.plan.leasedAccount,
+            reason: handoverEval.reason || "token_limit_90",
+            tokens: handoverEval.tokens,
+            tasksDir,
+            fleetPath,
+          });
+        }
+      } catch (handoverErr) {
+        appendTaxiLog("WARN", "TAXI_HANDOVER_EVALUATION_ERROR", {
+          agent: item.plan.agentName,
+          account: item.plan.leasedAccount,
+          taskId: item.taskId,
+          error: String(handoverErr),
+        });
+      }
+
       // Emitir pulso de vida (heartbeat) para mantener el taxi arrendado y prevenir que reapAbandonedTaxis
       // lo marque como zombi por expiración de TTL
       try {

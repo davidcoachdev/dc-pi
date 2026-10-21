@@ -19,6 +19,10 @@ import {
   releaseOrchestratorTaxi,
   syncActivePiSessionsFromOs,
   withFleetLock,
+  leaseAvailableTaxis,
+  sendTaxiToWorkshop,
+  repairTaxiFromWorkshop,
+  updateTaxiPassengerUsage,
 } from "../src/features/dc-agents/core/dc-taxi-dispatcher.ts";
 
 import {
@@ -69,7 +73,21 @@ import {
   DC_BEHAVIOR_BRICKS,
   DC_AGENT_ARCHETYPES,
 } from "../src/features/dc-agents/core/dc-ephemeral-types.ts";
+import {
+  auditAccountForWorkshop,
+  handleTurnEndForWorkshop,
+  sanitizeWorkshopReason,
+  isProviderAuthError,
+  handleOrchestratorQuotaHandover,
+} from "../src/features/dc-agents/dc-agents.ts";
 import { createTaxiUnitRows } from "../src/features/dc-sidebar/components/dc-sidebar-status-card.ts";
+import {
+  evaluateTaxiHandoverRequired,
+  executeTaxiHandover,
+  DEFAULT_TOKEN_HANDOVER_THRESHOLD,
+  DEFAULT_QUOTA_HANDOVER_THRESHOLD_PCT,
+} from "../src/features/dc-agents/core/dc-taxi-supervisor.ts";
+import type { TaxiHandoverPacket } from "../src/features/dc-agents/core/dc-ephemeral-types.ts";
 
 function createTempDir(prefix: string): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), `dc-test-${prefix}-`));
@@ -2157,7 +2175,7 @@ test("dc-taxis-panel: renders updated vehicular telemetry labels (Pasajero, Circ
   assert.ok(renderedLines.some((l: string) => l.includes("Circuito:") && l.includes("Ruta de prueba vehicular")), "Debe contener etiqueta Circuito:");
   assert.ok(renderedLines.some((l: string) => l.includes("Conductor:") && l.includes("gemini-3.8-flash-high")), "Debe contener etiqueta Conductor:");
   assert.ok(renderedLines.some((l: string) => l.includes("Placa:") && l.includes("DC-TEST99")), "Debe contener etiqueta Placa con matricula DC-*");
-  assert.ok(renderedLines.some((l: string) => l.includes("Taxímetro:") && l.includes("15s") && l.includes("tokens") && l.includes("0.0035")), "Debe contener etiqueta Taxímetro con duración, tokens y costo");
+  assert.ok(renderedLines.some((l: string) => l.includes("Taxímetro:") && l.includes("15s") && l.includes("tk") && l.includes("0.0035")), "Debe contener etiqueta Taxímetro con duración, tokens y costo");
 
   // 2. Verificar que las etiquetas antiguas ya no se muestren
   assert.ok(!renderedLines.some((l: string) => l.includes("Tipo Pasajero:")), "No debe contener Tipo Pasajero:");
@@ -2219,5 +2237,970 @@ test("dc-sidebar-status-card: createTaxiUnitRows separates Placa DC-* and Taxime
   assert.ok(renderedFallback.some((l: string) => l.includes("Placa:") && l.includes("DC-12345")), "Placa debe usar fallback DC-${p.pid}");
   assert.ok(renderedFallback.some((l: string) => l.includes("Taxímetro:") && l.includes("5s")), "Taxímetro debe mostrar duración sin tokens cuando no hay tokens");
 });
+
+test("MÓDULO A: releaseTaxi orchestrator immunity blocks unauthorized release and logs TAXI_ORCHESTRATOR_IMMUNITY_PROTECTED", () => {
+  const tempDir = createTempDir("orch-immunity");
+  const fleetPath = path.join(tempDir, "dc-taxis.json");
+
+  try {
+    const customAccounts = ["ac01", "ac02"];
+    const state = createInitialFleetState(customAccounts);
+
+    // Asignar ac01 a un orchestrator
+    state.fleet["ac01"].status = "ocupado";
+    state.fleet["ac01"].passenger = {
+      type: "orchestrator",
+      sessionId: "orch-master-session",
+      pid: process.pid,
+      model: "cpam/ac01/gemini-3.8-flash-high",
+      taskLabel: "Sesión Principal",
+      plate: `DC-HOST-${process.pid}`,
+      startedAt: Date.now(),
+      heartbeatAt: Date.now(),
+    };
+    saveFleetState(state, fleetPath);
+
+    // 1. Intento sin sessionId: PROHIBIDO
+    const res1 = releaseTaxi("ac01", undefined, fleetPath, customAccounts);
+    assert.equal(res1, false, "releaseTaxi sin sessionId debe retornar false para un orquestador");
+    const stateCheck1 = loadFleetState(fleetPath, customAccounts);
+    assert.equal(stateCheck1.fleet["ac01"].status, "ocupado", "Taxi debe seguir ocupado");
+    assert.equal(stateCheck1.fleet["ac01"].passenger?.sessionId, "orch-master-session");
+
+    // 2. Intento con sessionId erróneo: PROHIBIDO
+    const res2 = releaseTaxi("ac01", "imposter-session", fleetPath, customAccounts);
+    assert.equal(res2, false, "releaseTaxi con sessionId erróneo debe retornar false");
+    const stateCheck2 = loadFleetState(fleetPath, customAccounts);
+    assert.equal(stateCheck2.fleet["ac01"].status, "ocupado");
+
+    // 3. Intento con sessionId correcto pero PID diferente: PROHIBIDO
+    const res3 = releaseTaxi("ac01", "orch-master-session", fleetPath, customAccounts, undefined, { pid: 999999 });
+    assert.equal(res3, false, "releaseTaxi con PID diferente debe retornar false");
+    const stateCheck3 = loadFleetState(fleetPath, customAccounts);
+    assert.equal(stateCheck3.fleet["ac01"].status, "ocupado");
+
+    // 4. Verificar log de protección de inmunidad
+    const logs = readRecentTaxiLogs(10);
+    const immunityLog = logs.find((l) => l.includes("TAXI_ORCHESTRATOR_IMMUNITY_PROTECTED"));
+    assert.ok(immunityLog, "Debe registrarse advertencia TAXI_ORCHESTRATOR_IMMUNITY_PROTECTED en los logs");
+
+    // 5. Intento con sessionId y PID coincidentes: PERMITIDO
+    const res4 = releaseTaxi("ac01", "orch-master-session", fleetPath, customAccounts, undefined, { pid: process.pid });
+    assert.equal(res4, true, "releaseTaxi con sessionId y pid coincidentes debe tener éxito");
+    const stateCheck4 = loadFleetState(fleetPath, customAccounts);
+    assert.equal(stateCheck4.fleet["ac01"].status, "libre", "Taxi debe quedar liberado");
+    assert.equal(stateCheck4.fleet["ac01"].passenger, null);
+
+    // 6. releaseOrchestratorTaxi explícito: PERMITIDO
+    stateCheck4.fleet["ac01"].status = "ocupado";
+    stateCheck4.fleet["ac01"].passenger = {
+      type: "orchestrator",
+      sessionId: "orch-second-session",
+      pid: process.pid,
+      startedAt: Date.now(),
+      heartbeatAt: Date.now(),
+    };
+    saveFleetState(stateCheck4, fleetPath);
+
+    releaseOrchestratorTaxi("orch-second-session", process.pid, fleetPath, customAccounts);
+    const stateCheck5 = loadFleetState(fleetPath, customAccounts);
+    assert.equal(stateCheck5.fleet["ac01"].status, "libre", "releaseOrchestratorTaxi debe liberar la unidad");
+    assert.equal(stateCheck5.fleet["ac01"].passenger, null);
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("MÓDULO A: leaseAvailableTaxis allocates N free units dynamically without hardcoded account list", () => {
+  const tempDir = createTempDir("lease-available");
+  const fleetPath = path.join(tempDir, "dc-taxis.json");
+
+  try {
+    const customAccounts = ["ac01", "ac02", "ac03", "ac04"];
+    const state = createInitialFleetState(customAccounts);
+    saveFleetState(state, fleetPath);
+
+    // Arrendar 2 unidades libres
+    const leased = leaseAvailableTaxis(
+      2,
+      (idx) => ({
+        type: "ephemeral_subagent",
+        sessionId: `batch-sess-${idx}`,
+        pid: process.pid,
+        taskLabel: `Subtarea paralela #${idx + 1}`,
+        model: "cpam/ac-dyn/gemini-3.8-flash-high",
+      }),
+      fleetPath,
+      300000,
+      customAccounts,
+    );
+
+    assert.equal(leased.length, 2, "Debe arrendar exactamente 2 unidades");
+    assert.equal(leased[0].status, "ocupado");
+    assert.equal(leased[1].status, "ocupado");
+    assert.notEqual(leased[0].account, leased[1].account, "Las cuentas asignadas deben ser distintas");
+    assert.equal(leased[0].passenger?.taskLabel, "Subtarea paralela #1");
+    assert.equal(leased[1].passenger?.taskLabel, "Subtarea paralela #2");
+    assert.ok(leased[0].passenger?.plate?.startsWith("DC-"), "Debe tener placa generada");
+
+    // Verificar en disco
+    const updated = loadFleetState(fleetPath, customAccounts);
+    assert.equal(updated.fleet[leased[0].account].status, "ocupado");
+    assert.equal(updated.fleet[leased[1].account].status, "ocupado");
+
+    // Pedir más unidades de las disponibles (quedan 2 libres, pedimos 5)
+    const leasedMore = leaseAvailableTaxis(
+      5,
+      (idx) => ({
+        type: "ephemeral_subagent",
+        sessionId: `overflow-sess-${idx}`,
+        pid: process.pid,
+      }),
+      fleetPath,
+      300000,
+      customAccounts,
+    );
+
+    assert.equal(leasedMore.length, 2, "Solo debe retornar las 2 unidades que quedaban libres");
+
+    // Ahora la flota está llena (0 libres)
+    const leasedEmpty = leaseAvailableTaxis(
+      1,
+      (idx) => ({
+        type: "ephemeral_subagent",
+        sessionId: `empty-sess-${idx}`,
+        pid: process.pid,
+      }),
+      fleetPath,
+      300000,
+      customAccounts,
+    );
+
+    assert.equal(leasedEmpty.length, 0, "Debe retornar array vacío cuando la flota está agotada");
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("MÓDULO B: sendTaxiToWorkshop and repairTaxiFromWorkshop lifecycle", () => {
+  const tempDir = createTempDir("workshop-lifecycle");
+  const fleetPath = path.join(tempDir, "dc-taxis.json");
+
+  try {
+    const customAccounts = ["ac01", "ac02", "ac03"];
+    const state = createInitialFleetState(customAccounts);
+
+    // Ocupar ac01 con un subagente
+    state.fleet["ac01"].status = "ocupado";
+    state.fleet["ac01"].passenger = {
+      type: "ephemeral_subagent",
+      sessionId: "broken-sess",
+      pid: process.pid,
+      startedAt: Date.now(),
+      heartbeatAt: Date.now(),
+    };
+    saveFleetState(state, fleetPath);
+
+    // 1. Enviar ac01 a taller
+    const sent = sendTaxiToWorkshop("ac01", "Google Auth Error / Deshabilitada (HTTP 401)", fleetPath, customAccounts);
+    assert.equal(sent, true, "sendTaxiToWorkshop debe retornar true");
+
+    const stateWorkshop = loadFleetState(fleetPath, customAccounts);
+    const unit01 = stateWorkshop.fleet["ac01"];
+    assert.equal(unit01.status, "en_taller", "Estado debe ser en_taller");
+    assert.equal(unit01.passenger, null, "Pasajero debe desalojarse");
+    assert.equal(unit01.workshopReason, "Google Auth Error / Deshabilitada (HTTP 401)");
+    assert.ok(typeof unit01.workshopSince === "number");
+
+    // 2. leaseTaxi debe ignorar ac01 aunque sea la preferida
+    const leaseRes = leaseTaxi(
+      {
+        type: "ephemeral_subagent",
+        sessionId: "lease-try-sess",
+        pid: process.pid,
+      },
+      "ac01", // pedimos ac01 que está en taller
+      fleetPath,
+      300000,
+      customAccounts,
+    );
+    assert.ok(leaseRes, "Debe asignar otra unidad libre");
+    assert.notEqual(leaseRes.account, "ac01", "NUNCA debe arrendar ac01 mientras esté en taller");
+
+    // 3. leaseAvailableTaxis debe ignorar ac01
+    const availableLeased = leaseAvailableTaxis(
+      3,
+      (idx) => ({
+        type: "ephemeral_subagent",
+        sessionId: `avail-sess-${idx}`,
+        pid: process.pid,
+      }),
+      fleetPath,
+      300000,
+      customAccounts,
+    );
+    assert.ok(!availableLeased.some((u) => u.account === "ac01"), "leaseAvailableTaxis no debe incluir ac01");
+
+    // 4. Reparar ac01 desde el taller
+    const repaired = repairTaxiFromWorkshop("ac01", fleetPath, customAccounts);
+    assert.equal(repaired, true, "repairTaxiFromWorkshop debe retornar true");
+
+    const stateRepaired = loadFleetState(fleetPath, customAccounts);
+    const unit01Repaired = stateRepaired.fleet["ac01"];
+    assert.equal(unit01Repaired.status, "libre", "Estado debe volver a libre");
+    assert.equal(unit01Repaired.workshopReason, undefined);
+    assert.equal(unit01Repaired.workshopSince, undefined);
+
+    // Intentar reparar una unidad que no está en taller
+    const repairedAgain = repairTaxiFromWorkshop("ac01", fleetPath, customAccounts);
+    assert.equal(repairedAgain, false, "Reparar una unidad ya libre debe retornar false");
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("MÓDULO B: UI rendering of 🛠️ EN TALLER in dc-sidebar-status-card and dc-taxis-panel", () => {
+  // 1. Sidebar status card
+  const workshopUnit = {
+    account: "ac40",
+    status: "en_taller" as const,
+    passenger: null,
+    workshopReason: "Google Auth Error / Deshabilitada",
+    workshopSince: Date.now() - 60000,
+  };
+
+  const rows = createTaxiUnitRows(workshopUnit);
+  const renderedSidebar = rows.map((r: any) => r.render(80).join(" "));
+  assert.ok(
+    renderedSidebar.some((l: string) => l.includes("🛠️ EN TALLER")),
+    "Sidebar debe mostrar 🛠️ EN TALLER",
+  );
+  assert.ok(
+    renderedSidebar.some((l: string) => l.includes("Google Auth Error / Deshabilitada")),
+    "Sidebar debe mostrar el motivo de avería",
+  );
+
+  // 2. DcTaxisPanel
+  const fakeTheme = {
+    bold: (s: string) => `*${s}*`,
+    fg: (_c: string, s: string) => s,
+    bg: (_c: string, s: string) => s,
+  } as any;
+
+  const panel = new DcTaxisPanel({
+    theme: fakeTheme,
+    onDone: () => {},
+    requestRender: () => {},
+  });
+
+  (panel as any).selectedDetailUnit = workshopUnit;
+  const renderedDetail = panel.render(100);
+
+  assert.ok(
+    renderedDetail.some((l: string) => l.includes("🛠️ EN TALLER")),
+    "Detalle en DcTaxisPanel debe mostrar 🛠️ EN TALLER",
+  );
+  assert.ok(
+    renderedDetail.some((l: string) => l.includes("Google Auth Error / Deshabilitada")),
+    "Detalle en DcTaxisPanel debe mostrar el motivo de avería",
+  );
+});
+
+test("MÓDULO B: auditAccountForWorkshop sends ac40 and 400/401/403 fatal auth accounts to workshop", async () => {
+  const tempDir = createTempDir("audit-workshop");
+  const fleetPath = path.join(tempDir, "dc-taxis.json");
+
+  try {
+    const customAccounts = ["ac01", "ac02", "ac40"];
+    const state = createInitialFleetState(customAccounts);
+    saveFleetState(state, fleetPath);
+
+    // 1. ac40 es fatal auth conocido por defecto -> debe enviarse directamente a taller
+    const sentAc40 = await auditAccountForWorkshop("ac40", fleetPath);
+    assert.equal(sentAc40, true, "ac40 debe ser enviada a taller automáticamente");
+
+    const state1 = loadFleetState(fleetPath, customAccounts);
+    assert.equal(state1.fleet["ac40"].status, "en_taller");
+    assert.ok(state1.fleet["ac40"].workshopReason?.includes("ac40"));
+
+    // 2. ac01 responde HTTP 401 en fetcher -> debe enviarse a taller
+    const mockFetcher401 = async (_acc: string) => {
+      const err: any = new Error("Unauthorized access to Gemini provider");
+      err.status = 401;
+      throw err;
+    };
+    const sentAc01 = await auditAccountForWorkshop("ac01", fleetPath, mockFetcher401);
+    assert.equal(sentAc01, true, "ac01 con HTTP 401 debe enviarse a taller");
+
+    const state2 = loadFleetState(fleetPath, customAccounts);
+    assert.equal(state2.fleet["ac01"].status, "en_taller");
+
+    // 3. ac02 responde HTTP 403 (Forbidden / Deshabilitada) -> debe enviarse a taller
+    const mockFetcher403 = async (_acc: string) => {
+      const err: any = new Error("Google Auth Error: account deshabilitada");
+      err.status = 403;
+      throw err;
+    };
+    const sentAc02 = await auditAccountForWorkshop("ac02", fleetPath, mockFetcher403);
+    assert.equal(sentAc02, true, "ac02 con HTTP 403 debe enviarse a taller");
+
+    const state3 = loadFleetState(fleetPath, customAccounts);
+    assert.equal(state3.fleet["ac02"].status, "en_taller");
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("MÓDULO B: handleTurnEndForWorkshop sends taxi to workshop upon provider auth error in turn_end", () => {
+  const tempDir = createTempDir("turn-end-workshop");
+  const fleetPath = path.join(tempDir, "dc-taxis.json");
+
+  try {
+    const customAccounts = ["ac05"];
+    const state = createInitialFleetState(customAccounts);
+    state.fleet["ac05"].status = "ocupado";
+    state.fleet["ac05"].passenger = {
+      type: "orchestrator",
+      sessionId: "orch-turn-error-sess",
+      pid: process.pid,
+      model: "cpam/ac05/gemini-3.8-flash-high",
+      startedAt: Date.now(),
+      heartbeatAt: Date.now(),
+    };
+    saveFleetState(state, fleetPath);
+
+    // Evento de turn_end con error de autenticación
+    const turnEvent = {
+      type: "turn_end",
+      turnIndex: 1,
+      message: {
+        role: "assistant",
+        stopReason: "error",
+        errorMessage: "Google Auth Error: token revoked or unauthorized (HTTP 401)",
+        status: 401,
+      },
+      toolResults: [],
+    };
+
+    const ctx = {
+      model: {
+        provider: "cpam",
+        id: "ac05/gemini-3.8-flash-high",
+      },
+      sessionManager: {
+        getSessionId: () => "orch-turn-error-sess",
+      },
+    } as any;
+
+    const outcome = handleTurnEndForWorkshop(turnEvent, ctx, fleetPath);
+    assert.equal(outcome.sent, true, "handleTurnEndForWorkshop debe detectar el error de auth y enviar el taxi a taller");
+    assert.equal(outcome.account, "ac05");
+
+    const stateAfter = loadFleetState(fleetPath, customAccounts);
+    assert.equal(stateAfter.fleet["ac05"].status, "en_taller");
+    assert.ok(stateAfter.fleet["ac05"].workshopReason?.includes("Google Auth Error"));
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("MÓDULO C: evaluateTaxiHandoverRequired detects >90% token limit (>120k) and quota <10%", () => {
+  assert.equal(DEFAULT_TOKEN_HANDOVER_THRESHOLD, 120_000);
+  assert.equal(DEFAULT_QUOTA_HANDOVER_THRESHOLD_PCT, 10);
+
+  // 1. Tokens y cuota normales -> no requerido
+  const normal = evaluateTaxiHandoverRequired({
+    account: "ac01",
+    tokens: 50_000,
+    quotaPct: 75,
+  });
+  assert.equal(normal.required, false);
+
+  // 2. Tokens > 120_000 -> requerido con reason 'token_limit_90'
+  const tokenLimit = evaluateTaxiHandoverRequired({
+    account: "ac01",
+    tokens: 125_000,
+    quotaPct: 75,
+  });
+  assert.equal(tokenLimit.required, true);
+  assert.equal(tokenLimit.reason, "token_limit_90");
+  assert.equal(tokenLimit.tokens, 125_000);
+
+  // 3. Cuota < 10% -> requerido con reason 'quota_exhausted'
+  const quotaLow = evaluateTaxiHandoverRequired({
+    account: "ac01",
+    tokens: 30_000,
+    quotaPct: 8,
+  });
+  assert.equal(quotaLow.required, true);
+  assert.equal(quotaLow.reason, "quota_exhausted");
+
+  // 4. Con transferredTokens previos, se descuentan para evitar loops
+  const withTransferred = evaluateTaxiHandoverRequired({
+    account: "ac02",
+    tokens: 130_000,
+    transferredTokens: 125_000,
+    quotaPct: 85,
+  });
+  assert.equal(withTransferred.required, false, "Los tokens de la unidad previa deben descontarse");
+
+  // 5. Extracción automática desde archivo de tarea en tasksDir
+  const tempDir = createTempDir("eval-task-file");
+  try {
+    const taskFile = path.join(tempDir, "task-tok-test.json");
+    fs.writeFileSync(taskFile, JSON.stringify({
+      task: { id: "task-tok-test", agent: "dc-worker", tokens: 135_000, status: "running" }
+    }));
+
+    const fromFile = evaluateTaxiHandoverRequired({
+      account: "ac01",
+      taskId: "task-tok-test",
+      tasksDir: tempDir,
+      quotaPct: 90,
+    });
+    assert.equal(fromFile.required, true);
+    assert.equal(fromFile.reason, "token_limit_90");
+    assert.equal(fromFile.tokens, 135_000);
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("MÓDULO C: executeTaxiHandover leases new unit avoiding occupied/workshop, enriches seedContext, and logs TAXI_HANDOVER_EXECUTED", () => {
+  const tempDir = createTempDir("handover-exec");
+  const fleetPath = path.join(tempDir, "dc-taxis.json");
+  const tasksDir = path.join(tempDir, "tasks");
+  const agentsDir = path.join(tempDir, "agents");
+  fs.mkdirSync(tasksDir, { recursive: true });
+  fs.mkdirSync(agentsDir, { recursive: true });
+
+  const customAccounts = ["ac01", "ac02", "ac03", "ac04", "ac05", "ac06"];
+  const fleetState = createInitialFleetState(customAccounts);
+
+  // ac01: ocupado con subagente que superó tokens
+  fleetState.fleet["ac01"].status = "ocupado";
+  fleetState.fleet["ac01"].passenger = {
+    type: "ephemeral_subagent",
+    sessionId: "sess-handover-test",
+    pid: process.pid,
+    model: "cpam/ac01/gemini-3.8-flash-high",
+    taskId: "task-handover-01",
+    agentName: "dc-sub-worker-handover",
+    startedAt: Date.now() - 50_000,
+    heartbeatAt: Date.now(),
+  };
+
+  // ac02: en taller (debe evitarse)
+  fleetState.fleet["ac02"].status = "en_taller";
+  fleetState.fleet["ac02"].workshopReason = "Google Auth Error 401";
+
+  // ac03: ocupado por orquestador (debe evitarse)
+  fleetState.fleet["ac03"].status = "ocupado";
+  fleetState.fleet["ac03"].passenger = {
+    type: "orchestrator",
+    sessionId: "orch-sess",
+    pid: process.pid,
+    startedAt: Date.now(),
+    heartbeatAt: Date.now(),
+  };
+
+  // ac04: recargando (debe evitarse)
+  fleetState.fleet["ac04"].status = "recargando";
+
+  // ac05: libre (cuota 60%)
+  fleetState.fleet["ac05"].status = "libre";
+
+  // ac06: libre (cuota 95%) -> mejor opción libre
+  fleetState.fleet["ac06"].status = "libre";
+
+  saveFleetState(fleetState, fleetPath);
+
+  // Archivo de definición del agente en disco
+  const agentFilePath = path.join(agentsDir, "dc-sub-worker-handover.md");
+  fs.writeFileSync(agentFilePath, [
+    "---",
+    "name: dc-sub-worker-handover",
+    "model: cpam/ac01/gemini-3.8-flash-high",
+    "effort: high",
+    "mode: background",
+    "---",
+    "",
+    "# System Prompt",
+    "Eres un worker.",
+    "",
+    "## Contexto Semilla (Seed Context)",
+    "Avance inicial de la tarea."
+  ].join("\n"));
+
+  // Archivo de tarea en gentle-agents/tasks/
+  const taskFilePath = path.join(tasksDir, "task-handover-01.json");
+  fs.writeFileSync(taskFilePath, JSON.stringify({
+    task: {
+      id: "task-handover-01",
+      agent: "dc-sub-worker-handover",
+      status: "running",
+      tokens: 128_000,
+      result: "Fases 1 y 2 ejecutadas con éxito. Pendiente fase 3."
+    }
+  }));
+
+  const mockQuotaGetter = (acc: string) => {
+    if (acc === "ac05") return { gemini5hPct: 60, resetTimeIso: "2026-10-21T18:00:00Z" } as any;
+    if (acc === "ac06") return { gemini5hPct: 95, resetTimeIso: "2026-10-21T18:00:00Z" } as any;
+    if (acc === "ac01") return { gemini5hPct: 80, resetTimeIso: "2026-10-21T18:00:00Z" } as any;
+    return undefined;
+  };
+
+  const plan = {
+    ephemeralId: "ho1234",
+    agentName: "dc-sub-worker-handover",
+    agentFilePath,
+    leasedAccount: "ac01",
+    fullModelRef: "cpam/ac01/gemini-3.8-flash-high",
+    effectiveEffort: "high" as const,
+    tools: ["read", "write"],
+    mode: "background" as const,
+  };
+
+  try {
+    const outcome = executeTaxiHandover({
+      plan,
+      sessionId: "sess-handover-test",
+      originalTaskId: "task-handover-01",
+      reason: "token_limit_90",
+      tokens: 128_000,
+      tasksDir,
+      fleetPath,
+      allowedAccounts: customAccounts,
+      quotaGetter: mockQuotaGetter,
+    });
+
+    assert.equal(outcome.success, true);
+    assert.equal(outcome.newAccount, "ac06", "Debe arrendar ac06 por tener mayor cuota (95%) y evitar ocupados/taller");
+    assert.equal(outcome.previousAccount, "ac01");
+
+    const packet = outcome.packet!;
+    assert.ok(packet);
+    assert.equal(packet.originalTaskId, "task-handover-01");
+    assert.equal(packet.previousAccount, "ac01");
+    assert.equal(packet.newAccount, "ac06");
+    assert.equal(packet.transferredTokens, 128_000);
+    assert.equal(packet.handoverReason, "token_limit_90");
+    assert.ok(packet.handoffSummary.includes("Fases 1 y 2 ejecutadas"));
+    assert.ok(packet.handoverTimestamp > 0);
+
+    // Verificar estado de flota
+    const stateAfter = loadFleetState(fleetPath, customAccounts);
+    assert.equal(stateAfter.fleet["ac06"].status, "ocupado");
+    assert.equal(stateAfter.fleet["ac06"].passenger?.taskId, "task-handover-01");
+    assert.equal(stateAfter.fleet["ac01"].status, "libre", "ac01 debe liberarse a libre al no tener cuota agotada");
+    assert.equal(stateAfter.fleet["ac01"].passenger, null);
+
+    // Verificar actualización del archivo de definición del agente y enriquecimiento de seedContext
+    const agentContent = fs.readFileSync(agentFilePath, "utf8");
+    assert.ok(agentContent.includes("model: cpam/ac06/gemini-3.8-flash-high"));
+    assert.ok(agentContent.includes("Taxi Handover Packet"));
+    assert.ok(agentContent.includes("Fases 1 y 2 ejecutadas"));
+
+    // Verificar log estructurado TAXI_HANDOVER_EXECUTED
+    const logs = readRecentTaxiLogs(15);
+    const handoverLog = logs.find((l) => l.includes("TAXI_HANDOVER_EXECUTED") && l.includes("ac06"));
+    assert.ok(handoverLog, "Debe registrar TAXI_HANDOVER_EXECUTED en el log de auditoría");
+    assert.ok(handoverLog.includes("ac01"));
+    assert.ok(handoverLog.includes("128000"));
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("MÓDULO C: executeTaxiHandover releases previous taxi to 'recargando' when quota is exhausted", () => {
+  const tempDir = createTempDir("handover-recargando");
+  const fleetPath = path.join(tempDir, "dc-taxis.json");
+
+  const customAccounts = ["ac01", "ac02"];
+  const fleetState = createInitialFleetState(customAccounts);
+
+  fleetState.fleet["ac01"].status = "ocupado";
+  fleetState.fleet["ac01"].passenger = {
+    type: "ephemeral_subagent",
+    sessionId: "sess-quota-ho",
+    pid: process.pid,
+    model: "cpam/ac01/gemini-3.8-flash-high",
+    taskId: "task-quota-ho",
+    agentName: "dc-sub-quota",
+    startedAt: Date.now(),
+    heartbeatAt: Date.now(),
+  };
+  fleetState.fleet["ac02"].status = "libre";
+  saveFleetState(fleetState, fleetPath);
+
+  const plan = {
+    ephemeralId: "qh1234",
+    agentName: "dc-sub-quota",
+    agentFilePath: path.join(tempDir, "dc-sub-quota.md"),
+    leasedAccount: "ac01",
+    fullModelRef: "cpam/ac01/gemini-3.8-flash-high",
+    effectiveEffort: "high" as const,
+    tools: ["read"],
+    mode: "background" as const,
+  };
+
+  try {
+    const outcome = executeTaxiHandover({
+      plan,
+      sessionId: "sess-quota-ho",
+      originalTaskId: "task-quota-ho",
+      reason: "quota_exhausted",
+      tokens: 45_000,
+      fleetPath,
+      allowedAccounts: customAccounts,
+      quotaGetter: (acc: string) => ({
+        gemini5hPct: acc === "ac01" ? 4 : 85,
+        resetTimeIso: "2026-10-21T18:00:00Z",
+      } as any),
+    });
+
+    assert.equal(outcome.success, true);
+    assert.equal(outcome.newAccount, "ac02");
+    assert.equal(outcome.previousAccount, "ac01");
+
+    const stateAfter = loadFleetState(fleetPath, customAccounts);
+    assert.equal(stateAfter.fleet["ac01"].status, "recargando", "ac01 debe enviarse a 'recargando' por cuota agotada (<10%)");
+    assert.equal(stateAfter.fleet["ac02"].status, "ocupado");
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("MÓDULO C: sweepBackgroundPlansOnce evaluates and executes taxi handover transparently for running tasks", () => {
+  const tempDir = createTempDir("sweep-handover");
+  const fleetPath = path.join(tempDir, "dc-taxis.json");
+  const tasksDir = path.join(tempDir, "tasks");
+  fs.mkdirSync(tasksDir, { recursive: true });
+
+  const customAccounts = ["ac01", "ac02"];
+  const fleetState = createInitialFleetState(customAccounts);
+
+  const testTaskId = `task-sweep-ho-${Date.now()}`;
+  fleetState.fleet["ac01"].status = "ocupado";
+  fleetState.fleet["ac01"].passenger = {
+    type: "ephemeral_subagent",
+    sessionId: "sess-sweep-ho",
+    pid: process.pid,
+    model: "cpam/ac01/gemini-3.8-flash-high",
+    agentName: "dc-sub-sweep-ho",
+    taskId: testTaskId,
+    startedAt: Date.now() - 60_000,
+    heartbeatAt: Date.now() - 60_000,
+  };
+  fleetState.fleet["ac02"].status = "libre";
+  saveFleetState(fleetState, fleetPath);
+
+  const agentFilePath = path.join(tempDir, "dc-sub-sweep-ho.md");
+  fs.writeFileSync(agentFilePath, [
+    "---",
+    "name: dc-sub-sweep-ho",
+    "model: cpam/ac01/gemini-3.8-flash-high",
+    "---",
+    "# System Prompt",
+    "Tarea continua."
+  ].join("\n"));
+
+  // Tarea en gentle-agents/tasks/ con status running y tokens > 120_000
+  fs.writeFileSync(path.join(tasksDir, `${testTaskId}.json`), JSON.stringify({
+    task: {
+      id: testTaskId,
+      agent: "dc-sub-sweep-ho",
+      status: "running",
+      tokens: 124_500,
+      result: "Procesados 8 de 10 lotes de datos."
+    }
+  }));
+
+  const mockPlan = {
+    ephemeralId: "swho01",
+    agentName: "dc-sub-sweep-ho",
+    agentFilePath,
+    leasedAccount: "ac01",
+    fullModelRef: "cpam/ac01/gemini-3.8-flash-high",
+    effectiveEffort: "high" as const,
+    tools: ["read"],
+    mode: "background" as const,
+  };
+
+  activeBackgroundPlans.set(mockPlan.ephemeralId, {
+    plan: mockPlan,
+    sessionId: "sess-sweep-ho",
+    startedAt: Date.now() - 60_000,
+    taskId: testTaskId,
+  });
+
+  try {
+    // Ejecutar un sweep
+    sweepBackgroundPlansOnce(tasksDir, fleetPath);
+
+    // Verificar que el handover se ejecutó transparentemente:
+    // 1. La tarea sigue en activeBackgroundPlans (no colapsó ni fue descartada)
+    const trackedItem = activeBackgroundPlans.get(mockPlan.ephemeralId);
+    assert.ok(trackedItem, "La tarea debe seguir activa en background");
+    assert.equal(trackedItem.plan.leasedAccount, "ac02", "El arriendo debe haberse transferido a ac02");
+    assert.ok(trackedItem.handoverPacket, "El tracking debe contener el HandoverPacket");
+    assert.equal(trackedItem.handoverPacket?.previousAccount, "ac01");
+    assert.equal(trackedItem.handoverPacket?.newAccount, "ac02");
+
+    // 2. Estado de la flota: ac01 libre, ac02 ocupado con el nuevo pasajero
+    const stateAfter = loadFleetState(fleetPath, customAccounts);
+    assert.equal(stateAfter.fleet["ac02"].status, "ocupado");
+    assert.equal(stateAfter.fleet["ac01"].status, "libre");
+
+    // 3. Log TAXI_HANDOVER_EXECUTED registrado
+    const logs = readRecentTaxiLogs(15);
+    assert.ok(logs.some((l) => l.includes("TAXI_HANDOVER_EXECUTED") && l.includes("ac02")));
+  } finally {
+    activeBackgroundPlans.delete(mockPlan.ephemeralId);
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("MÓDULO D: sanitizeWorkshopReason resume errores a máximo 3 palabras y evita falso taller por timeout", async () => {
+  // 1. Validar que timeouts transitorios NO son clasificados como error de auth
+  assert.equal(isProviderAuthError("Request timed out after 400ms"), false);
+  assert.equal(isProviderAuthError("connect ECONNREFUSED 127.0.0.1:8325"), false);
+  assert.equal(isProviderAuthError("connect ETIMEDOUT"), false);
+  assert.equal(isProviderAuthError("Operation timed out after 30000ms"), false);
+
+  // 2. Errores fatales de autenticación SI deben ser detectados
+  assert.equal(isProviderAuthError(undefined, 401), true);
+  assert.equal(isProviderAuthError(undefined, 403), true);
+  assert.equal(isProviderAuthError("invalid_grant: token has expired or been revoked"), true);
+  assert.equal(isProviderAuthError("account disabled by administrator"), true);
+  assert.equal(isProviderAuthError("token revoked"), true);
+  assert.equal(isProviderAuthError("permission_denied: 403 Forbidden"), true);
+
+  // 3. auditAccountForWorkshop no debe enviar taxi a taller ante timeout
+  const tempDir = createTempDir("timeout-audit");
+  const fleetPath = path.join(tempDir, "dc-taxis.json");
+  try {
+    const customAccounts = ["ac01"];
+    saveFleetState(createInitialFleetState(customAccounts), fleetPath);
+
+    const timeoutFetcher = async () => {
+      throw new Error("Request timed out after 400ms");
+    };
+
+    const sent = await auditAccountForWorkshop("ac01", fleetPath, timeoutFetcher);
+    assert.equal(sent, false, "Timeout de 400ms NO debe mandar la unidad a taller");
+    const st = loadFleetState(fleetPath, customAccounts);
+    assert.equal(st.fleet["ac01"].status, "libre", "La unidad debe permanecer en estado libre");
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+
+  // 4. sanitizeWorkshopReason debe devolver frases de máximo 3 palabras
+  const samples = [
+    { input: "Google Auth Error: token revoked or unauthorized (HTTP 401)", expected: "Google Auth Error" },
+    { input: "Account disabled by platform administrator (Google Cloud IAM)", expected: "Cuenta Deshabilitada" },
+    { input: "Token revoked by user session manager", expected: "Token Revocado" },
+    { input: "Permission denied for this resource (HTTP 403 Forbidden)", expected: "Permiso Denegado" },
+    { input: "invalid_grant: Bad credentials or secret mismatch", expected: "Credencial Invalida" },
+    { input: "Some extremely long unclassified unexpected failure inside downstream proxy network layer", maxWords: 3 },
+  ];
+
+  for (const s of samples) {
+    const res = sanitizeWorkshopReason(s.input);
+    const wordCount = res.trim().split(/\s+/).length;
+    assert.ok(wordCount <= 3, `"${res}" debe tener máximo 3 palabras (tiene ${wordCount})`);
+    if (s.expected) {
+      assert.equal(res, s.expected);
+    }
+  }
+});
+
+test("MÓDULO D: updateTaxiPassengerUsage actualiza tokens y costo atómicamente", () => {
+  const tempDir = createTempDir("passenger-usage");
+  const fleetPath = path.join(tempDir, "dc-taxis.json");
+
+  try {
+    const customAccounts = ["ac01", "ac02"];
+    const state = createInitialFleetState(customAccounts);
+    state.fleet["ac01"].status = "ocupado";
+    state.fleet["ac01"].passenger = {
+      type: "orchestrator",
+      sessionId: "orch-usage-sess",
+      pid: process.pid,
+      model: "cpam/ac01/gemini-3.8-flash-high",
+      taskLabel: "Sesión Principal",
+      plate: "DC-USAGE-01",
+      startedAt: Date.now() - 10_000,
+      heartbeatAt: Date.now(),
+    };
+    saveFleetState(state, fleetPath);
+
+    // 1. Actualizar cuenta no ocupada -> retorna false
+    const okFree = updateTaxiPassengerUsage("ac02", 5000, 0.05, fleetPath);
+    assert.equal(okFree, false, "No debe actualizar taxi libre sin pasajero");
+
+    // 2. Actualizar taxi ocupado con tokens y costo
+    const okOccupied = updateTaxiPassengerUsage("ac01", 147_000, 1.25, fleetPath);
+    assert.equal(okOccupied, true, "Debe retornar true al actualizar taxi ocupado");
+
+    const st1 = loadFleetState(fleetPath, customAccounts);
+    assert.equal(st1.fleet["ac01"].passenger?.tokens, 147_000);
+    assert.equal(st1.fleet["ac01"].passenger?.cost, 1.25);
+    assert.equal(st1.fleet["ac01"].passenger?.plate, "DC-USAGE-01"); // campos previos preservados
+
+    // 3. Actualizar solo tokens omitiendo costo
+    const okTokensOnly = updateTaxiPassengerUsage("ac01", 150_000, undefined, fleetPath);
+    assert.equal(okTokensOnly, true);
+    const st2 = loadFleetState(fleetPath, customAccounts);
+    assert.equal(st2.fleet["ac01"].passenger?.tokens, 150_000);
+    assert.equal(st2.fleet["ac01"].passenger?.cost, 1.25, "Costo previo debe preservarse si es undefined");
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("MÓDULO D: Formato vehicular enriquecido del Taxímetro en Sidebar y Panel TUI", () => {
+  // 1. Sidebar status card createTaxiUnitRows: [<duración> - <tokens>tk - $<costo>]
+  const unitWithMetrics = {
+    account: "ac01",
+    status: "ocupado" as const,
+    passenger: {
+      type: "orchestrator" as const,
+      sessionId: "sess-taximeter-1",
+      pid: 1234,
+      model: "cpam/ac01/gemini-3.8-flash-high",
+      taskLabel: "Orquestación",
+      plate: "DC-HOST-1234",
+      tokens: 147_000,
+      cost: 1.25,
+      startedAt: Date.now() - 255_000, // ~4m 15s
+      heartbeatAt: Date.now(),
+    },
+  };
+
+  const rows = createTaxiUnitRows(unitWithMetrics);
+  const rendered = rows.map((r: any) => r.render(90).join(" "));
+  const taximeterRow = rendered.find((l: string) => l.includes("Taxímetro:"));
+  assert.ok(taximeterRow, "Debe existir fila Taxímetro:");
+  assert.ok(taximeterRow.includes("147k tk - $1.25"), `Taxímetro con tokens y costo debe contener "147k tk - $1.25", obtenido: "${taximeterRow}"`);
+
+  // Tokens sin costo
+  const unitTokensOnly = {
+    account: "ac02",
+    status: "ocupado" as const,
+    passenger: {
+      type: "orchestrator" as const,
+      sessionId: "sess-taximeter-2",
+      pid: 5678,
+      model: "cpam/ac02/gemini-3.8-flash-high",
+      tokens: 45_000,
+      startedAt: Date.now() - 30_000,
+      heartbeatAt: Date.now(),
+    },
+  };
+  const rowsTok = createTaxiUnitRows(unitTokensOnly);
+  const renderedTok = rowsTok.map((r: any) => r.render(90).join(" "));
+  const taximeterTok = renderedTok.find((l: string) => l.includes("Taxímetro:"));
+  assert.ok(taximeterTok?.includes("45k tk"), `Debe contener "45k tk", obtenido: "${taximeterTok}"`);
+  assert.ok(!taximeterTok?.includes("-$"), `No debe contener costo si no fue provisto`);
+
+  // Sin métricas (solo duración)
+  const unitNoMetrics = {
+    account: "ac03",
+    status: "ocupado" as const,
+    passenger: {
+      type: "orchestrator" as const,
+      sessionId: "sess-taximeter-3",
+      pid: 9999,
+      startedAt: Date.now() - 10_000,
+      heartbeatAt: Date.now(),
+    },
+  };
+  const rowsNone = createTaxiUnitRows(unitNoMetrics);
+  const renderedNone = rowsNone.map((r: any) => r.render(90).join(" "));
+  const taximeterNone = renderedNone.find((l: string) => l.includes("Taxímetro:"));
+  assert.ok(taximeterNone?.includes("10s"), "Debe mostrar duración sin tk ni $");
+  assert.ok(!taximeterNone?.includes("tk"), "No debe mostrar tk");
+
+  // 2. DcTaxisPanel renderUnitDetail: ${elapsedSec}s (~${elapsedMin}m) - ${tokensStr} tk - $${costStr}
+  const theme = {
+    fg: (_r: string, t: string) => t,
+    bg: (_r: string, t: string) => t,
+    bold: (t: string) => t,
+  } as any;
+  const panel = new DcTaxisPanel({ theme, onDone: () => {}, requestRender: () => {} });
+  (panel as any).selectedDetailUnit = unitWithMetrics;
+  const panelLines = panel.render(100);
+  const panelTaximeter = panelLines.find((l: string) => l.includes("Taxímetro:"));
+  assert.ok(panelTaximeter, "Panel de taxis debe contener Taxímetro:");
+  assert.ok(panelTaximeter.includes("tk - $"), `Panel debe usar sintaxis concisa "tk - $", obtenido: "${panelTaximeter}"`);
+});
+
+test("MÓDULO D: Relevo automático del orquestador ante cuota < 10%", async () => {
+  const tempDir = createTempDir("orch-handover");
+  const fleetPath = path.join(tempDir, "dc-taxis.json");
+
+  try {
+    const customAccounts = ["ac01", "ac02"];
+    const state = createInitialFleetState(customAccounts);
+    state.fleet["ac01"].status = "ocupado";
+    state.fleet["ac01"].passenger = {
+      type: "orchestrator",
+      sessionId: "orch-ho-sess",
+      pid: process.pid,
+      model: "cpam/ac01/gemini-3.8-flash-high",
+      taskLabel: "Sesión Principal",
+      plate: `DC-HOST-${process.pid}`,
+      startedAt: Date.now() - 30_000,
+      heartbeatAt: Date.now(),
+    };
+    saveFleetState(state, fleetPath);
+
+    const mockCtx = {
+      hasUI: true,
+      model: { provider: "cpam", id: "ac01/gemini-3.8-flash-high" },
+      sessionManager: { getSessionId: () => "orch-ho-sess" },
+    } as any;
+
+    // Caso 1: Cuota >= 10% (ej: 45%) -> no debe relevar
+    const mockQuotaGood = (ac: string) => ({
+      account: ac,
+      gemini5hPct: 45,
+      geminiWeeklyPct: 80,
+      lastChecked: Date.now(),
+    });
+
+    const resGood = await handleOrchestratorQuotaHandover(mockCtx, undefined, fleetPath, mockQuotaGood);
+    assert.equal(resGood.performed, false, "No debe relevar si cuota >= 10%");
+    const stGood = loadFleetState(fleetPath, customAccounts);
+    assert.equal(stGood.fleet["ac01"].status, "ocupado");
+
+    // Caso 2: Cuota cae < 10% (ej: 4%) -> debe relevar a ac02 y enviar ac01 a recargando
+    const mockQuotaCritical = (ac: string) => ({
+      account: ac,
+      gemini5hPct: ac === "ac01" ? 4 : 95,
+      geminiWeeklyPct: 80,
+      lastChecked: Date.now(),
+    });
+
+    const resCritical = await handleOrchestratorQuotaHandover(mockCtx, undefined, fleetPath, mockQuotaCritical);
+    assert.equal(resCritical.performed, true, "Debe realizar relevo automático");
+    assert.equal(resCritical.previousAccount, "ac01");
+    assert.equal(resCritical.newAccount, "ac02");
+
+    // Verificar estado de la flota
+    const stHandover = loadFleetState(fleetPath, customAccounts);
+    assert.equal(stHandover.fleet["ac01"].status, "recargando", "Taxi anterior debe ir a 'recargando'");
+    assert.equal(stHandover.fleet["ac01"].passenger, null, "Pasajero anterior debe liberarse");
+    assert.equal(stHandover.fleet["ac02"].status, "ocupado", "Nuevo taxi debe quedar 'ocupado'");
+    assert.equal(stHandover.fleet["ac02"].passenger?.type, "orchestrator", "Nuevo taxi debe tener al orquestador");
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+
+
 
 

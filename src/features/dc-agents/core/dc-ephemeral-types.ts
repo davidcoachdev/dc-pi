@@ -5,7 +5,7 @@
  * Cumple estrictamente con la Directiva 1 de DC Studio (cero dependencias de Pi / pi-tui).
  */
 
-export type DcTaxiStatus = "libre" | "ocupado" | "recargando";
+export type DcTaxiStatus = "libre" | "ocupado" | "recargando" | "en_taller";
 
 export type DcPassengerType = "orchestrator" | "subagent" | "ephemeral_subagent";
 
@@ -29,6 +29,8 @@ export interface DcTaxiUnit {
   account: string;
   status: DcTaxiStatus;
   passenger: DcTaxiPassenger | null;
+  workshopReason?: string;
+  workshopSince?: number;
 }
 
 export interface DcTaxiFleetState {
@@ -93,6 +95,18 @@ export interface DcAgentUsageMetrics {
   totalDurationMs: number;
   lastUsedAt?: number;
   lastError?: string;
+}
+
+export type TaxiHandoverReason = "token_limit_90" | "quota_exhausted" | "manual";
+
+export interface TaxiHandoverPacket {
+  originalTaskId: string;
+  previousAccount: string;
+  newAccount: string;
+  transferredTokens: number;
+  handoverReason: TaxiHandoverReason;
+  handoffSummary: string;
+  handoverTimestamp: number;
 }
 
 export type DcEphemeralToolPreset =

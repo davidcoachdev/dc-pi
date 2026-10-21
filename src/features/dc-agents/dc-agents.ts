@@ -10,10 +10,367 @@ import {
   acquireOrchestratorTaxi,
   releaseOrchestratorTaxi,
   syncOrchestratorTaxi,
+  sendTaxiToWorkshop as dispatcherSendTaxiToWorkshop,
+  loadFleetState,
+  saveFleetState,
+  withFleetLock,
+  getFleetStatusSummary,
+  updateTaxiPassengerUsage,
 } from "./core/dc-taxi-dispatcher.ts";
+import { getCachedTaxiQuota, type DcTaxiQuotaInfo } from "./core/dc-taxi-quota.ts";
+import { getContextUsageInfo } from "../dc-sidebar/providers/dc-context-provider.ts";
+import { fetchJson } from "../../integrations/dc-http/dc-fetch.ts";
 import { registerDcEphemeralTools } from "./tools/dc-ephemeral-tools.ts";
 import { DcAgentsPanel } from "./views/dc-agents-panel.ts";
 import { DcTaxisPanel } from "./views/dc-taxis-panel.ts";
+
+export const KNOWN_FATAL_AUTH_ACCOUNTS = new Set(["ac40"]);
+
+/**
+ * Resume cualquier motivo de error o fallo a máximo 3 palabras concisas.
+ */
+export function sanitizeWorkshopReason(reason?: string): string {
+  if (!reason || typeof reason !== "string") {
+    return "Google Auth Error";
+  }
+
+  const clean = reason.replace(/[^\w\s-]/g, " ").trim();
+  const words = clean.split(/\s+/).filter(Boolean);
+
+  if (words.length === 0) {
+    return "Google Auth Error";
+  }
+
+  // Si ya tiene <= 3 palabras y contiene un identificador de cuenta (ej: "Auth Error ac40"), respetarlo
+  const lower = reason.toLowerCase();
+  const acMatch = lower.match(/\bac\d+\b/);
+  if (words.length <= 3 && acMatch) {
+    return words.slice(0, 3).join(" ");
+  }
+
+  // Mapeos canónicos a motivos breves (máximo 3 palabras)
+  if (lower.includes("google auth") || lower.includes("auth error") || lower.includes("fatal_auth")) {
+    return "Google Auth Error";
+  }
+  if (
+    lower.includes("account disabled") ||
+    lower.includes("deshabilitada") ||
+    lower.includes("cuenta deshabilitada")
+  ) {
+    return "Cuenta Deshabilitada";
+  }
+  if (lower.includes("token revoked") || lower.includes("revocad")) {
+    return "Token Revocado";
+  }
+  if (
+    lower.includes("permission_denied") ||
+    lower.includes("permission denied") ||
+    lower.includes("permiso denegado") ||
+    lower.includes("forbidden") ||
+    /\b403\b/.test(lower)
+  ) {
+    return "Permiso Denegado";
+  }
+  if (
+    lower.includes("invalid_grant") ||
+    lower.includes("credencial invalida") ||
+    lower.includes("invalid credential") ||
+    lower.includes("api key")
+  ) {
+    return "Credencial Invalida";
+  }
+  if (
+    lower.includes("unauthorized") ||
+    lower.includes("authentication") ||
+    /\b401\b/.test(lower)
+  ) {
+    return "Google Auth Error";
+  }
+
+  // Fallback para cualquier otro error: resumir a máximo 3 palabras limpias
+  return words.slice(0, 3).join(" ");
+}
+
+/**
+ * Envía una unidad de taxi al taller asegurando que el motivo no supere 3 palabras.
+ */
+export function sendTaxiToWorkshop(
+  account: string,
+  reason: string,
+  fleetPath?: string,
+): boolean {
+  return dispatcherSendTaxiToWorkshop(account, sanitizeWorkshopReason(reason), fleetPath);
+}
+
+export function isProviderAuthError(errorMessage?: string, statusCode?: number): boolean {
+  if (!errorMessage && !statusCode) return false;
+
+  // 1. Un timeout (ej: 'Request timed out after 400ms', ECONNREFUSED, ETIMEDOUT) NO debe mandar un taxi al taller.
+  if (errorMessage) {
+    const msg = errorMessage.toLowerCase();
+    if (
+      msg.includes("timed out") ||
+      msg.includes("timeout") ||
+      msg.includes("econnrefused") ||
+      msg.includes("etimedout") ||
+      msg.includes("econnreset") ||
+      msg.includes("enotfound") ||
+      msg.includes("network error")
+    ) {
+      return false;
+    }
+  }
+
+  // 2. Solo errores fatales de autenticación (401, 403, invalid_grant, token revoked, account disabled)
+  if (statusCode === 401 || statusCode === 403) return true;
+  if (statusCode === 400) {
+    if (!errorMessage) return false;
+    const msg = errorMessage.toLowerCase();
+    return (
+      msg.includes("invalid_grant") ||
+      msg.includes("unauthorized") ||
+      msg.includes("fatal_auth") ||
+      msg.includes("auth error") ||
+      msg.includes("authentication") ||
+      msg.includes("token revoked") ||
+      msg.includes("account disabled") ||
+      msg.includes("deshabilitada") ||
+      msg.includes("api key")
+    );
+  }
+
+  if (!errorMessage) return false;
+  const msg = errorMessage.toLowerCase();
+
+  return (
+    /\b(401|403)\b/.test(msg) ||
+    msg.includes("unauthorized") ||
+    msg.includes("forbidden") ||
+    msg.includes("fatal_auth") ||
+    msg.includes("auth error") ||
+    msg.includes("authentication") ||
+    msg.includes("permission_denied") ||
+    msg.includes("permission denied") ||
+    msg.includes("token revoked") ||
+    msg.includes("account disabled") ||
+    msg.includes("deshabilitada") ||
+    msg.includes("invalid_grant") ||
+    msg.includes("invalid api key") ||
+    msg.includes("api key")
+  );
+}
+
+export async function auditAccountForWorkshop(
+  account: string,
+  fleetPath?: string,
+  fetcher?: (account: string) => Promise<any>,
+): Promise<boolean> {
+  const normAc = account.toLowerCase();
+
+  // 1. Cuentas con fallo fatal conocido (ej. ac40)
+  if (KNOWN_FATAL_AUTH_ACCOUNTS.has(normAc)) {
+    const reason = sanitizeWorkshopReason(`Auth Error ${account}`);
+    sendTaxiToWorkshop(
+      account,
+      reason,
+      fleetPath,
+    );
+    return true;
+  }
+
+  // 2. Consulta de diagnóstico de cuota / autenticación
+  try {
+    if (fetcher) {
+      await fetcher(account);
+    } else {
+      await fetchJson(`http://127.0.0.1:8325/quota/${encodeURIComponent(account)}`, {
+        timeoutMs: 400,
+      });
+    }
+  } catch (err: any) {
+    const status = err?.status || err?.statusCode;
+    const msg = (err?.message || String(err)).toLowerCase();
+
+    // Solo errores fatales de autenticación / cuenta deshabilitada mandan al taller.
+    // Un timeout de red transitorio NO es avería permanente de la unidad.
+    if (isProviderAuthError(msg, status)) {
+      const rawReason = err?.message || `HTTP ${status || 401}`;
+      const reason = sanitizeWorkshopReason(rawReason);
+      sendTaxiToWorkshop(account, reason, fleetPath);
+      return true;
+    }
+  }
+
+  return false;
+}
+
+export async function auditFleetAccountsForWorkshop(
+  accounts: string[],
+  fleetPath?: string,
+  fetcher?: (account: string) => Promise<any>,
+): Promise<string[]> {
+  const sentToWorkshop: string[] = [];
+  for (const ac of accounts) {
+    const sent = await auditAccountForWorkshop(ac, fleetPath, fetcher);
+    if (sent) {
+      sentToWorkshop.push(ac);
+    }
+  }
+  return sentToWorkshop;
+}
+
+export function handleTurnEndForWorkshop(
+  event: any,
+  ctx: Partial<ExtensionContext> & { model?: any },
+  fleetPath?: string,
+): { sent: boolean; account?: string; reason?: string } {
+  const message = event?.message;
+  const stopReason = message?.stopReason;
+  const errorMessage = message?.errorMessage || message?.error || "";
+  const status = message?.status ?? message?.statusCode;
+
+  const isAuthError =
+    (stopReason === "error" || Boolean(status)) &&
+    (isProviderAuthError(errorMessage, status) ||
+      status === 400 ||
+      status === 401 ||
+      status === 403);
+
+  if (!isAuthError) {
+    return { sent: false };
+  }
+
+  // Identificar la cuenta del taxi activo
+  const currentModelId = ctx.model ? `${ctx.model.provider || "cpam"}/${ctx.model.id}` : undefined;
+  let account: string | undefined;
+
+  if (currentModelId) {
+    const match = currentModelId.match(/(ac\d+)/i);
+    if (match) {
+      account = match[1].toLowerCase();
+    }
+  }
+
+  if (!account) {
+    const sessionId = (ctx as any)?.sessionManager?.getSessionId?.() || `ambient-${Date.now()}`;
+    const fleetSummary = getFleetStatusSummary(fleetPath);
+    const myTaxi = fleetSummary.units.find(
+      (u) => u.passenger && (u.passenger.sessionId === sessionId || u.passenger.pid === process.pid),
+    );
+    if (myTaxi) {
+      account = myTaxi.account;
+    }
+  }
+
+  if (account) {
+    const rawReason = errorMessage || `HTTP ${status || 401}`;
+    const reason = sanitizeWorkshopReason(rawReason);
+    sendTaxiToWorkshop(account, reason, fleetPath);
+    return { sent: true, account, reason };
+  }
+
+  return { sent: false };
+}
+
+/**
+ * Supervisor de cuota para el orquestador: si la cuota cae < 10%, realiza relevo
+ * automático a una nueva unidad libre de CPAM y manda la unidad anterior a 'recargando'.
+ */
+export async function handleOrchestratorQuotaHandover(
+  ctx: Partial<ExtensionContext> & { model?: any },
+  pi?: ExtensionAPI,
+  fleetPath?: string,
+  quotaGetter?: (account: string) => DcTaxiQuotaInfo | undefined,
+): Promise<{ performed: boolean; previousAccount?: string; newAccount?: string }> {
+  // Identificar la cuenta activa del orquestador
+  const currentModelId = ctx.model ? `${ctx.model.provider || "cpam"}/${ctx.model.id}` : undefined;
+  let account: string | undefined;
+
+  if (currentModelId) {
+    const match = currentModelId.match(/(ac\d+)/i);
+    if (match) {
+      account = match[1].toLowerCase();
+    }
+  }
+
+  const sessionId = ctx.sessionManager?.getSessionId?.() || `ambient-${Date.now()}`;
+
+  if (!account) {
+    const fleetSummary = getFleetStatusSummary(fleetPath);
+    const myTaxi = fleetSummary.units.find(
+      (u) => u.passenger && (u.passenger.sessionId === sessionId || u.passenger.pid === process.pid),
+    );
+    if (myTaxi) {
+      account = myTaxi.account;
+    }
+  }
+
+  if (!account) {
+    return { performed: false };
+  }
+
+  const getter = quotaGetter || getCachedTaxiQuota;
+  const qInfo = getter(account);
+  if (!qInfo || typeof qInfo.gemini5hPct !== "number") {
+    return { performed: false };
+  }
+
+  if (qInfo.gemini5hPct < 10) {
+    const previousAccount = account;
+
+    // 1. Enviar el taxi anterior a 'recargando'
+    withFleetLock(fleetPath || "", () => {
+      const state = loadFleetState(fleetPath);
+      const prevUnit = state.fleet[previousAccount];
+      if (prevUnit) {
+        prevUnit.status = "recargando";
+        prevUnit.passenger = null;
+        saveFleetState(state, fleetPath);
+      }
+    });
+
+    // 2. Realizar relevo automático a una nueva unidad libre de CPAM con 'acquireOrchestratorTaxi'
+    const taxiResult = acquireOrchestratorTaxi(sessionId, currentModelId, fleetPath);
+
+    if (taxiResult && taxiResult.account !== previousAccount) {
+      if (pi && taxiResult.modelId) {
+        try {
+          const slashIdx = taxiResult.modelId.indexOf("/");
+          const targetProvider = slashIdx > 0 ? taxiResult.modelId.slice(0, slashIdx) : "cpam";
+          const targetId = slashIdx > 0 ? taxiResult.modelId.slice(slashIdx + 1) : taxiResult.modelId;
+
+          const available = await (ctx as any).modelRegistry?.getAvailable?.();
+          const foundModel = ctx.modelRegistry?.find?.(targetProvider, targetId)
+            || (Array.isArray(available) ? available.find((m: any) => m.id === targetId || m.id === taxiResult.modelId) : undefined);
+
+          if (foundModel) {
+            await (pi as any).setModel(foundModel);
+          }
+        } catch {
+          /* fallback */
+        }
+      }
+
+      // 3. Notificar al usuario mediante 'dcNotifier.notify' que el orquestador relevó de unidad por cuota baja
+      if (ctx.hasUI) {
+        dcNotifier.notify(
+          ctx as ExtensionContext,
+          "🚕 Flota de Taxis",
+          `Taxi orquestador relevado por cuota baja (< 10%): ${previousAccount.toUpperCase()} → ${taxiResult.account.toUpperCase()}. Unidad anterior en recarga.`,
+          "warning",
+        );
+      }
+
+      return {
+        performed: true,
+        previousAccount,
+        newAccount: taxiResult.account,
+      };
+    }
+  }
+
+  return { performed: false };
+}
 
 /**
  * Abre el visor interactivo de la Flota de Taxis (Libre / Ocupado), tokens y logs.
@@ -109,6 +466,23 @@ export default function dcAgentsExtension(pi: ExtensionAPI): void {
   // Al arrancar sesión, verifica y restaura subagentes y skills si faltan, y purga huérfanos
   pi.on("session_start", async (_event, ctx) => {
     try {
+      // 0. Diagnóstico inicial de cuotas y cuentas con fallos de autenticación (fatal_auth / 400/401/403)
+      try {
+        const fleetState = loadFleetState();
+        const accountsToAudit = Object.keys(fleetState.fleet);
+        const disabled = await auditFleetAccountsForWorkshop(accountsToAudit);
+        if (disabled.length > 0 && ctx.hasUI) {
+          dcNotifier.notify(
+            ctx,
+            "🛠️ Taller de Taxis",
+            `Unidades averiadas enviadas a taller: ${disabled.join(", ").toUpperCase()}`,
+            "warning",
+          );
+        }
+      } catch {
+        /* best-effort diagnóstico inicial */
+      }
+
       // 1. Sweeper de agentes efímeros huérfanos
       dcCleanOrphanedEphemeralAgents();
 
@@ -194,6 +568,59 @@ export default function dcAgentsExtension(pi: ExtensionAPI): void {
       }
     } catch {
       /* noop */
+    }
+  });
+
+  // En turn_end: si hubo error de autenticación con proveedor, enviar el taxi a taller.
+  // Sincronizar continuo de tokens y costo en pasajero.
+  // Supervisar cuota del orquestador (< 10%).
+  pi.on("turn_end", async (event: any, ctx: ExtensionContext) => {
+    try {
+      // 1. Auditoría de taller por fallos fatales de auth
+      const outcome = handleTurnEndForWorkshop(event, ctx);
+      if (outcome.sent && outcome.account && ctx.hasUI) {
+        dcNotifier.notify(
+          ctx,
+          "🛠️ Flota de Taxis",
+          `Taxi ${outcome.account.toUpperCase()} enviado a taller: ${outcome.reason}`,
+          "error",
+        );
+      }
+
+      // 2. Sincronización continua de tokens y costo en el Pasajero del Orquestador
+      try {
+        const usageInfo = getContextUsageInfo();
+        const currentModelId = ctx.model ? `${ctx.model.provider || "cpam"}/${ctx.model.id}` : undefined;
+        let activeAccount: string | undefined;
+        if (currentModelId) {
+          const match = currentModelId.match(/(ac\d+)/i);
+          if (match) activeAccount = match[1].toLowerCase();
+        }
+        if (!activeAccount) {
+          const sessionId = ctx.sessionManager?.getSessionId?.() || `ambient-${Date.now()}`;
+          const fleetSummary = getFleetStatusSummary();
+          const myTaxi = fleetSummary.units.find(
+            (u) => u.passenger && (u.passenger.sessionId === sessionId || u.passenger.pid === process.pid),
+          );
+          if (myTaxi) activeAccount = myTaxi.account;
+        }
+        if (activeAccount && usageInfo) {
+          const tokens = usageInfo.tokensUsed || (usageInfo.inTokens + usageInfo.outTokens) || 0;
+          const cost = usageInfo.costTotal;
+          updateTaxiPassengerUsage(activeAccount, tokens, cost);
+        }
+      } catch {
+        /* best-effort sync */
+      }
+
+      // 3. Supervisor de Cuota para el Orquestador (Orchestrator Shift Handover)
+      try {
+        await handleOrchestratorQuotaHandover(ctx, pi);
+      } catch {
+        /* best-effort handover */
+      }
+    } catch {
+      /* defensive */
     }
   });
 

@@ -72,7 +72,7 @@ export class DcTaxisPanel implements Component {
 
   // Datos de la flota, cuotas y métricas
   private fleetUnits: DcTaxiUnit[] = [];
-  private fleetSummary = { total: 0, libres: 0, ocupados: 0, recargando: 0 };
+  private fleetSummary = { total: 0, libres: 0, ocupados: 0, recargando: 0, en_taller: 0 };
   private trips: DcTaxiTripRecord[] = [];
   private agentRankings: DcAgentUsageMetrics[] = [];
   private metrics: DcTaxiHistoryMetrics = {
@@ -149,6 +149,7 @@ export class DcTaxisPanel implements Component {
       libres: summary.libres,
       ocupados: summary.ocupados,
       recargando: summary.recargando,
+      en_taller: summary.en_taller ?? 0,
     };
     this.trips = loadTaxiTripHistory(100);
     this.metrics = getTaxiHistoryMetrics();
@@ -467,8 +468,17 @@ export class DcTaxisPanel implements Component {
       statusText = th.fg("error", "🔴 OCUPADO (Viaje en curso)");
     } else if (unit.status === "recargando") {
       statusText = th.fg("warning", "⚡ RECARGANDO (Cuota de 5h < 5%, esperando >= 60%)");
+    } else if (unit.status === "en_taller") {
+      statusText = th.fg("error", `🛠️ EN TALLER (${unit.workshopReason || "Google Auth Error / Deshabilitada"})`);
     }
     lines.push(`  Estado Actual:    ${th.bold(statusText)}`);
+
+    if (unit.status === "en_taller") {
+      lines.push(`  Motivo Avería:    ${th.fg("error", th.bold(unit.workshopReason || "Google Auth Error / Deshabilitada"))}`);
+      if (unit.workshopSince) {
+        lines.push(`  En Taller Desde:  ${th.fg("dim", new Date(unit.workshopSince).toLocaleString())}`);
+      }
+    }
 
     if (unit.passenger) {
       const p = unit.passenger;
@@ -490,12 +500,21 @@ export class DcTaxisPanel implements Component {
       const tokensCount = typeof p.tokens === "number"
         ? p.tokens
         : (typeof p.tokens === "object" && p.tokens !== null ? p.tokens.total : undefined);
-      if (tokensCount !== undefined && tokensCount !== null) {
-        taxiMeter += ` · ${tokensCount.toLocaleString("es-ES")} tokens`;
-      }
       const costVal = p.cost ?? p.costEstimated;
-      if (costVal !== undefined && costVal !== null) {
-        taxiMeter += ` · $${costVal.toFixed(4)}`;
+
+      const tokensStr = tokensCount !== undefined && tokensCount !== null
+        ? (typeof tokensCount === "number" ? tokensCount.toLocaleString("es-ES") : String(tokensCount))
+        : undefined;
+      const costStr = costVal !== undefined && costVal !== null
+        ? (typeof costVal === "number" ? (costVal < 0.01 && costVal > 0 ? costVal.toFixed(4) : costVal.toFixed(2)) : String(costVal))
+        : undefined;
+
+      if (tokensStr !== undefined && costStr !== undefined) {
+        taxiMeter = `${elapsedSec}s (~${elapsedMin}m) - ${tokensStr} tk - $${costStr}`;
+      } else if (tokensStr !== undefined) {
+        taxiMeter = `${elapsedSec}s (~${elapsedMin}m) - ${tokensStr} tk`;
+      } else if (costStr !== undefined) {
+        taxiMeter = `${elapsedSec}s (~${elapsedMin}m) - $${costStr}`;
       }
 
       lines.push(`  Taxímetro:        ${th.bold(th.fg("accent", taxiMeter))}`);
@@ -548,11 +567,12 @@ export class DcTaxisPanel implements Component {
   private renderFleetTab(lines: string[], width: number): void {
     const th = this.theme;
 
-    // Resumen de estado con contador de 'Recargando'
+    // Resumen de estado con contador de 'Recargando' y 'En taller'
     const summaryText = ` Flota Total: ${th.bold(String(this.fleetSummary.total))}  ·  ` +
       `🟢 Libres: ${th.bold(th.fg("success", String(this.fleetSummary.libres)))}  ·  ` +
       `🔴 Ocupados: ${th.bold(th.fg("error", String(this.fleetSummary.ocupados)))}  ·  ` +
-      `⚡ Recargando (<5%): ${th.bold(th.fg("warning", String(this.fleetSummary.recargando)))}`;
+      `⚡ Recargando (<5%): ${th.bold(th.fg("warning", String(this.fleetSummary.recargando)))}  ·  ` +
+      `🛠️ En Taller: ${th.bold(th.fg("error", String(this.fleetSummary.en_taller ?? 0)))}`;
     lines.push(summaryText);
     lines.push(th.fg("muted", "─".repeat(Math.max(10, width - 2))));
 
@@ -574,6 +594,8 @@ export class DcTaxisPanel implements Component {
         statusGlyph = "🔴 OCUPADO    ";
       } else if (unit.status === "recargando") {
         statusGlyph = "⚡ RECARGANDO ";
+      } else if (unit.status === "en_taller") {
+        statusGlyph = "🛠️ EN TALLER  ";
       }
 
       // Información de cuota
@@ -588,6 +610,10 @@ export class DcTaxisPanel implements Component {
       let modelStr = "─                   ";
       let pidStr = "─      ";
       let durationStr = "─";
+
+      if (unit.status === "en_taller") {
+        passengerStr = ((unit.workshopReason || "Avería/Taller") + " ".repeat(14)).slice(0, 14);
+      }
 
       if (unit.passenger) {
         const p = unit.passenger;
