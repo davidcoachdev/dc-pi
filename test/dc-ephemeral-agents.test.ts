@@ -3205,6 +3205,68 @@ test("MÓDULO D: Relevo automático del orquestador ante cuota < 10%", async () 
   }
 });
 
+test("MÓDULO E: Supervisor Pre-Vuelo del Orquestador (before_agent_start Quota Gate)", async () => {
+  const tempDir = createTempDir("orch-preflight-gate");
+  const fleetPath = path.join(tempDir, "dc-taxis.json");
+
+  try {
+    const customAccounts = ["ac01", "ac02"];
+    const state = createInitialFleetState(customAccounts);
+    state.fleet["ac01"].status = "ocupado";
+    state.fleet["ac01"].passenger = {
+      type: "orchestrator",
+      sessionId: "orch-preflight-sess",
+      pid: process.pid,
+      model: "cpam/ac01/gemini-3.8-flash-high",
+      taskLabel: "Sesión Principal",
+      plate: `DC-HOST-${process.pid}`,
+      startedAt: Date.now() - 5_000,
+      heartbeatAt: Date.now(),
+    };
+    saveFleetState(state, fleetPath);
+
+    let switchedModel: any = undefined;
+    const mockPi: any = {
+      setModel: async (m: any) => {
+        switchedModel = m;
+      },
+    };
+
+    const mockCtx = {
+      hasUI: true,
+      mode: "tui",
+      model: { provider: "cpam", id: "ac01/gemini-3.8-flash-high" },
+      sessionManager: { getSessionId: () => "orch-preflight-sess" },
+      modelRegistry: {
+        getAvailable: async () => [{ provider: "cpam", id: "ac02/gemini-3.8-flash-high" }],
+        find: (_p: string, id: string) => ({ provider: "cpam", id }),
+      },
+    } as any;
+
+    // Cuota crítica en ac01 (3%) -> Pre-vuelo debe relevar ANTES de que comience el turno
+    const mockQuotaCritical = (ac: string) => ({
+      account: ac,
+      gemini5hPct: ac === "ac01" ? 3 : 98,
+      geminiWeeklyPct: 80,
+      lastChecked: Date.now(),
+    });
+
+    const resPreFlight = await handleOrchestratorQuotaHandover(mockCtx, mockPi, fleetPath, mockQuotaCritical);
+    assert.equal(resPreFlight.performed, true, "Pre-vuelo debe relevar la unidad si cuota < 10%");
+    assert.equal(resPreFlight.previousAccount, "ac01");
+    assert.equal(resPreFlight.newAccount, "ac02");
+    assert.ok(switchedModel, "setModel debe ser invocado para cambiar el modelo en caliente");
+    assert.equal(switchedModel.id, "ac02/gemini-3.8-flash-high");
+
+    const stFinal = loadFleetState(fleetPath, customAccounts);
+    assert.equal(stFinal.fleet["ac01"].status, "recargando");
+    assert.equal(stFinal.fleet["ac02"].status, "ocupado");
+    assert.equal(stFinal.fleet["ac02"].passenger?.type, "orchestrator");
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
 
 
 
