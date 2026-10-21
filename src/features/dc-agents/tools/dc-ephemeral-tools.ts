@@ -220,11 +220,7 @@ export function registerDcEphemeralTools(pi: ExtensionAPI): void {
         },
         archetype: {
           type: "string",
-          enum: [
-            ...Object.keys(DC_AGENT_ARCHETYPES),
-            ...Object.keys(DC_ARCHETYPE_ALIASES),
-          ],
-          description: "Arquetipo canónico de subagente listo para usar (Fast-path del Catálogo DC Studio). Todos los arquetipos estándar usan el prefijo canónico dc-.",
+          description: "Arquetipo canónico de subagente listo para usar del catálogo oficial de DC Studio (ej: 'dc-researcher', 'dc-tech-analyst', 'dc-odd-worker', 'dc-odd-scout', 'dc-security-auditor', 'dc-api-tester', etc.). Úsalo exclusivamente para recetas preconfiguradas del catálogo. Si necesitas un agente a medida o rol especializado no catalogado, omite archetype y define su receta explícita con 'role', 'toolBricks' y 'behaviorBricks'.",
         },
         toolBricks: {
           type: "array",
@@ -244,7 +240,7 @@ export function registerDcEphemeralTools(pi: ExtensionAPI): void {
         },
         role: {
           type: "string",
-          description: "Nombre del rol o propósito (ej: 'youtube-researcher', 'browser-auditor', 'audio-narrator').",
+          description: "Nombre o función del agente (string libre, ej: 'tech-analyst', 'browser-auditor', 'perf-analyzer'). Obligatorio o recomendado al ensamblar agentes a medida sin archetype.",
         },
         toolPreset: {
           type: "string",
@@ -598,15 +594,11 @@ export function registerDcEphemeralTools(pi: ExtensionAPI): void {
             type: "object",
             properties: {
               task: { type: "string", description: "Instrucción autocontenida que ejecutará el subagente." },
-              role: { type: "string", description: "Rol o propósito (ej: 'scanner-1', 'doc-auditor')." },
+              role: { type: "string", description: "Nombre o función del worker (ej: 'scanner-1', 'doc-auditor', 'tech-analyst')." },
               label: { type: "string", description: "Etiqueta breve para la tarjeta de seguimiento." },
               archetype: {
                 type: "string",
-                enum: [
-                  ...Object.keys(DC_AGENT_ARCHETYPES),
-                  ...Object.keys(DC_ARCHETYPE_ALIASES),
-                ],
-                description: "Arquetipo canónico listo para usar.",
+                description: "Arquetipo canónico listo para usar del catálogo oficial de DC Studio (ej: 'dc-researcher', 'dc-tech-analyst', 'dc-odd-worker', etc.). Para agentes a medida, omite archetype y especifica 'role', 'toolBricks' y 'behaviorBricks'.",
               },
               toolBricks: {
                 type: "array",

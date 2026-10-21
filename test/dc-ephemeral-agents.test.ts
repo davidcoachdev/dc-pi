@@ -1785,3 +1785,69 @@ test("dc-ephemeral-manager: injects Lego Tool Guidelines for active tool bricks"
   assert.ok(!plan.directives.some((d) => d.includes("[Tool: youtube]")));
   assert.ok(!plan.directives.some((d) => d.includes("[Tool: browser]")));
 });
+
+test("dc-ephemeral-types: dc-tech-analyst está registrado en DC_AGENT_ARCHETYPES con su receta completa", () => {
+  const arch = (DC_AGENT_ARCHETYPES as any)["dc-tech-analyst"];
+  assert.ok(arch, "dc-tech-analyst debe existir en DC_AGENT_ARCHETYPES");
+  assert.equal(arch.name, "dc-tech-analyst");
+  assert.ok(arch.toolBricks.includes("fs-read"));
+  assert.ok(arch.toolBricks.includes("code-intel"));
+  assert.ok(arch.toolBricks.includes("docs"));
+  assert.ok(arch.toolBricks.includes("web-search"));
+  assert.ok(arch.behaviorBricks.includes("read-only-analyst"));
+  assert.ok(arch.behaviorBricks.includes("source-verification"));
+  assert.equal(arch.defaultEffort, "high");
+});
+
+test("dc-ephemeral-manager: rechaza arquetipo desconocido si falta la receta (cero suposiciones)", () => {
+  assert.throws(
+    () => {
+      assembleLegoAgentPlan({
+        task: "Analizar arquitectura sin receta",
+        archetype: "dc-invented-role" as any,
+      });
+    },
+    (err: any) => {
+      assert.match(err.message, /no existe en el catálogo/i);
+      assert.match(err.message, /no se asume nada/i);
+      assert.match(err.message, /toolBricks/i);
+      return true;
+    },
+  );
+});
+
+test("dc-ephemeral-manager: permite rol o arquetipo ad-hoc cuando el orquestador define la receta explícita", () => {
+  const plan = assembleLegoAgentPlan({
+    task: "Analizar arquitectura a medida",
+    role: "custom-perf-auditor",
+    toolBricks: ["fs-read", "terminal"],
+    behaviorBricks: ["read-only-analyst"],
+  });
+
+  assert.ok(plan.tools.includes("read"));
+  assert.ok(plan.tools.includes("bash"));
+  assert.ok(!plan.tools.includes("edit"));
+  assert.ok(plan.directives.some((d) => d.includes("solo lectura")));
+});
+
+test("dc-ephemeral-tools: dc_ephemeral_agent_run y dc_ephemeral_batch_run tienen schemas flexibles sin enum excluyente", () => {
+  const registered: any[] = [];
+  const fakePi = {
+    registerTool(toolDef: any) {
+      registered.push(toolDef);
+    },
+  } as any;
+
+  registerDcEphemeralTools(fakePi);
+  const singleTool = registered.find((t) => t.name === "dc_ephemeral_agent_run");
+  const batchTool = registered.find((t) => t.name === "dc_ephemeral_batch_run");
+
+  assert.ok(singleTool);
+  assert.ok(batchTool);
+
+  // archetype no debe tener enum rígido que rechace en la puerta del JSON Schema de Pi
+  assert.equal(singleTool.parameters.properties.archetype.enum, undefined);
+  assert.equal(batchTool.parameters.properties.items.items.properties.archetype.enum, undefined);
+  assert.ok(singleTool.parameters.properties.archetype.description.includes("catálogo oficial"));
+});
+
