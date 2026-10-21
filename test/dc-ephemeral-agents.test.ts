@@ -2175,7 +2175,7 @@ test("dc-taxis-panel: renders updated vehicular telemetry labels (Pasajero, Circ
   assert.ok(renderedLines.some((l: string) => l.includes("Circuito:") && l.includes("Ruta de prueba vehicular")), "Debe contener etiqueta Circuito:");
   assert.ok(renderedLines.some((l: string) => l.includes("Conductor:") && l.includes("gemini-3.8-flash-high")), "Debe contener etiqueta Conductor:");
   assert.ok(renderedLines.some((l: string) => l.includes("Placa:") && l.includes("DC-TEST99")), "Debe contener etiqueta Placa con matricula DC-*");
-  assert.ok(renderedLines.some((l: string) => l.includes("Taxímetro:") && l.includes("15s") && l.includes("tk") && l.includes("0.0035")), "Debe contener etiqueta Taxímetro con duración, tokens y costo");
+  assert.ok(renderedLines.some((l: string) => l.includes("Taxímetro:") && l.includes("15s") && l.includes("4500") && l.includes("0.0035")), "Debe contener etiqueta Taxímetro con duración, tokens y costo");
 
   // 2. Verificar que las etiquetas antiguas ya no se muestren
   assert.ok(!renderedLines.some((l: string) => l.includes("Tipo Pasajero:")), "No debe contener Tipo Pasajero:");
@@ -2952,6 +2952,10 @@ test("MÓDULO C: sweepBackgroundPlansOnce evaluates and executes taxi handover t
     const stateAfter = loadFleetState(fleetPath, customAccounts);
     assert.equal(stateAfter.fleet["ac02"].status, "ocupado");
     assert.equal(stateAfter.fleet["ac01"].status, "libre");
+    assert.equal(stateAfter.fleet["ac01"].passenger, null);
+
+    // 2b. Los tokens del subagente en background deben haberse sincronizado en el taxímetro del taxi ac01 antes del relevo
+    assert.equal(stateAfter.fleet["ac02"].passenger?.tokens, 124_500, "El nuevo taxi debe registrar los tokens en el taxímetro");
 
     // 3. Log TAXI_HANDOVER_EXECUTED registrado
     const logs = readRecentTaxiLogs(15);
@@ -3083,7 +3087,7 @@ test("MÓDULO D: Formato vehicular enriquecido del Taxímetro en Sidebar y Panel
   const rendered = rows.map((r: any) => r.render(90).join(" "));
   const taximeterRow = rendered.find((l: string) => l.includes("Taxímetro:"));
   assert.ok(taximeterRow, "Debe existir fila Taxímetro:");
-  assert.ok(taximeterRow.includes("147k tk - $1.25"), `Taxímetro con tokens y costo debe contener "147k tk - $1.25", obtenido: "${taximeterRow}"`);
+  assert.ok(taximeterRow.includes("147k - $1.25"), `Taxímetro con tokens y costo debe contener "147k - $1.25", obtenido: "${taximeterRow}"`);
 
   // Tokens sin costo
   const unitTokensOnly = {
@@ -3102,7 +3106,7 @@ test("MÓDULO D: Formato vehicular enriquecido del Taxímetro en Sidebar y Panel
   const rowsTok = createTaxiUnitRows(unitTokensOnly);
   const renderedTok = rowsTok.map((r: any) => r.render(90).join(" "));
   const taximeterTok = renderedTok.find((l: string) => l.includes("Taxímetro:"));
-  assert.ok(taximeterTok?.includes("45k tk"), `Debe contener "45k tk", obtenido: "${taximeterTok}"`);
+  assert.ok(taximeterTok?.includes("45k"), `Debe contener "45k", obtenido: "${taximeterTok}"`);
   assert.ok(!taximeterTok?.includes("-$"), `No debe contener costo si no fue provisto`);
 
   // Sin métricas (solo duración)
@@ -3123,7 +3127,7 @@ test("MÓDULO D: Formato vehicular enriquecido del Taxímetro en Sidebar y Panel
   assert.ok(taximeterNone?.includes("10s"), "Debe mostrar duración sin tk ni $");
   assert.ok(!taximeterNone?.includes("tk"), "No debe mostrar tk");
 
-  // 2. DcTaxisPanel renderUnitDetail: ${elapsedSec}s (~${elapsedMin}m) - ${tokensStr} tk - $${costStr}
+  // 2. DcTaxisPanel renderUnitDetail: ${elapsedSec}s (~${elapsedMin}m) - ${tokensStr} - $${costStr}
   const theme = {
     fg: (_r: string, t: string) => t,
     bg: (_r: string, t: string) => t,
@@ -3134,7 +3138,8 @@ test("MÓDULO D: Formato vehicular enriquecido del Taxímetro en Sidebar y Panel
   const panelLines = panel.render(100);
   const panelTaximeter = panelLines.find((l: string) => l.includes("Taxímetro:"));
   assert.ok(panelTaximeter, "Panel de taxis debe contener Taxímetro:");
-  assert.ok(panelTaximeter.includes("tk - $"), `Panel debe usar sintaxis concisa "tk - $", obtenido: "${panelTaximeter}"`);
+  assert.ok(panelTaximeter.includes(" - $"), `Panel debe usar sintaxis concisa " - $", obtenido: "${panelTaximeter}"`);
+  assert.ok(!panelTaximeter.includes("tk"), "Panel no debe incluir la redundancia 'tk'");
 });
 
 test("MÓDULO D: Relevo automático del orquestador ante cuota < 10%", async () => {
