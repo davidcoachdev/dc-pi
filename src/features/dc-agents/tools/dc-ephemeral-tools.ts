@@ -34,6 +34,7 @@ import type {
 import { appendTaxiLog } from "../core/dc-taxi-logger.ts";
 import {
   heartbeatTaxi,
+  updateTaxiPassengerUsage,
 } from "../core/dc-taxi-dispatcher.ts";
 import {
   evaluateTaxiHandoverRequired,
@@ -81,6 +82,7 @@ export function sweepBackgroundPlansOnce(tasksDirOverride?: string, fleetPath?: 
     let finalStatus: "completed" | "failed" | "timeout" = "completed";
     let status = "running";
     let taskTokens: number | undefined;
+    let taskCost: number | undefined;
 
     if (item.taskId && fs.existsSync(tasksDir)) {
       const taskFilePath = path.join(tasksDir, `${item.taskId}.json`);
@@ -94,6 +96,9 @@ export function sweepBackgroundPlansOnce(tasksDirOverride?: string, fleetPath?: 
           }
           if (typeof parsed?.task?.tokens === "number") {
             taskTokens = parsed.task.tokens;
+          }
+          if (typeof parsed?.task?.cost === "number") {
+            taskCost = parsed.task.cost;
           }
           if (status === "completed" || status === "failed" || status === "stopped" || status === "aborted") {
             isDone = true;
@@ -132,6 +137,15 @@ export function sweepBackgroundPlansOnce(tasksDirOverride?: string, fleetPath?: 
         /* defensive */
       }
     } else if (status === "running") {
+      // Sincronizar en caliente los tokens y el costo en el pasajero del taxi para que el taxímetro se vea en vivo
+      if (taskTokens !== undefined || taskCost !== undefined) {
+        try {
+          updateTaxiPassengerUsage(item.plan.leasedAccount, taskTokens || 0, taskCost, fleetPath);
+        } catch {
+          /* defensive */
+        }
+      }
+
       // Evaluar relevo de guardia (Taxi Shift Handover) por superación de tokens (>120k) o cuota (<10%)
       try {
         const handoverEval = evaluateTaxiHandoverRequired({

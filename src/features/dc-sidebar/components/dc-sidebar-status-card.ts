@@ -66,9 +66,9 @@ export function createTaxiUnitRows(unit: DcTaxiUnit): DcJustifiedRow[] {
 
     let taximeterText: string;
     if (tokensNum !== undefined && tokensNum !== null && costNum !== undefined && costNum !== null) {
-      taximeterText = `${elapsed} - ${formatTokens(tokensNum)} tk - $${costNum.toFixed(2)}`;
+      taximeterText = `${elapsed} - ${formatTokens(tokensNum)} - $${costNum.toFixed(2)}`;
     } else if (tokensNum !== undefined && tokensNum !== null) {
-      taximeterText = `${elapsed} - ${formatTokens(tokensNum)} tk`;
+      taximeterText = `${elapsed} - ${formatTokens(tokensNum)}`;
     } else if (costNum !== undefined && costNum !== null) {
       taximeterText = `${elapsed} - $${costNum.toFixed(2)}`;
     } else {

@@ -510,9 +510,9 @@ export class DcTaxisPanel implements Component {
         : undefined;
 
       if (tokensStr !== undefined && costStr !== undefined) {
-        taxiMeter = `${elapsedSec}s (~${elapsedMin}m) - ${tokensStr} tk - $${costStr}`;
+        taxiMeter = `${elapsedSec}s (~${elapsedMin}m) - ${tokensStr} - $${costStr}`;
       } else if (tokensStr !== undefined) {
-        taxiMeter = `${elapsedSec}s (~${elapsedMin}m) - ${tokensStr} tk`;
+        taxiMeter = `${elapsedSec}s (~${elapsedMin}m) - ${tokensStr}`;
       } else if (costStr !== undefined) {
         taxiMeter = `${elapsedSec}s (~${elapsedMin}m) - $${costStr}`;
       }
