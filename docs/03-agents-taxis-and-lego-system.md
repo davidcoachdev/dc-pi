@@ -64,6 +64,7 @@ Cuando el orquestador necesita ejecutar una tarea especializada:
 | Arquetipo | Tool Bricks Incluidos | Behavior Bricks Incluidos | Modelo Recomendado | Effort |
 | :--- | :--- | :--- | :--- | :--- |
 | **`dc-researcher`** | `web-search`, `docs`, `fs-read` | `source-verification`, `artifact-contract`, `non-empty-response` | `gemini-3.8-flash-high` | `high` |
+| **`dc-tech-analyst`** | `fs-read`, `code-intel`, `docs`, `web-search` | `read-only-analyst`, `source-verification`, `artifact-contract`, `non-empty-response` | `gemini-3.8-flash-high` | `high` |
 | **`dc-news-to-day`** | `web-search`, `youtube`, `audio`, `fs-read` | `source-verification`, `artifact-contract`, `non-empty-response` | `gemini-3.8-flash-high` | `high` |
 | **`dc-ui-visual-inspector`** | `fs-read`, `browser`, `terminal` | `read-only-analyst`, `artifact-contract`, `non-empty-response` | `gemini-3.8-flash-high` | `medium` |
 | **`dc-browser-inspector`**| `browser` | `artifact-contract`, `non-empty-response` | `gemini-3.8-flash-high` | `medium` |
@@ -72,6 +73,8 @@ Cuando el orquestador necesita ejecutar una tarea especializada:
 | **`dc-media`** | `youtube`, `audio` | `artifact-contract`, `non-empty-response` | `gemini-3-flash` | `low` |
 | **`dc-service-ops`** | `services` | `artifact-contract`, `non-empty-response` | `gemini-3-flash` | `low` |
 | **`dc-smoke`** | `fs-read` | `artifact-contract`, `non-empty-response` | `gemini-3-flash` | `low` |
+| **`dc-security-auditor`** | `fs-read`, `security` | `read-only-analyst`, `artifact-contract`, `non-empty-response` | `gemini-3.8-flash-high` | `high` |
+| **`dc-api-tester`** | `fs-read`, `api` | `read-only-analyst`, `artifact-contract`, `non-empty-response` | `gemini-3.8-flash-high` | `medium` |
 
 #### Bloques de Herramientas (`toolBricks`)
 

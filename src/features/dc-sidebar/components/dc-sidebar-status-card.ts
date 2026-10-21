@@ -32,12 +32,70 @@ import type { DcTaxiUnit } from "../../dc-agents/core/dc-ephemeral-types.ts";
 import { dcNotifier } from "../../../integrations/dc-notify/dc-notifier.ts";
 import { getSidebarContext } from "../dc-sidebar.ts";
 
+const dim = (s: string) => `\x1b[2m${s}\x1b[22m`;
+const bloodBrightAnsi = "\x1b[38;2;255;51;51m";
+const bloodBright = (s: string) => `${bloodBrightAnsi}${s}\x1b[0m`;
+const bloodSoft = (s: string) => `\x1b[38;2;255;128;128m${s}\x1b[0m`;
+const bloodWhite = (s: string) => `\x1b[38;2;255;204;204m${s}\x1b[0m`;
+
+export function formatTokens(count: number): string {
+  if (count < 1000) return count.toString();
+  if (count < 10000) return `${(count / 1000).toFixed(1)}k`;
+  if (count < 1000000) return `${Math.round(count / 1000)}k`;
+  if (count < 10000000) return `${(count / 1000000).toFixed(1)}M`;
+  return `${Math.round(count / 1000000)}M`;
+}
+
+export function createTaxiUnitRows(unit: DcTaxiUnit): DcJustifiedRow[] {
+  if (unit.status === "ocupado" && unit.passenger) {
+    const p = unit.passenger;
+    const role = formatPassengerRole(p);
+    const rawTask = p.taskLabel || "tarea en ejecución";
+    const taskShort = rawTask.length > 20 ? rawTask.slice(0, 19) + "…" : rawTask;
+    const modelRaw = p.model || "gemini-3.8-flash";
+    const modelClean = modelRaw.split("/").pop() || modelRaw;
+    const elapsed = formatElapsedDuration(p.startedAt);
+    const plate = p.plate || `DC-${p.pid}`;
+
+    const tokensNum = typeof p.tokens === "number"
+      ? p.tokens
+      : (typeof p.tokens === "object" && p.tokens !== null ? p.tokens.total : undefined);
+    const taximeterText = tokensNum !== undefined && tokensNum !== null
+      ? `${elapsed} · ${formatTokens(tokensNum)}`
+      : elapsed;
+
+    return [
+      new DcJustifiedRow(`      ${bloodSoft("Pasajero:")}`, `${bloodWhite(role)} `),
+      new DcJustifiedRow(`      ${bloodSoft("Circuito:")}`, `${bloodWhite(taskShort)} `),
+      new DcJustifiedRow(`      ${bloodSoft("Conductor:")}`, `${bloodSoft(modelClean)} `),
+      new DcJustifiedRow(`      ${bloodSoft("Placa:")}`, `${bloodWhite(plate)} `),
+      new DcJustifiedRow(`      ${bloodSoft("Taxímetro:")}`, `${dim(taximeterText)} `),
+      new DcJustifiedRow(
+        `      ${dim("Telemetría en vivo")}`,
+        `${bloodBright("[Alt+Shift+T ↗]")} `,
+        () => {
+          const currentCtx = getSidebarContext();
+          if (currentCtx) void openTaxisViewer(currentCtx);
+        }
+      ),
+    ];
+  }
+
+  if (unit.status === "recargando") {
+    return [
+      new DcJustifiedRow(`      ${bloodSoft("Estado:")}`, `${bloodBright("cuota baja (<5%)")} `),
+      new DcJustifiedRow(`      ${bloodSoft("Recarga:")}`, `${dim("esperando cuota >=60%")} `),
+    ];
+  }
+
+  // Libre
+  return [
+    new DcJustifiedRow(`      ${bloodSoft("Estado:")}`, `${bloodWhite("disponible")} `),
+    new DcJustifiedRow(`      ${bloodSoft("Asignación:")}`, `${dim("sin pasajero activo")} `),
+  ];
+}
+
 export function createStatusCard(reqRender: () => void): Component {
-  const dim = (s: string) => `\x1b[2m${s}\x1b[22m`;
-  const bloodBrightAnsi = "\x1b[38;2;255;51;51m";
-  const bloodBright = (s: string) => `${bloodBrightAnsi}${s}\x1b[0m`;
-  const bloodSoft = (s: string) => `\x1b[38;2;255;128;128m${s}\x1b[0m`;
-  const bloodWhite = (s: string) => `\x1b[38;2;255;204;204m${s}\x1b[0m`;
   const bold = (s: string) => `\x1b[1m${s}\x1b[22m`;
   const grayLight = (s: string) => `\x1b[38;2;150;150;150m${s}\x1b[0m`;
 
@@ -520,46 +578,6 @@ export function createStatusCard(reqRender: () => void): Component {
   });
 
   // --- Bloque 4: Taxis (Flota de subagentes y orquestador) ---
-  const createTaxiUnitRows = (unit: DcTaxiUnit) => {
-    if (unit.status === "ocupado" && unit.passenger) {
-      const p = unit.passenger;
-      const role = formatPassengerRole(p);
-      const rawTask = p.taskLabel || "tarea en ejecución";
-      const taskShort = rawTask.length > 20 ? rawTask.slice(0, 19) + "…" : rawTask;
-      const modelRaw = p.model || "gemini-3.8-flash";
-      const modelClean = modelRaw.split("/").pop() || modelRaw;
-      const elapsed = formatElapsedDuration(p.startedAt);
-      const pidStr = p.pid ? `PID ${p.pid}` : "PID -";
-
-      return [
-        new DcJustifiedRow(`      ${bloodSoft("Pasajero:")}`, `${bloodWhite(role)} `),
-        new DcJustifiedRow(`      ${bloodSoft("Tarea:")}`, `${bloodWhite(taskShort)} `),
-        new DcJustifiedRow(`      ${bloodSoft("Modelo:")}`, `${bloodSoft(modelClean)} `),
-        new DcJustifiedRow(`      ${bloodSoft("Proceso:")}`, `${dim(`${pidStr} · ${elapsed}`)} `),
-        new DcJustifiedRow(
-          `      ${dim("Telemetría en vivo")}`,
-          `${bloodBright("[Alt+Shift+T ↗]")} `,
-          () => {
-            const currentCtx = getSidebarContext();
-            if (currentCtx) void openTaxisViewer(currentCtx);
-          }
-        ),
-      ];
-    }
-
-    if (unit.status === "recargando") {
-      return [
-        new DcJustifiedRow(`      ${bloodSoft("Estado:")}`, `${bloodBright("cuota baja (<5%)")} `),
-        new DcJustifiedRow(`      ${bloodSoft("Recarga:")}`, `${dim("esperando cuota >=60%")} `),
-      ];
-    }
-
-    // Libre
-    return [
-      new DcJustifiedRow(`      ${bloodSoft("Estado:")}`, `${bloodWhite("disponible")} `),
-      new DcJustifiedRow(`      ${bloodSoft("Asignación:")}`, `${dim("sin pasajero activo")} `),
-    ];
-  };
 
   class TaxiUnitList implements Component {
     public children: DcCollapsible[] = [];

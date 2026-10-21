@@ -50,8 +50,11 @@ En lugar de mantener decenas de agentes estáticos en disco, `assembleLegoAgentP
 #### 1. Arquetipo (`archetype`) — Fast-Path preconfigurado (`dc-ephemeral-types.ts:326-358`)
 - **Flujo ODD:** `dc-odd-scout`, `dc-odd-worker`, `dc-odd-verifier`, `dc-odd-planner`.
 - **Flujo Planificado (Mini SDD):** `dc-phase-discovery`, `dc-phase-planning`, `dc-phase-apply`, `dc-phase-verify`.
-- **Auxiliares Especializados:** `dc-researcher`, `dc-news-to-day`, `dc-ui-visual-inspector`, `dc-browser-inspector`, `dc-pr-comment-analyst`, `dc-sentinel`, `dc-smoke`, `dc-media`, `dc-service-ops`, `dc-security-auditor`, `dc-api-tester`.
-- **Alias retrocompatibles:** `odd-scout`, `odd-worker`, `odd-verifier`, `odd-planner`, `dc-smoke-subagent`, `ui-visual-inspector`, `pr-comment-analyst`, `security-auditor`, `api-tester`.
+- **Auxiliares Especializados:** `dc-researcher`, `dc-tech-analyst`, `dc-news-to-day`, `dc-ui-visual-inspector`, `dc-browser-inspector`, `dc-pr-comment-analyst`, `dc-sentinel`, `dc-smoke`, `dc-media`, `dc-service-ops`, `dc-security-auditor`, `dc-api-tester`.
+- **Alias retrocompatibles:** `odd-scout`, `odd-worker`, `odd-verifier`, `odd-planner`, `dc-smoke-subagent`, `ui-visual-inspector`, `pr-comment-analyst`, `security-auditor`, `api-tester`, `tech-analyst`.
+
+> 🛡️ **Guarda de Recetas Explícitas (Cero Suposiciones):**  
+> Si se especifica un `archetype` que no existe en el catálogo, el sistema no adivina ni asume herramientas por defecto. El orquestador debe **crear la receta explícita** usando `toolBricks` (ej: `["fs-read", "web-search"]`) y `behaviorBricks` (ej: `["read-only-analyst"]`), o utilizar uno de los arquetipos canónicos registrados. Si falta la receta, el despachador rechaza la llamada informando con precisión qué bloques faltan.
 
 #### 2. Bloques de Herramientas (`toolBricks`) (`dc-ephemeral-types.ts:168-239`)
 Cada bloque habilita únicamente un subconjunto de herramientas e inyecta su directiva operativa (`DC_TOOL_BRICK_GUIDELINES`) en el prompt del subagente:

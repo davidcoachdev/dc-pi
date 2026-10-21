@@ -69,6 +69,23 @@ export function assembleLegoAgentPlan(options: DcEphemeralTaskOptions): Assemble
     archetypeDef = DC_AGENT_ARCHETYPES[canonicalArchetype];
   }
 
+  // Comprobar si se proporcionó una receta explícita (bloques de herramientas o herramientas directas)
+  const hasExplicitRecipe =
+    (Array.isArray(options.toolBricks) && options.toolBricks.length > 0) ||
+    (Array.isArray(options.tools) && options.tools.length > 0) ||
+    Boolean(options.toolPreset && DC_TOOL_PRESETS[options.toolPreset]);
+
+  // Si se solicitó un arquetipo inexistente sin proporcionar receta explícita, se rechaza tajantemente.
+  // En DC Studio no se asume nada por defecto: si la receta no está en la carta, el orquestador debe crearla.
+  if (options.archetype && !archetypeDef && !hasExplicitRecipe) {
+    const available = Object.keys(DC_AGENT_ARCHETYPES).join(", ");
+    throw new Error(
+      `El arquetipo "${options.archetype}" no existe en el catálogo. En DC Studio no se asume nada por defecto. ` +
+      `Para crear un subagente con un rol nuevo debes definir su receta explícita especificando 'toolBricks' ` +
+      `(ej: ['fs-read', 'web-search']) y 'behaviorBricks' (ej: ['read-only-analyst']), o utilizar un arquetipo canónico registrado: [${available}].`
+    );
+  }
+
   // 2. Resolver herramientas aisladas
   const toolSet = new Set<string>();
 
@@ -396,6 +413,7 @@ export function prepareEphemeralAgent(
       agentName,
       model: resolvedModel.baseModelName,
       taskLabel: options.label || options.role || options.archetype || options.task.slice(0, 40),
+      plate: `DC-${uuidShort.toUpperCase()}`,
     },
     resolvedModel.requestedAccount,
   );

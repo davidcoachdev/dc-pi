@@ -17,6 +17,10 @@ export interface DcTaxiPassenger {
   agentName?: string;
   model?: string;
   taskLabel?: string;
+  plate?: string;
+  tokens?: number | DcTaxiTripTokens;
+  cost?: number;
+  costEstimated?: number;
   startedAt: number;
   heartbeatAt: number;
 }
@@ -355,6 +359,7 @@ export type DcAgentArchetype =
   | "dc-service-ops"
   | "dc-security-auditor"
   | "dc-api-tester"
+  | "dc-tech-analyst"
   // DC Studio Review Lenses (RDD 4R Specialization)
   | "dc-lens-risk"
   | "dc-lens-resilience"
@@ -371,6 +376,8 @@ export const DC_ARCHETYPE_ALIASES: Record<string, DcAgentArchetype> = {
   "pr-comment-analyst": "dc-pr-comment-analyst",
   "security-auditor": "dc-security-auditor",
   "api-tester": "dc-api-tester",
+  "tech-analyst": "dc-tech-analyst",
+  "dc-tech-analyst": "dc-tech-analyst",
   "dc-lens-risk": "dc-lens-risk",
   "dc-lens-resilience": "dc-lens-resilience",
   "dc-lens-readability": "dc-lens-readability",
@@ -544,6 +551,14 @@ export const DC_AGENT_ARCHETYPES: Record<DcAgentArchetype, DcArchetypeDefinition
     behaviorBricks: ["read-only-analyst", "artifact-contract", "non-empty-response"],
     recommendedModel: "gemini-3.8-flash-high",
     defaultEffort: "medium",
+  },
+  "dc-tech-analyst": {
+    name: "dc-tech-analyst",
+    description: "Análisis técnico y arquitectónico en solo lectura combinando código local, grafo de dependencias, documentación oficial y búsqueda técnica.",
+    toolBricks: ["fs-read", "code-intel", "docs", "web-search"],
+    behaviorBricks: ["read-only-analyst", "source-verification", "artifact-contract", "non-empty-response"],
+    recommendedModel: "gemini-3.8-flash-high",
+    defaultEffort: "high",
   },
 
   // --- DC Studio Review Lenses (RDD 4R Specialization) ---
