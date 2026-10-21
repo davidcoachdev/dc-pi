@@ -456,6 +456,13 @@ export function reapAbandonedTaxis(
     if (unit.status !== "ocupado" || !unit.passenger) continue;
 
     const passenger = unit.passenger;
+    // Inmunidad del Orquestador: jamás desalojará un 'orchestrator' vivo
+    if (passenger.type === "orchestrator") {
+      if (isProcessAlive(passenger.pid)) {
+        continue;
+      }
+    }
+
     const isPidDead = !isProcessAlive(passenger.pid);
     // Un orquestador interactivo en una terminal viva NUNCA expira por TTL.
     // Solo se libera si su proceso en el sistema operativo murió realmente (isPidDead).
@@ -667,6 +674,9 @@ export function acquireOrchestratorTaxi(
   });
 }
 
+// Flag para autorizar explícitamente liberaciones originadas desde releaseOrchestratorTaxi
+let isExplicitOrchestratorReleaseActive = false;
+
 /**
  * Libera cualquier taxi ocupado por este orquestador al salir o cerrar sesión.
  */
@@ -676,33 +686,38 @@ export function releaseOrchestratorTaxi(
   fleetPath: string = FLEET_STATE_PATH,
   allowedAccounts?: string[],
 ): void {
-  withFleetLock(fleetPath, () => {
-    const state = loadFleetState(fleetPath, allowedAccounts);
-    let changed = false;
+  isExplicitOrchestratorReleaseActive = true;
+  try {
+    withFleetLock(fleetPath, () => {
+      const state = loadFleetState(fleetPath, allowedAccounts);
+      let changed = false;
 
-    for (const unit of Object.values(state.fleet)) {
-      if (
-        unit.passenger &&
-        unit.passenger.type === "orchestrator" &&
-        ((sessionId && unit.passenger.sessionId === sessionId) || unit.passenger.pid === pid)
-      ) {
-        unit.passenger = null;
-        unit.status = "libre";
-        const quota = getCachedTaxiQuota(unit.account);
-        updateTaxiRechargingState(unit, quota);
-        changed = true;
-        appendTaxiLog("INFO", "TAXI_ORCHESTRATOR_RELEASED", {
-          account: unit.account,
-          sessionId,
-          pid,
-        });
+      for (const unit of Object.values(state.fleet)) {
+        if (
+          unit.passenger &&
+          unit.passenger.type === "orchestrator" &&
+          ((sessionId && unit.passenger.sessionId === sessionId) || unit.passenger.pid === pid)
+        ) {
+          unit.passenger = null;
+          unit.status = "libre";
+          const quota = getCachedTaxiQuota(unit.account);
+          updateTaxiRechargingState(unit, quota);
+          changed = true;
+          appendTaxiLog("INFO", "TAXI_ORCHESTRATOR_RELEASED", {
+            account: unit.account,
+            sessionId,
+            pid,
+          });
+        }
       }
-    }
 
-    if (changed) {
-      saveFleetState(state, fleetPath);
-    }
-  });
+      if (changed) {
+        saveFleetState(state, fleetPath);
+      }
+    });
+  } finally {
+    isExplicitOrchestratorReleaseActive = false;
+  }
 }
 
 /**
@@ -798,8 +813,15 @@ export function leaseTaxi(
   });
 }
 
+export interface ReleaseTaxiOptions {
+  pid?: number;
+  fromOrchestratorRelease?: boolean;
+}
+
 /**
  * Libera un taxi y lo marca como libre en la flota compartida.
+ * Si el pasajero es de tipo 'orchestrator', cuenta con inmunidad estricta y solo se libera
+ * si proviene explícitamente de releaseOrchestratorTaxi o si sessionId y pid coinciden exactamente.
  */
 export function releaseTaxi(
   account: string,
@@ -807,6 +829,7 @@ export function releaseTaxi(
   fleetPath: string = FLEET_STATE_PATH,
   allowedAccounts?: string[],
   quotaGetter: (account: string) => DcTaxiQuotaInfo | undefined = getCachedTaxiQuota,
+  options?: ReleaseTaxiOptions,
 ): boolean {
   return withFleetLock(fleetPath, () => {
     const state = loadFleetState(fleetPath, allowedAccounts);
@@ -814,6 +837,27 @@ export function releaseTaxi(
 
     if (!unit || unit.status !== "ocupado") {
       return false;
+    }
+
+    // Inmunidad del Orquestador
+    if (unit.passenger && unit.passenger.type === "orchestrator") {
+      const isFromOrch = Boolean(options?.fromOrchestratorRelease || isExplicitOrchestratorReleaseActive);
+      const matchesSessionAndPid = Boolean(
+        sessionId &&
+        unit.passenger.sessionId === sessionId &&
+        (options?.pid ?? process.pid) === unit.passenger.pid
+      );
+
+      if (!isFromOrch && !matchesSessionAndPid) {
+        appendTaxiLog("WARN", "TAXI_ORCHESTRATOR_IMMUNITY_PROTECTED", {
+          account,
+          orchestratorSessionId: unit.passenger.sessionId,
+          orchestratorPid: unit.passenger.pid,
+          attemptedSessionId: sessionId,
+          attemptedPid: options?.pid ?? process.pid,
+        });
+        return false;
+      }
     }
 
     if (sessionId && unit.passenger && unit.passenger.sessionId !== sessionId) {
@@ -922,6 +966,187 @@ export function heartbeatTaxi(
 }
 
 /**
+ * Actualiza atómicamente el consumo de tokens y costo en el pasajero del taxi activo.
+ * Protegido con withFleetLock para garantizar concurrencia segura.
+ */
+export function updateTaxiPassengerUsage(
+  account: string,
+  tokens: number,
+  cost?: number,
+  fleetPath: string = FLEET_STATE_PATH,
+): boolean {
+  return withFleetLock(fleetPath, () => {
+    const state = loadFleetState(fleetPath);
+    const unit = state.fleet[account];
+
+    if (!unit || unit.status !== "ocupado" || !unit.passenger) {
+      return false;
+    }
+
+    unit.passenger.tokens = tokens;
+    if (cost !== undefined) {
+      unit.passenger.cost = cost;
+    }
+    saveFleetState(state, fleetPath);
+    return true;
+  });
+}
+
+export type DcTaxiPassengerInput = Omit<DcTaxiPassenger, "startedAt" | "heartbeatAt"> & {
+  startedAt?: number;
+  heartbeatAt?: number;
+};
+
+/**
+ * Arrienda N unidades libres reales sin especificar una lista cableada de cuentas.
+ * Ignora absolutamente las unidades con status 'en_taller' o 'recargando'.
+ */
+export function leaseAvailableTaxis(
+  count: number,
+  passengerFactory: (idx: number) => DcTaxiPassengerInput,
+  fleetPath: string = FLEET_STATE_PATH,
+  leaseTtlMs: number = DEFAULT_DC_AGENTS_CONFIG.accountPool.leaseTtlMs,
+  allowedAccounts?: string[],
+  quotaGetter: (account: string) => DcTaxiQuotaInfo | undefined = getCachedTaxiQuota,
+): DcTaxiUnit[] {
+  if (count <= 0) return [];
+  return withFleetLock(fleetPath, () => {
+    const state = loadFleetState(fleetPath, allowedAccounts);
+    reapAbandonedTaxis(state, leaseTtlMs, Date.now(), quotaGetter);
+
+    // Evaluar unidades en 'recargando' y 'libre'
+    for (const unit of Object.values(state.fleet)) {
+      if (unit.status === "recargando" || unit.status === "libre") {
+        const quota = quotaGetter(unit.account);
+        updateTaxiRechargingState(unit, quota);
+      }
+    }
+
+    // Filtrar estrictamente unidades 'libre', ignorando 'en_taller', 'ocupado', 'recargando'
+    const freeUnits = Object.values(state.fleet).filter((u) => u.status === "libre");
+
+    // Ordenar de mayor a menor cuota restante
+    freeUnits.sort((a, b) => {
+      const qA = quotaGetter(a.account)?.gemini5hPct ?? 100;
+      const qB = quotaGetter(b.account)?.gemini5hPct ?? 100;
+      if (qB !== qA) {
+        return qB - qA;
+      }
+      return a.account.localeCompare(b.account, undefined, { numeric: true });
+    });
+
+    const unitsToLease = freeUnits.slice(0, count);
+    const leasedUnits: DcTaxiUnit[] = [];
+    const now = Date.now();
+
+    for (let i = 0; i < unitsToLease.length; i++) {
+      const unit = unitsToLease[i];
+      const passengerData = passengerFactory(i);
+      const plate = passengerData.plate || `DC-${randomUUID().slice(0, 6).toUpperCase()}`;
+      const fullPassenger: DcTaxiPassenger = {
+        ...passengerData,
+        plate,
+        startedAt: passengerData.startedAt || now,
+        heartbeatAt: passengerData.heartbeatAt || now,
+      };
+
+      unit.status = "ocupado";
+      unit.passenger = fullPassenger;
+      leasedUnits.push(unit);
+
+      appendTaxiLog("INFO", "TAXI_LEASED", {
+        account: unit.account,
+        type: fullPassenger.type,
+        sessionId: fullPassenger.sessionId,
+        pid: fullPassenger.pid,
+        model: fullPassenger.model,
+        preferred: false,
+        quotaPct: quotaGetter(unit.account)?.gemini5hPct ?? null,
+      });
+    }
+
+    if (leasedUnits.length < count) {
+      appendTaxiLog("WARN", "TAXI_FLEET_EXHAUSTED", {
+        requestedCount: count,
+        allocatedCount: leasedUnits.length,
+      });
+    }
+
+    if (leasedUnits.length > 0) {
+      saveFleetState(state, fleetPath);
+    }
+
+    return leasedUnits;
+  });
+}
+
+/**
+ * Envía una unidad de taxi al taller por avería o fallo de autenticación fatal (ej: HTTP 400/401/403).
+ */
+export function sendTaxiToWorkshop(
+  account: string,
+  reason: string,
+  fleetPath: string = FLEET_STATE_PATH,
+  allowedAccounts?: string[],
+): boolean {
+  return withFleetLock(fleetPath, () => {
+    const state = loadFleetState(fleetPath, allowedAccounts);
+    const unit = state.fleet[account];
+    if (!unit) {
+      return false;
+    }
+
+    unit.status = "en_taller";
+    unit.passenger = null;
+    unit.workshopReason = reason;
+    unit.workshopSince = Date.now();
+
+    saveFleetState(state, fleetPath);
+
+    appendTaxiLog("WARN", "TAXI_WORKSHOP_ENTERED", {
+      account,
+      reason,
+      workshopSince: unit.workshopSince,
+    });
+
+    return true;
+  });
+}
+
+/**
+ * Repara una unidad de taxi en taller y la devuelve al estado libre (o recargando si cuota < 5%).
+ */
+export function repairTaxiFromWorkshop(
+  account: string,
+  fleetPath: string = FLEET_STATE_PATH,
+  allowedAccounts?: string[],
+  quotaGetter: (account: string) => DcTaxiQuotaInfo | undefined = getCachedTaxiQuota,
+): boolean {
+  return withFleetLock(fleetPath, () => {
+    const state = loadFleetState(fleetPath, allowedAccounts);
+    const unit = state.fleet[account];
+    if (!unit || unit.status !== "en_taller") {
+      return false;
+    }
+
+    unit.status = "libre";
+    delete unit.workshopReason;
+    delete unit.workshopSince;
+
+    const quota = quotaGetter(account);
+    updateTaxiRechargingState(unit, quota);
+
+    saveFleetState(state, fleetPath);
+
+    appendTaxiLog("INFO", "TAXI_WORKSHOP_REPAIRED", {
+      account,
+    });
+
+    return true;
+  });
+}
+
+/**
  * Devuelve un resumen estadístico de la flota para TUI y auditoría.
  */
 export function getFleetStatusSummary(
@@ -932,6 +1157,7 @@ export function getFleetStatusSummary(
   libres: number;
   ocupados: number;
   recargando: number;
+  en_taller: number;
   units: DcTaxiUnit[];
 } {
   const state = loadFleetState(fleetPath, allowedAccounts);
@@ -949,12 +1175,14 @@ export function getFleetStatusSummary(
   const libres = units.filter((u) => u.status === "libre").length;
   const ocupados = units.filter((u) => u.status === "ocupado").length;
   const recargando = units.filter((u) => u.status === "recargando").length;
+  const en_taller = units.filter((u) => u.status === "en_taller").length;
 
   return {
     total,
     libres,
     ocupados,
     recargando,
+    en_taller,
     units,
   };
 }

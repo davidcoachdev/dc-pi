@@ -60,9 +60,20 @@ export function createTaxiUnitRows(unit: DcTaxiUnit): DcJustifiedRow[] {
     const tokensNum = typeof p.tokens === "number"
       ? p.tokens
       : (typeof p.tokens === "object" && p.tokens !== null ? p.tokens.total : undefined);
-    const taximeterText = tokensNum !== undefined && tokensNum !== null
-      ? `${elapsed} · ${formatTokens(tokensNum)}`
-      : elapsed;
+    const costNum = typeof p.cost === "number"
+      ? p.cost
+      : (typeof p.costEstimated === "number" ? p.costEstimated : undefined);
+
+    let taximeterText: string;
+    if (tokensNum !== undefined && tokensNum !== null && costNum !== undefined && costNum !== null) {
+      taximeterText = `${elapsed} - ${formatTokens(tokensNum)} tk - $${costNum.toFixed(2)}`;
+    } else if (tokensNum !== undefined && tokensNum !== null) {
+      taximeterText = `${elapsed} - ${formatTokens(tokensNum)} tk`;
+    } else if (costNum !== undefined && costNum !== null) {
+      taximeterText = `${elapsed} - $${costNum.toFixed(2)}`;
+    } else {
+      taximeterText = elapsed;
+    }
 
     return [
       new DcJustifiedRow(`      ${bloodSoft("Pasajero:")}`, `${bloodWhite(role)} `),
@@ -72,6 +83,22 @@ export function createTaxiUnitRows(unit: DcTaxiUnit): DcJustifiedRow[] {
       new DcJustifiedRow(`      ${bloodSoft("Taxímetro:")}`, `${dim(taximeterText)} `),
       new DcJustifiedRow(
         `      ${dim("Telemetría en vivo")}`,
+        `${bloodBright("[Alt+Shift+T ↗]")} `,
+        () => {
+          const currentCtx = getSidebarContext();
+          if (currentCtx) void openTaxisViewer(currentCtx);
+        }
+      ),
+    ];
+  }
+
+  if (unit.status === "en_taller") {
+    const reason = unit.workshopReason || "Google Auth Error / Deshabilitada";
+    return [
+      new DcJustifiedRow(`      ${bloodSoft("Estado:")}`, `${bloodBright("🛠️ EN TALLER")} `),
+      new DcJustifiedRow(`      ${bloodSoft("Motivo:")}`, `${bloodWhite(reason)} `),
+      new DcJustifiedRow(
+        `      ${dim("Gestor Taxis")}`,
         `${bloodBright("[Alt+Shift+T ↗]")} `,
         () => {
           const currentCtx = getSidebarContext();
@@ -601,6 +628,9 @@ export function createStatusCard(reqRender: () => void): Component {
         } else if (unit.status === "recargando") {
           titleBadge = bloodBright("◐ recarga");
           titleExtra = dim("(<5%)");
+        } else if (unit.status === "en_taller") {
+          titleBadge = bloodBright("🛠️ EN TALLER");
+          titleExtra = bloodBright("[avería]");
         }
 
         const titleText = `   🚕 ${bloodWhite(bold(unit.account))} ${titleExtra}`;
