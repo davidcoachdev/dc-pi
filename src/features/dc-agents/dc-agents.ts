@@ -1,4 +1,5 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import fs from "node:fs";
 import { openDcModal } from "../../ui/dc-modal.ts";
 import { dcNotifier } from "../../integrations/dc-notify/dc-notifier.ts";
 import { syncDcAgents, syncDcSkills, type DcAgentsSyncResult } from "./core/dc-agents-sync.ts";
@@ -17,7 +18,7 @@ import {
   getFleetStatusSummary,
   updateTaxiPassengerUsage,
 } from "./core/dc-taxi-dispatcher.ts";
-import { getCachedTaxiQuota, type DcTaxiQuotaInfo } from "./core/dc-taxi-quota.ts";
+import { getCachedTaxiQuota, fetchTaxiQuota, type DcTaxiQuotaInfo } from "./core/dc-taxi-quota.ts";
 import { getContextUsageInfo } from "../dc-sidebar/providers/dc-context-provider.ts";
 import { fetchJson } from "../../integrations/dc-http/dc-fetch.ts";
 import { registerDcEphemeralTools } from "./tools/dc-ephemeral-tools.ts";
@@ -309,30 +310,64 @@ export async function handleOrchestratorQuotaHandover(
     return { performed: false };
   }
 
-  const getter = quotaGetter || getCachedTaxiQuota;
-  const qInfo = getter(account);
-  if (!qInfo || typeof qInfo.gemini5hPct !== "number") {
+  let qInfo: DcTaxiQuotaInfo | undefined;
+  if (quotaGetter) {
+    qInfo = quotaGetter(account);
+  } else {
+    try {
+      qInfo = await fetchTaxiQuota(account);
+    } catch {
+      qInfo = getCachedTaxiQuota(account);
+    }
+  }
+
+  // Evaluar cuota según la familia del modelo activo (Claude vs Gemini)
+  let effectivePct = qInfo?.gemini5hPct;
+  if (currentModelId && /claude/i.test(currentModelId)) {
+    effectivePct = qInfo?.claude5hPct ?? qInfo?.gemini5hPct;
+  }
+
+  if (typeof effectivePct !== "number") {
     return { performed: false };
   }
 
-  if (qInfo.gemini5hPct < 10) {
+  if (effectivePct < 10) {
     const previousAccount = account;
 
-    // 1. Enviar el taxi anterior a 'recargando'
-    withFleetLock(fleetPath || "", () => {
-      const state = loadFleetState(fleetPath);
-      const prevUnit = state.fleet[previousAccount];
-      if (prevUnit) {
-        prevUnit.status = "recargando";
-        prevUnit.passenger = null;
-        saveFleetState(state, fleetPath);
+    // 1. Cargar las cuentas existentes en el fleetPath para no inventar cuentas de CPAM externas en tests
+    let existingAccounts: string[] | undefined;
+    try {
+      if (fleetPath && fs.existsSync(fleetPath)) {
+        const raw = JSON.parse(fs.readFileSync(fleetPath, "utf8"));
+        if (raw?.fleet) existingAccounts = Object.keys(raw.fleet);
       }
-    });
+    } catch {
+      /* defensive */
+    }
 
-    // 2. Realizar relevo automático a una nueva unidad libre de CPAM con 'acquireOrchestratorTaxi'
-    const taxiResult = acquireOrchestratorTaxi(sessionId, currentModelId, fleetPath);
+    // 2. Intentar adquirir un nuevo taxi libre excluyendo el actual
+    const taxiResult = acquireOrchestratorTaxi(
+      sessionId,
+      currentModelId,
+      fleetPath,
+      process.pid,
+      existingAccounts,
+      "gemini-3.8-flash-high",
+      "cpam",
+      [previousAccount],
+    );
 
     if (taxiResult && taxiResult.account !== previousAccount) {
+      // Enviar el taxi anterior a 'recargando'
+      withFleetLock(fleetPath || "", () => {
+        const state = loadFleetState(fleetPath);
+        const prevUnit = state.fleet[previousAccount];
+        if (prevUnit) {
+          prevUnit.status = "recargando";
+          prevUnit.passenger = null;
+          saveFleetState(state, fleetPath);
+        }
+      });
       if (pi && taxiResult.modelId) {
         try {
           const slashIdx = taxiResult.modelId.indexOf("/");
@@ -340,11 +375,27 @@ export async function handleOrchestratorQuotaHandover(
           const targetId = slashIdx > 0 ? taxiResult.modelId.slice(slashIdx + 1) : taxiResult.modelId;
 
           const available = await (ctx as any).modelRegistry?.getAvailable?.();
-          const foundModel = ctx.modelRegistry?.find?.(targetProvider, targetId)
+          let foundModel = ctx.modelRegistry?.find?.(targetProvider, targetId)
             || (Array.isArray(available) ? available.find((m: any) => m.id === targetId || m.id === taxiResult.modelId) : undefined);
+
+          // Si el modelo idéntico no existe en la nueva cuenta, fallback a gemini-3.8-flash-high
+          if (!foundModel) {
+            const fallbackId = `${taxiResult.account}/gemini-3.8-flash-high`;
+            foundModel = ctx.modelRegistry?.find?.(targetProvider, fallbackId)
+              || (Array.isArray(available) ? available.find((m: any) => m.id === fallbackId || m.id === `${targetProvider}/${fallbackId}`) : undefined);
+          }
 
           if (foundModel) {
             await (pi as any).setModel(foundModel);
+
+            // Si el modelo resultante es gemini-3.8-flash-high, asegurar effort medium
+            if (foundModel.id?.includes("gemini-3.8-flash-high")) {
+              try {
+                (pi as any).setThinkingLevel?.("medium");
+              } catch {
+                /* optional thinking level */
+              }
+            }
           }
         } catch {
           /* fallback */
@@ -366,6 +417,34 @@ export async function handleOrchestratorQuotaHandover(
         previousAccount,
         newAccount: taxiResult.account,
       };
+    }
+
+    // 4. Si no se pudo cambiar de cuenta (flota saturada): cambiar de modelo a gemini-3.8-flash-high con effort medium
+    if (pi) {
+      try {
+        const available = await (ctx as any).modelRegistry?.getAvailable?.();
+        const fallbackId = `${account}/gemini-3.8-flash-high`;
+        const fallbackModel = ctx.modelRegistry?.find?.("cpam", fallbackId)
+          || ctx.modelRegistry?.find?.("cpam", `${account}/gemini-3.8-flash-high`)
+          || (Array.isArray(available) ? available.find((m: any) => m.id === fallbackId || m.id === `cpam/${fallbackId}`) : undefined)
+          || (Array.isArray(available) ? available.find((m: any) => m.id?.includes("gemini-3.8-flash-high")) : undefined);
+
+        if (fallbackModel) {
+          await (pi as any).setModel(fallbackModel);
+          (pi as any).setThinkingLevel?.("medium");
+          if (ctx.hasUI) {
+            dcNotifier.notify(
+              ctx as ExtensionContext,
+              "🚕 Supervisor de Taxis",
+              `No se pudo cambiar de cuenta. Modelo ajustado a ${fallbackModel.id} con effort medium.`,
+              "warning",
+            );
+          }
+          return { performed: true, previousAccount: account, newAccount: account };
+        }
+      } catch {
+        /* defensive */
+      }
     }
   }
 

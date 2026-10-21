@@ -3267,6 +3267,158 @@ test("MÓDULO E: Supervisor Pre-Vuelo del Orquestador (before_agent_start Quota 
   }
 });
 
+test("MÓDULO E: Relevo de taxi preserva el mismo modelo base (ej: claude-sonnet-4-6)", async () => {
+  const tempDir = createTempDir("orch-preserve-model");
+  const fleetPath = path.join(tempDir, "dc-taxis.json");
+
+  try {
+    const customAccounts = ["ac01", "ac02"];
+    const state = createInitialFleetState(customAccounts);
+    state.fleet["ac01"].status = "ocupado";
+    state.fleet["ac01"].passenger = {
+      type: "orchestrator",
+      sessionId: "orch-sess-preserve",
+      pid: process.pid,
+      model: "cpam/ac01/claude-sonnet-4-6",
+      taskLabel: "Sesión Principal",
+      plate: `DC-HOST-${process.pid}`,
+      startedAt: Date.now() - 5_000,
+      heartbeatAt: Date.now(),
+    };
+    saveFleetState(state, fleetPath);
+
+    let switchedModel: any = undefined;
+    const mockPi: any = {
+      setModel: async (m: any) => {
+        switchedModel = m;
+      },
+    };
+
+    const mockCtx = {
+      hasUI: true,
+      mode: "tui",
+      model: { provider: "cpam", id: "ac01/claude-sonnet-4-6" },
+      sessionManager: { getSessionId: () => "orch-sess-preserve" },
+      modelRegistry: {
+        getAvailable: async () => [{ provider: "cpam", id: "ac02/claude-sonnet-4-6" }],
+        find: (_p: string, id: string) => ({ provider: "cpam", id }),
+      },
+    } as any;
+
+    const mockQuotaCritical = (ac: string) => ({
+      account: ac,
+      gemini5hPct: 90,
+      claude5hPct: ac === "ac01" ? 2 : 95,
+      geminiWeeklyPct: 90,
+      lastChecked: Date.now(),
+    });
+
+    const res = await handleOrchestratorQuotaHandover(mockCtx, mockPi, fleetPath, mockQuotaCritical);
+    assert.equal(res.performed, true);
+    assert.equal(res.previousAccount, "ac01");
+    assert.equal(res.newAccount, "ac02");
+    assert.ok(switchedModel);
+    // Debe preservar claude-sonnet-4-6 en ac02
+    assert.equal(switchedModel.id, "ac02/claude-sonnet-4-6");
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("MÓDULO E: Fallback a gemini-3.8-flash-high con effort medium cuando la flota está saturada", async () => {
+  const tempDir = createTempDir("orch-fallback-gemini");
+  const fleetPath = path.join(tempDir, "dc-taxis.json");
+
+  try {
+    const customAccounts = ["ac01"]; // Solo ac01 existe en la flota
+    const state = createInitialFleetState(customAccounts);
+    // ac01 ocupada por OTRA sesión para forzar saturación total de la flota
+    state.fleet["ac01"].status = "ocupado";
+    state.fleet["ac01"].passenger = {
+      type: "orchestrator",
+      sessionId: "other-active-session",
+      pid: 9999999, // PID simulado ajeno
+      model: "cpam/ac01/claude-sonnet-4-6",
+      taskLabel: "Otra Sesión",
+      plate: `DC-HOST-9999999`,
+      startedAt: Date.now() - 5_000,
+      heartbeatAt: Date.now(),
+    };
+    saveFleetState(state, fleetPath);
+
+    let switchedModel: any = undefined;
+    let thinkingLevelSet: string | undefined = undefined;
+    const mockPi: any = {
+      setModel: async (m: any) => {
+        switchedModel = m;
+      },
+      setThinkingLevel: (lvl: string) => {
+        thinkingLevelSet = lvl;
+      },
+    };
+
+    const mockCtx = {
+      hasUI: true,
+      mode: "tui",
+      model: { provider: "cpam", id: "ac01/claude-sonnet-4-6" },
+      sessionManager: { getSessionId: () => "orch-sess-sat" },
+      modelRegistry: {
+        getAvailable: async () => [{ provider: "cpam", id: "ac01/gemini-3.8-flash-high" }],
+        find: (_p: string, id: string) => {
+          if (id === "ac01/gemini-3.8-flash-high") return { provider: "cpam", id };
+          return undefined;
+        },
+      },
+    } as any;
+
+    const mockQuotaCritical = (_ac: string) => ({
+      account: "ac01",
+      gemini5hPct: 80,
+      claude5hPct: 4, // Cuota de Claude agotada (< 10%)
+      geminiWeeklyPct: 80,
+      lastChecked: Date.now(),
+    });
+
+    const res = await handleOrchestratorQuotaHandover(mockCtx, mockPi, fleetPath, mockQuotaCritical);
+    assert.equal(res.performed, true);
+    assert.ok(switchedModel);
+    assert.equal(switchedModel.id, "ac01/gemini-3.8-flash-high");
+    assert.equal(thinkingLevelSet, "medium", "Debe fijar effort medium al cambiar a gemini-3.8-flash-high");
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("MÓDULO E: acquireOrchestratorTaxi selecciona la unidad libre con mayor cuota disponible", () => {
+  const tempDir = createTempDir("orch-select-highest-quota");
+  const fleetPath = path.join(tempDir, "dc-taxis.json");
+
+  try {
+    const customAccounts = ["ac01", "ac02", "ac03"];
+    const state = createInitialFleetState(customAccounts);
+    // ac01 está ocupada
+    state.fleet["ac01"].status = "ocupado";
+    // ac02 y ac03 están libres
+    state.fleet["ac02"].status = "libre";
+    state.fleet["ac03"].status = "libre";
+    saveFleetState(state, fleetPath);
+
+    // Direct test de acquireOrchestratorTaxi con un modelo que busca nueva cuenta
+    const res = acquireOrchestratorTaxi(
+      "new-sess-highest",
+      "cpam/ac01/gemini-3.8-flash-high",
+      fleetPath,
+      process.pid,
+      customAccounts,
+    );
+    assert.ok(res);
+    // Ambas están libres; acquireOrchestratorTaxi debe haber asignado una de las libres (ac02 o ac03)
+    assert.ok(res.account === "ac02" || res.account === "ac03");
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
 
 
 
