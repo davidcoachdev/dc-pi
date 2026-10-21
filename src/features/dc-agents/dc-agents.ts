@@ -571,6 +571,18 @@ export default function dcAgentsExtension(pi: ExtensionAPI): void {
     }
   });
 
+  // En before_agent_start: Supervisor Pre-Vuelo del Orquestador (Pre-Prompt Quota Gate).
+  // Si la cuenta activa del orquestador tiene cuota crítica (< 10%), realiza el relevo
+  // a una unidad con mayor cuota ANTES de iniciar el turno para evitar fallos a mitad de llamada.
+  pi.on("before_agent_start", async (_event: any, ctx: ExtensionContext) => {
+    try {
+      if (!ctx.hasUI || ctx.mode !== "tui" || process.argv.includes("rpc")) return;
+      await handleOrchestratorQuotaHandover(ctx, pi);
+    } catch {
+      /* defensive */
+    }
+  });
+
   // En turn_end: si hubo error de autenticación con proveedor, enviar el taxi a taller.
   // Sincronizar continuo de tokens y costo en pasajero.
   // Supervisar cuota del orquestador (< 10%).
