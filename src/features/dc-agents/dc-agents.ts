@@ -587,25 +587,30 @@ export default function dcAgentsExtension(pi: ExtensionAPI): void {
       const sessionId = ctx.sessionManager?.getSessionId?.() || `ambient-${Date.now()}`;
       
       const taxiResult = acquireOrchestratorTaxi(sessionId, currentModelId);
-      if (taxiResult && taxiResult.changed && taxiResult.modelId) {
+      if (taxiResult && taxiResult.modelId) {
         try {
           const slashIdx = taxiResult.modelId.indexOf("/");
           const targetProvider = slashIdx > 0 ? taxiResult.modelId.slice(0, slashIdx) : "cpam";
           const targetId = slashIdx > 0 ? taxiResult.modelId.slice(slashIdx + 1) : taxiResult.modelId;
 
-          const available = await (ctx as any).modelRegistry?.getAvailable?.();
-          const foundModel = ctx.modelRegistry?.find?.(targetProvider, targetId)
-            || (Array.isArray(available) ? available.find((m: any) => m.id === targetId || m.id === taxiResult.modelId) : undefined);
+          const currentEffectiveId = ctx.model ? `${ctx.model.provider || "cpam"}/${ctx.model.id}` : undefined;
+          const isModelMismatch = !currentEffectiveId || currentEffectiveId !== taxiResult.modelId;
 
-          if (foundModel) {
-            await (pi as any).setModel(foundModel);
-            if (ctx.hasUI) {
-              dcNotifier.notify(
-                ctx,
-                "🚕 Flota de Taxis",
-                `Taxi ${taxiResult.account.toUpperCase()} asignado a esta terminal (${targetId})`,
-                "info",
-              );
+          if (taxiResult.changed || isModelMismatch) {
+            const available = await (ctx as any).modelRegistry?.getAvailable?.();
+            const foundModel = ctx.modelRegistry?.find?.(targetProvider, targetId)
+              || (Array.isArray(available) ? available.find((m: any) => m.id === targetId || m.id === taxiResult.modelId) : undefined);
+
+            if (foundModel) {
+              await (pi as any).setModel(foundModel);
+              if (ctx.hasUI) {
+                dcNotifier.notify(
+                  ctx,
+                  "🚕 Flota de Taxis",
+                  `Taxi ${taxiResult.account.toUpperCase()} asignado a esta terminal (${targetId})`,
+                  "info",
+                );
+              }
             }
           }
         } catch {
