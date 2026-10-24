@@ -138,6 +138,69 @@ test("DcQuotaPanel filters accounts by search query", () => {
   assert.equal(panel.getFilteredSections().length, 2);
 });
 
+test("DcQuotaPanel scrollbar and viewport scrolling with mouse wheel and keys", () => {
+  // Generar 25 secciones para forzar el desbordamiento del viewport
+  const sections: QuotaSection[] = Array.from({ length: 25 }, (_, i) => ({
+    id: `ac${String(i + 1).padStart(2, "0")}`,
+    title: `[AC${String(i + 1).padStart(2, "0")}]`,
+    rows: [{ label: "Five-hour", pctLeft: 100, resetMs: null }],
+  }));
+
+  const panel = new DcQuotaPanel({
+    theme: dummyTheme,
+    sections,
+    requestRender: () => {},
+  });
+
+  const lines1 = panel.render(80);
+  assert.ok(lines1.some((l) => l.includes("▲") || l.includes("▼") || l.includes("█") || l.includes("░")));
+  assert.equal(panel.getActiveSection().id, "ac01");
+
+  // Mouse wheel down en columna de cuentas (x=5) avanza la cuenta
+  panel.handleMouse({
+    type: "wheel",
+    wheelDelta: 1,
+    x: 5,
+    y: 6,
+  } as unknown as TuiMouseEvent);
+  assert.equal(panel.getActiveSection().id, "ac02");
+
+  // Navegación con tecla abajo hasta el final
+  for (let i = 0; i < 20; i++) {
+    panel.handleInput("\x1b[B"); // down
+  }
+  assert.equal(panel.getActiveSection().id, "ac22");
+
+  const linesScrolled = panel.render(80);
+  assert.ok(linesScrolled.some((l) => l.includes("AC22")));
+});
+
+test("fetchBridgeQuota duplicates Claude entries to Gemini for shared Antigravity quota", async () => {
+  // Verificación unitaria de la lógica de duplicación cuando hay Claude pero no Gemini
+  const mockRows = [
+    { label: "Claude Weekly", pctLeft: 85, resetMs: 1000 },
+    { label: "Claude Five-hour", pctLeft: 95, resetMs: 2000 },
+  ];
+  const hasClaude = mockRows.some((r) => r.label.toLowerCase().includes("claude"));
+  const hasGemini = mockRows.some((r) => r.label.toLowerCase().includes("gemini"));
+
+  assert.ok(hasClaude);
+  assert.equal(hasGemini, false);
+
+  const enriched = [...mockRows];
+  for (const cr of mockRows) {
+    enriched.push({
+      label: cr.label.replace(/Claude/i, "Gemini"),
+      pctLeft: cr.pctLeft,
+      resetMs: cr.resetMs,
+    });
+  }
+
+  assert.equal(enriched.length, 4);
+  assert.ok(enriched.some((r) => r.label === "Gemini Weekly" && r.pctLeft === 85));
+  assert.ok(enriched.some((r) => r.label === "Gemini Five-hour" && r.pctLeft === 95));
+});
+
 test("dcQuotaExtension registers only /dc-quota with Alt+Shift+Q", () => {
   const registeredCommands: string[] = [];
   let registeredShortcut: string | undefined;

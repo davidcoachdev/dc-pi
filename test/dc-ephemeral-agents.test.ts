@@ -82,6 +82,7 @@ import {
   sanitizeWorkshopReason,
   isProviderAuthError,
   handleOrchestratorQuotaHandover,
+  KNOWN_FATAL_AUTH_ACCOUNTS,
 } from "../src/features/dc-agents/dc-agents.ts";
 import { createTaxiUnitRows } from "../src/features/dc-sidebar/components/dc-sidebar-status-card.ts";
 import {
@@ -2518,9 +2519,11 @@ test("MÓDULO B: auditAccountForWorkshop sends ac40 and 400/401/403 fatal auth a
     const state = createInitialFleetState(customAccounts);
     saveFleetState(state, fleetPath);
 
-    // 1. ac40 es fatal auth conocido por defecto -> debe enviarse directamente a taller
+    // 1. Cuentas con fallo fatal conocido registradas en KNOWN_FATAL_AUTH_ACCOUNTS
+    KNOWN_FATAL_AUTH_ACCOUNTS.add("ac40");
     const sentAc40 = await auditAccountForWorkshop("ac40", fleetPath);
     assert.equal(sentAc40, true, "ac40 debe ser enviada a taller automáticamente");
+    KNOWN_FATAL_AUTH_ACCOUNTS.delete("ac40");
 
     const state1 = loadFleetState(fleetPath, customAccounts);
     assert.equal(state1.fleet["ac40"].status, "en_taller");
@@ -3432,34 +3435,39 @@ test("MÓDULO F: getEffectiveQuotaPct and updateTaxiRechargingState multi-model 
     const initial = createInitialFleetState(customAccounts);
     saveFleetState(initial, fleetPath);
 
-    // Caso 1: Cuenta con Claude Weekly en 0% y 5h en 100% -> getEffectiveQuotaPct debe ser 0%
+    // Caso 1: Cuenta con Claude Weekly en 0% pero Gemini en 100%
     setCachedTaxiQuota("ac01", {
       claudeWeeklyPct: 0,
       claude5hPct: 100,
       gemini5hPct: 100,
     });
     const q1 = getCachedTaxiQuota("ac01");
-    assert.equal(getEffectiveQuotaPct(q1), 0);
+    // Para Claude la cuota efectiva es 0%
+    assert.equal(getEffectiveQuotaPct(q1, "claude"), 0);
+    // Para Gemini la cuota efectiva es 100%
+    assert.equal(getEffectiveQuotaPct(q1, "gemini"), 100);
 
-    // Al evaluar actualización de estado en unidad libre, debe pasar a 'recargando'
+    // Si la cuota primaria (Gemini) cae < 5% (ej: 2%), la unidad pasa a 'recargando'
+    setCachedTaxiQuota("ac01", { gemini5hPct: 2 });
+    const q1Low = getCachedTaxiQuota("ac01");
     const unit1 = { account: "ac01", status: "libre" as const, passenger: null };
-    updateTaxiRechargingState(unit1, q1);
+    updateTaxiRechargingState(unit1, q1Low);
     assert.equal(unit1.status, "recargando");
 
-    // Caso 2: Cuenta en recarga recupera >= 60% en todas sus ventanas -> vuelve a libre
+    // Caso 2: Cuenta en recarga recupera >= 60% en Gemini -> vuelve a libre
     setCachedTaxiQuota("ac01", {
       claudeWeeklyPct: 80,
       claude5hPct: 90,
       gemini5hPct: 85,
     });
     const q1Restored = getCachedTaxiQuota("ac01");
-    assert.equal(getEffectiveQuotaPct(q1Restored), 80);
+    assert.equal(getEffectiveQuotaPct(q1Restored), 85);
     updateTaxiRechargingState(unit1, q1Restored);
     assert.equal(unit1.status, "libre");
 
     // Caso 3: getFleetStatusSummary persiste atómicamente cuando detecta transiciones
     initial.fleet["ac02"].status = "libre";
-    setCachedTaxiQuota("ac02", { claudeWeeklyPct: 2 }); // Cuota crítica < 5%
+    setCachedTaxiQuota("ac02", { gemini5hPct: 2 }); // Cuota crítica < 5%
     saveFleetState(initial, fleetPath);
 
     const summary = getFleetStatusSummary(fleetPath, customAccounts);

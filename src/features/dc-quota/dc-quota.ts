@@ -168,6 +168,22 @@ async function fetchAntigravityRows(
         }
       }
       void prefix;
+
+      // Si el grupo incluye Claude/GPT pero no expone Gemini explícitamente (Antigravity quota pool compartido),
+      // duplicar filas bajo la etiqueta Gemini para visibilidad clara del usuario
+      const hasClaude = rows.some((r) => r.label.toLowerCase().includes("claude"));
+      const hasGemini = rows.some((r) => r.label.toLowerCase().includes("gemini"));
+      if (hasClaude && !hasGemini) {
+        const claudeRows = rows.filter((r) => r.label.toLowerCase().includes("claude"));
+        for (const cr of claudeRows) {
+          rows.push({
+            label: cr.label.replace(/Claude/i, "Gemini"),
+            pctLeft: cr.pctLeft,
+            resetMs: cr.resetMs,
+          });
+        }
+      }
+
       if (rows.length) return rows;
     } catch {
       /* probar siguiente URL */
@@ -239,7 +255,7 @@ async function fetchCodexData(
 export async function fetchBridgeQuota(prefix: string): Promise<QuotaRow[] | null> {
   try {
     const res = await fetchJson(`http://127.0.0.1:8325/quota/${encodeURIComponent(prefix)}`, {
-      timeoutMs: 400,
+      timeoutMs: 1500,
     });
     const d = res as {
       entries?: Array<{
@@ -250,7 +266,7 @@ export async function fetchBridgeQuota(prefix: string): Promise<QuotaRow[] | nul
       }>;
     };
     if (!Array.isArray(d?.entries) || d.entries.length === 0) return null;
-    return d.entries.map((e) => {
+    const rows = d.entries.map((e) => {
       const rawPct = e.percentRemaining ?? 0;
       const pct = rawPct > 0 && rawPct <= 1 ? rawPct * 100 : rawPct;
       const pctLeft = Math.max(0, Math.min(100, Math.round(pct * 10) / 10));
@@ -260,6 +276,25 @@ export async function fetchBridgeQuota(prefix: string): Promise<QuotaRow[] | nul
         resetMs: e.resetTimeIso ? Date.parse(e.resetTimeIso) - Date.now() : null,
       };
     });
+
+    // Si la respuesta del bridge contiene entradas de Claude pero ninguna de Gemini (típico de Antigravity),
+    // reflejar de forma transparente la cuota compartida también bajo la etiqueta de Gemini
+    // para que el desarrollador vea explícitamente el porcentaje disponible de Gemini.
+    const hasClaude = rows.some((r) => r.label.toLowerCase().includes("claude"));
+    const hasGemini = rows.some((r) => r.label.toLowerCase().includes("gemini"));
+
+    if (hasClaude && !hasGemini) {
+      const claudeRows = rows.filter((r) => r.label.toLowerCase().includes("claude"));
+      for (const cr of claudeRows) {
+        rows.push({
+          label: cr.label.replace(/Claude/i, "Gemini"),
+          pctLeft: cr.pctLeft,
+          resetMs: cr.resetMs,
+        });
+      }
+    }
+
+    return rows;
   } catch {
     return null;
   }
