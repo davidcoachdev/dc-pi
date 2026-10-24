@@ -23,6 +23,7 @@ import { discoverCpamAccounts } from "./dc-taxi-accounts.ts";
 import {
   fetchAllTaxisQuotas,
   getCachedTaxiQuota,
+  getEffectiveQuotaPct,
   type DcTaxiQuotaInfo,
 } from "./dc-taxi-quota.ts";
 
@@ -494,16 +495,15 @@ export function reapAbandonedTaxis(
 
 /**
  * Aplica la política de cuota mínima:
- * Si una cuenta tiene < 5% en Gemini 5h, entra en 'recargando'.
+ * Si una cuenta tiene < 5% en su cuota efectiva (Gemini o Claude, 5h o Weekly), entra en 'recargando'.
  * No vuelve a 'libre' hasta tener al menos >= 60% de cuota.
  */
 export function updateTaxiRechargingState(
   unit: DcTaxiUnit,
   quotaInfo?: DcTaxiQuotaInfo,
 ): void {
-  if (!quotaInfo || quotaInfo.gemini5hPct === null) return;
-
-  const pct = quotaInfo.gemini5hPct;
+  const pct = getEffectiveQuotaPct(quotaInfo);
+  if (pct === null) return;
 
   // Si está ocupada por un pasajero real, no interrumpimos abruptamente salvo que esté libre
   if (unit.status === "libre" && pct < 5) {
@@ -511,7 +511,7 @@ export function updateTaxiRechargingState(
     appendTaxiLog("WARN", "TAXI_RECHARGING_ENTERED", {
       account: unit.account,
       pct,
-      resetTimeIso: quotaInfo.resetTimeIso,
+      resetTimeIso: quotaInfo?.resetTimeIso,
     });
   } else if (unit.status === "recargando") {
     if (pct >= 60) {
@@ -788,8 +788,8 @@ export function leaseTaxi(
     const freeUnits = Object.values(state.fleet).filter((u) => u.status === "libre");
     if (freeUnits.length > 0) {
       freeUnits.sort((a, b) => {
-        const qA = quotaGetter(a.account)?.gemini5hPct ?? 100;
-        const qB = quotaGetter(b.account)?.gemini5hPct ?? 100;
+        const qA = getEffectiveQuotaPct(quotaGetter(a.account)) ?? 100;
+        const qB = getEffectiveQuotaPct(quotaGetter(b.account)) ?? 100;
         if (qB !== qA) {
           return qB - qA; // Descendente: priorizar unidades con más cuota
         }
@@ -808,7 +808,7 @@ export function leaseTaxi(
         pid: fullPassenger.pid,
         model: fullPassenger.model,
         preferred: false,
-        quotaPct: quotaGetter(selectedUnit.account)?.gemini5hPct ?? null,
+        quotaPct: getEffectiveQuotaPct(quotaGetter(selectedUnit.account)),
       });
 
       return { account: selectedUnit.account, unit: selectedUnit };
@@ -1161,6 +1161,7 @@ export function repairTaxiFromWorkshop(
 
 /**
  * Devuelve un resumen estadístico de la flota para TUI y auditoría.
+ * Si se detectan procesos zombis o transiciones de cuota, persiste atómicamente el estado limpio.
  */
 export function getFleetStatusSummary(
   fleetPath: string = FLEET_STATE_PATH,
@@ -1173,29 +1174,40 @@ export function getFleetStatusSummary(
   en_taller: number;
   units: DcTaxiUnit[];
 } {
-  const state = loadFleetState(fleetPath, allowedAccounts);
-  reapAbandonedTaxis(state);
+  return withFleetLock(fleetPath, () => {
+    const state = loadFleetState(fleetPath, allowedAccounts);
+    const reaped = reapAbandonedTaxis(state);
 
-  for (const unit of Object.values(state.fleet)) {
-    if (unit.status === "recargando" || unit.status === "libre") {
-      const quota = getCachedTaxiQuota(unit.account);
-      updateTaxiRechargingState(unit, quota);
+    let stateChanged = reaped > 0;
+    for (const unit of Object.values(state.fleet)) {
+      if (unit.status === "recargando" || unit.status === "libre") {
+        const prevStatus = unit.status;
+        const quota = getCachedTaxiQuota(unit.account);
+        updateTaxiRechargingState(unit, quota);
+        if (unit.status !== prevStatus) {
+          stateChanged = true;
+        }
+      }
     }
-  }
 
-  const units = Object.values(state.fleet);
-  const total = units.length;
-  const libres = units.filter((u) => u.status === "libre").length;
-  const ocupados = units.filter((u) => u.status === "ocupado").length;
-  const recargando = units.filter((u) => u.status === "recargando").length;
-  const en_taller = units.filter((u) => u.status === "en_taller").length;
+    if (stateChanged) {
+      saveFleetState(state, fleetPath);
+    }
 
-  return {
-    total,
-    libres,
-    ocupados,
-    recargando,
-    en_taller,
-    units,
-  };
+    const units = Object.values(state.fleet);
+    const total = units.length;
+    const libres = units.filter((u) => u.status === "libre").length;
+    const ocupados = units.filter((u) => u.status === "ocupado").length;
+    const recargando = units.filter((u) => u.status === "recargando").length;
+    const en_taller = units.filter((u) => u.status === "en_taller").length;
+
+    return {
+      total,
+      libres,
+      ocupados,
+      recargando,
+      en_taller,
+      units,
+    };
+  });
 }

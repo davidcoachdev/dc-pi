@@ -23,11 +23,14 @@ import {
   sendTaxiToWorkshop,
   repairTaxiFromWorkshop,
   updateTaxiPassengerUsage,
+  updateTaxiRechargingState,
 } from "../src/features/dc-agents/core/dc-taxi-dispatcher.ts";
 
 import {
   setCachedTaxiQuota,
+  getCachedTaxiQuota,
   clearTaxiQuotaCache,
+  getEffectiveQuotaPct,
 } from "../src/features/dc-agents/core/dc-taxi-quota.ts";
 
 import {
@@ -3415,6 +3418,58 @@ test("MÓDULO E: acquireOrchestratorTaxi selecciona la unidad libre con mayor cu
     // Ambas están libres; acquireOrchestratorTaxi debe haber asignado una de las libres (ac02 o ac03)
     assert.ok(res.account === "ac02" || res.account === "ac03");
   } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("MÓDULO F: getEffectiveQuotaPct and updateTaxiRechargingState multi-model & multi-window evaluation", () => {
+  const tempDir = createTempDir("multi-quota-recharge");
+  const fleetPath = path.join(tempDir, "dc-taxis.json");
+  clearTaxiQuotaCache();
+
+  try {
+    const customAccounts = ["ac01", "ac02", "ac03"];
+    const initial = createInitialFleetState(customAccounts);
+    saveFleetState(initial, fleetPath);
+
+    // Caso 1: Cuenta con Claude Weekly en 0% y 5h en 100% -> getEffectiveQuotaPct debe ser 0%
+    setCachedTaxiQuota("ac01", {
+      claudeWeeklyPct: 0,
+      claude5hPct: 100,
+      gemini5hPct: 100,
+    });
+    const q1 = getCachedTaxiQuota("ac01");
+    assert.equal(getEffectiveQuotaPct(q1), 0);
+
+    // Al evaluar actualización de estado en unidad libre, debe pasar a 'recargando'
+    const unit1 = { account: "ac01", status: "libre" as const, passenger: null };
+    updateTaxiRechargingState(unit1, q1);
+    assert.equal(unit1.status, "recargando");
+
+    // Caso 2: Cuenta en recarga recupera >= 60% en todas sus ventanas -> vuelve a libre
+    setCachedTaxiQuota("ac01", {
+      claudeWeeklyPct: 80,
+      claude5hPct: 90,
+      gemini5hPct: 85,
+    });
+    const q1Restored = getCachedTaxiQuota("ac01");
+    assert.equal(getEffectiveQuotaPct(q1Restored), 80);
+    updateTaxiRechargingState(unit1, q1Restored);
+    assert.equal(unit1.status, "libre");
+
+    // Caso 3: getFleetStatusSummary persiste atómicamente cuando detecta transiciones
+    initial.fleet["ac02"].status = "libre";
+    setCachedTaxiQuota("ac02", { claudeWeeklyPct: 2 }); // Cuota crítica < 5%
+    saveFleetState(initial, fleetPath);
+
+    const summary = getFleetStatusSummary(fleetPath, customAccounts);
+    assert.equal(summary.recargando, 1);
+
+    // Comprobar que en disco también se persistió atómicamente gracias a withFleetLock
+    const persisted = loadFleetState(fleetPath, customAccounts);
+    assert.equal(persisted.fleet["ac02"].status, "recargando");
+  } finally {
+    clearTaxiQuotaCache();
     fs.rmSync(tempDir, { recursive: true, force: true });
   }
 });

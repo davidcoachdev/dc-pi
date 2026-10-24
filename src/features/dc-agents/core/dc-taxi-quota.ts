@@ -144,6 +144,24 @@ export function getCachedTaxiQuota(account: string): DcTaxiQuotaInfo | undefined
 }
 
 /**
+ * Determina el porcentaje de cuota efectiva más limitante para una cuenta
+ * considerando tanto ventanas horarias (5h) como cuotas periódicas (Weekly),
+ * y soportando las familias Gemini y Claude.
+ */
+export function getEffectiveQuotaPct(quotaInfo?: DcTaxiQuotaInfo): number | null {
+  if (!quotaInfo) return null;
+
+  const candidates: number[] = [];
+  if (typeof quotaInfo.gemini5hPct === "number") candidates.push(quotaInfo.gemini5hPct);
+  if (typeof quotaInfo.geminiWeeklyPct === "number") candidates.push(quotaInfo.geminiWeeklyPct);
+  if (typeof quotaInfo.claude5hPct === "number") candidates.push(quotaInfo.claude5hPct);
+  if (typeof quotaInfo.claudeWeeklyPct === "number") candidates.push(quotaInfo.claudeWeeklyPct);
+
+  if (candidates.length === 0) return null;
+  return Math.min(...candidates);
+}
+
+/**
  * Permite registrar o actualizar manualmente la información de cuota en caché.
  * Muy útil para inyección síncrona en pruebas y sincronizaciones reactivas.
  */
@@ -156,6 +174,8 @@ export function setCachedTaxiQuota(
     account,
     gemini5hPct: info.gemini5hPct !== undefined ? info.gemini5hPct : (current?.gemini5hPct ?? 100),
     geminiWeeklyPct: info.geminiWeeklyPct !== undefined ? info.geminiWeeklyPct : (current?.geminiWeeklyPct ?? 100),
+    claude5hPct: info.claude5hPct !== undefined ? info.claude5hPct : (current?.claude5hPct ?? null),
+    claudeWeeklyPct: info.claudeWeeklyPct !== undefined ? info.claudeWeeklyPct : (current?.claudeWeeklyPct ?? null),
     resetTimeIso: info.resetTimeIso ?? current?.resetTimeIso,
     lastChecked: info.lastChecked ?? Date.now(),
   });

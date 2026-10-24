@@ -12,6 +12,7 @@ import {
   releaseOrchestratorTaxi,
   syncOrchestratorTaxi,
   sendTaxiToWorkshop as dispatcherSendTaxiToWorkshop,
+  repairTaxiFromWorkshop,
   loadFleetState,
   saveFleetState,
   withFleetLock,
@@ -187,6 +188,13 @@ export async function auditAccountForWorkshop(
       await fetchJson(`http://127.0.0.1:8325/quota/${encodeURIComponent(account)}`, {
         timeoutMs: 400,
       });
+    }
+
+    // Si la llamada fue exitosa y la unidad estaba en taller (ej: token renovado o restaurado), repararla
+    const fleetSummary = getFleetStatusSummary(fleetPath);
+    const unit = fleetSummary.units.find((u) => u.account === account);
+    if (unit && unit.status === "en_taller") {
+      repairTaxiFromWorkshop(account, fleetPath);
     }
   } catch (err: any) {
     const status = err?.status || err?.statusCode;
