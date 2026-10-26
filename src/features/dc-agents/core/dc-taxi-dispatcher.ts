@@ -573,13 +573,17 @@ export function acquireOrchestratorTaxi(
       }
     }
 
+    const isExcluded = (ac: string) => Array.isArray(excludedAccounts) && excludedAccounts.includes(ac);
+
     // Liberar cualquier taxi previo de esta misma sesión y PID que ya no use
     for (const unit of Object.values(state.fleet)) {
       if (
         unit.passenger &&
         unit.passenger.type === "orchestrator" &&
-        (unit.passenger.sessionId === sessionId || unit.passenger.pid === pid) &&
-        unit.account !== currentAccount
+        unit.passenger.sessionId === sessionId &&
+        unit.passenger.pid === pid &&
+        unit.account !== currentAccount &&
+        !isExcluded(unit.account)
       ) {
         unit.passenger = null;
         unit.status = "libre";
@@ -596,15 +600,14 @@ export function acquireOrchestratorTaxi(
       }
     }
 
-    const isExcluded = (ac: string) => Array.isArray(excludedAccounts) && excludedAccounts.includes(ac);
-
-    // Caso 1: Si esta sesión o PID ya tiene un taxi ocupado en la flota, preservarlo salvo que esté excluido
+    // Caso 1: Si esta sesión y PID ya tiene un taxi ocupado en la flota, preservarlo salvo que esté excluido
     for (const unit of Object.values(state.fleet)) {
       if (
         unit.status === "ocupado" &&
         unit.passenger &&
         unit.passenger.type === "orchestrator" &&
-        (unit.passenger.sessionId === sessionId || unit.passenger.pid === pid) &&
+        unit.passenger.sessionId === sessionId &&
+        unit.passenger.pid === pid &&
         !isExcluded(unit.account)
       ) {
         unit.passenger.heartbeatAt = Date.now();
@@ -727,21 +730,21 @@ export function releaseOrchestratorTaxi(
       let changed = false;
 
       for (const unit of Object.values(state.fleet)) {
-        if (
-          unit.passenger &&
-          unit.passenger.type === "orchestrator" &&
-          ((sessionId && unit.passenger.sessionId === sessionId) || unit.passenger.pid === pid)
-        ) {
-          unit.passenger = null;
-          unit.status = "libre";
-          const quota = getCachedTaxiQuota(unit.account);
-          updateTaxiRechargingState(unit, quota);
-          changed = true;
-          appendTaxiLog("INFO", "TAXI_ORCHESTRATOR_RELEASED", {
-            account: unit.account,
-            sessionId,
-            pid,
-          });
+        if (unit.passenger && unit.passenger.type === "orchestrator") {
+          const matchesSession = sessionId ? unit.passenger.sessionId === sessionId : true;
+          const matchesPid = pid !== undefined ? unit.passenger.pid === pid : true;
+          if (matchesSession && matchesPid) {
+            unit.passenger = null;
+            unit.status = "libre";
+            const quota = getCachedTaxiQuota(unit.account);
+            updateTaxiRechargingState(unit, quota);
+            changed = true;
+            appendTaxiLog("INFO", "TAXI_ORCHESTRATOR_RELEASED", {
+              account: unit.account,
+              sessionId,
+              pid,
+            });
+          }
         }
       }
 
@@ -855,6 +858,8 @@ export function leaseTaxi(
 export interface ReleaseTaxiOptions {
   pid?: number;
   fromOrchestratorRelease?: boolean;
+  plate?: string;
+  expectedPlate?: string;
 }
 
 /**
@@ -897,6 +902,16 @@ export function releaseTaxi(
         });
         return false;
       }
+    }
+
+    const expectedPlate = options?.plate ?? options?.expectedPlate;
+    if (expectedPlate && unit.passenger && unit.passenger.plate && unit.passenger.plate !== expectedPlate) {
+      appendTaxiLog("WARN", "TAXI_RELEASE_PLATE_MISMATCH", {
+        account,
+        expectedPlate: unit.passenger.plate,
+        attemptedPlate: expectedPlate,
+      });
+      return false;
     }
 
     if (sessionId && unit.passenger && unit.passenger.sessionId !== sessionId) {
@@ -982,6 +997,12 @@ export function updateTaxiPassengerPid(
   });
 }
 
+export interface TaxiIdentityOptions {
+  plate?: string;
+  sessionId?: string;
+  pid?: number;
+}
+
 /**
  * Envía un pulso de vida (heartbeat) para mantener el taxi arrendado.
  * Protegido atómicamente con withFleetLock para evitar sobrescrituras de estado.
@@ -989,12 +1010,35 @@ export function updateTaxiPassengerPid(
 export function heartbeatTaxi(
   account: string,
   fleetPath: string = FLEET_STATE_PATH,
+  identity?: TaxiIdentityOptions,
 ): boolean {
   return withFleetLock(fleetPath, () => {
     const state = loadFleetState(fleetPath);
     const unit = state.fleet[account];
 
     if (!unit || unit.status !== "ocupado" || !unit.passenger) {
+      return false;
+    }
+
+    if (identity?.plate && unit.passenger.plate && unit.passenger.plate !== identity.plate) {
+      appendTaxiLog("WARN", "TAXI_HEARTBEAT_OWNERSHIP_MISMATCH", {
+        account,
+        expectedPlate: unit.passenger.plate,
+        attemptedPlate: identity.plate,
+      });
+      return false;
+    }
+
+    if (identity?.sessionId && unit.passenger.sessionId && unit.passenger.sessionId !== identity.sessionId) {
+      appendTaxiLog("WARN", "TAXI_HEARTBEAT_OWNERSHIP_MISMATCH", {
+        account,
+        expectedSession: unit.passenger.sessionId,
+        attemptedSession: identity.sessionId,
+      });
+      return false;
+    }
+
+    if (identity?.pid !== undefined && unit.passenger.pid !== identity.pid) {
       return false;
     }
 
@@ -1013,12 +1057,35 @@ export function updateTaxiPassengerUsage(
   tokens: number,
   cost?: number,
   fleetPath: string = FLEET_STATE_PATH,
+  identity?: TaxiIdentityOptions,
 ): boolean {
   return withFleetLock(fleetPath, () => {
     const state = loadFleetState(fleetPath);
     const unit = state.fleet[account];
 
     if (!unit || unit.status !== "ocupado" || !unit.passenger) {
+      return false;
+    }
+
+    if (identity?.plate && unit.passenger.plate && unit.passenger.plate !== identity.plate) {
+      appendTaxiLog("WARN", "TAXI_USAGE_UPDATE_OWNERSHIP_MISMATCH", {
+        account,
+        expectedPlate: unit.passenger.plate,
+        attemptedPlate: identity.plate,
+      });
+      return false;
+    }
+
+    if (identity?.sessionId && unit.passenger.sessionId && unit.passenger.sessionId !== identity.sessionId) {
+      appendTaxiLog("WARN", "TAXI_USAGE_UPDATE_OWNERSHIP_MISMATCH", {
+        account,
+        expectedSession: unit.passenger.sessionId,
+        attemptedSession: identity.sessionId,
+      });
+      return false;
+    }
+
+    if (identity?.pid !== undefined && unit.passenger.pid !== identity.pid) {
       return false;
     }
 
@@ -1119,8 +1186,12 @@ export function leaseAvailableTaxis(
   });
 }
 
+let lastWorkshopSince = 0;
+
 /**
  * Envía una unidad de taxi al taller por avería o fallo de autenticación fatal (ej: HTTP 400/401/403).
+ * Garantiza que workshopSince sea estrictamente monótono para evitar colisiones de generación
+ * en eventos sucesivos dentro del mismo milisegundo.
  */
 export function sendTaxiToWorkshop(
   account: string,
@@ -1135,10 +1206,18 @@ export function sendTaxiToWorkshop(
       return false;
     }
 
+    const now = Date.now();
+    const maxExisting = Object.values(state.fleet).reduce(
+      (max, u) => Math.max(max, u.workshopSince ?? 0),
+      lastWorkshopSince,
+    );
+    const workshopSince = now <= maxExisting ? maxExisting + 1 : now;
+    lastWorkshopSince = workshopSince;
+
     unit.status = "en_taller";
     unit.passenger = null;
     unit.workshopReason = reason;
-    unit.workshopSince = Date.now();
+    unit.workshopSince = workshopSince;
 
     saveFleetState(state, fleetPath);
 
@@ -1152,19 +1231,47 @@ export function sendTaxiToWorkshop(
   });
 }
 
+export interface RepairTaxiOptions {
+  expectedWorkshopSince?: number;
+}
+
 /**
  * Repara una unidad de taxi en taller y la devuelve al estado libre (o recargando si cuota < 5%).
+ * Protegido contra colisiones de generación (expectedWorkshopSince) y rechaza reparación
+ * si la unidad posee una reserva activa.
  */
 export function repairTaxiFromWorkshop(
   account: string,
   fleetPath: string = FLEET_STATE_PATH,
   allowedAccounts?: string[],
   quotaGetter: (account: string) => DcTaxiQuotaInfo | undefined = getCachedTaxiQuota,
+  options?: RepairTaxiOptions,
 ): boolean {
   return withFleetLock(fleetPath, () => {
     const state = loadFleetState(fleetPath, allowedAccounts);
     const unit = state.fleet[account];
     if (!unit || unit.status !== "en_taller") {
+      return false;
+    }
+
+    if (
+      typeof options?.expectedWorkshopSince === "number" &&
+      unit.workshopSince !== options.expectedWorkshopSince
+    ) {
+      appendTaxiLog("WARN", "TAXI_WORKSHOP_GENERATION_MISMATCH", {
+        account,
+        expectedWorkshopSince: options.expectedWorkshopSince,
+        actualWorkshopSince: unit.workshopSince,
+      });
+      return false;
+    }
+
+    if (unit.passenger !== null) {
+      appendTaxiLog("WARN", "TAXI_WORKSHOP_REPAIR_ACTIVE_LEASE", {
+        account,
+        plate: unit.passenger.plate,
+        sessionId: unit.passenger.sessionId,
+      });
       return false;
     }
 

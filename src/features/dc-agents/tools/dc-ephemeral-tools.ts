@@ -35,6 +35,7 @@ import { appendTaxiLog } from "../core/dc-taxi-logger.ts";
 import {
   heartbeatTaxi,
   updateTaxiPassengerUsage,
+  isProcessAlive,
 } from "../core/dc-taxi-dispatcher.ts";
 import {
   evaluateTaxiHandoverRequired,
@@ -71,7 +72,7 @@ let backgroundSweeperTimer: NodeJS.Timeout | undefined;
  * 3. Mientras status === 'running', emite heartbeatTaxi(item.plan.leasedAccount) para prevenir que reapAbandonedTaxis
  *    la marque como zombi por TTL.
  */
-export function sweepBackgroundPlansOnce(tasksDirOverride?: string, fleetPath?: string): void {
+export function sweepBackgroundPlansOnce(tasksDirOverride?: string, fleetPath?: string, historyPath?: string): void {
   if (activeBackgroundPlans.size === 0) return;
 
   const now = Date.now();
@@ -80,67 +81,100 @@ export function sweepBackgroundPlansOnce(tasksDirOverride?: string, fleetPath?: 
   for (const [key, item] of Array.from(activeBackgroundPlans.entries())) {
     let isDone = false;
     let finalStatus: "completed" | "failed" | "timeout" = "completed";
-    let status = "running";
+    let observedRunning = false;
     let taskTokens: number | undefined;
     let taskCost: number | undefined;
+    let reclaimBlocker: string | undefined;
 
-    if (item.taskId && fs.existsSync(tasksDir)) {
+    if (!item.taskId) {
+      reclaimBlocker = "missing_task_id";
+    } else if (!fs.existsSync(tasksDir)) {
+      reclaimBlocker = "tasks_dir_not_found";
+    } else {
       const taskFilePath = path.join(tasksDir, `${item.taskId}.json`);
-      if (fs.existsSync(taskFilePath)) {
+      if (!fs.existsSync(taskFilePath)) {
+        reclaimBlocker = "task_file_not_found";
+      } else {
         try {
           const raw = fs.readFileSync(taskFilePath, "utf8");
           const parsed = JSON.parse(raw);
-          const parsedStatus = parsed?.task?.status;
-          if (parsedStatus) {
-            status = parsedStatus;
-          }
+          const parsedStatus = parsed?.task?.status || parsed?.status;
+          const parsedPid = parsed?.task?.pid ?? parsed?.task?.workerPid ?? parsed?.pid;
+
           if (typeof parsed?.task?.tokens === "number") {
             taskTokens = parsed.task.tokens;
+          } else if (typeof parsed?.tokens === "number") {
+            taskTokens = parsed.tokens;
           }
           if (typeof parsed?.task?.cost === "number") {
             taskCost = parsed.task.cost;
+          } else if (typeof parsed?.cost === "number") {
+            taskCost = parsed.cost;
           }
-          if (status === "completed" || status === "failed" || status === "stopped" || status === "aborted") {
+
+          // Authoritative termination evidence 1: task file contains explicit terminal status
+          if (
+            parsedStatus === "completed" ||
+            parsedStatus === "failed" ||
+            parsedStatus === "stopped" ||
+            parsedStatus === "aborted" ||
+            parsedStatus === "cancelled"
+          ) {
             isDone = true;
-            finalStatus = status === "completed" ? "completed" : "failed";
+            finalStatus = parsedStatus === "completed" ? "completed" : "failed";
+          } else if (typeof parsedPid === "number" && !isProcessAlive(parsedPid)) {
+            // Authoritative termination evidence 2: specific worker PID is confirmed dead in OS
+            isDone = true;
+            finalStatus = "failed";
+          } else if (parsedStatus === "running") {
+            // Positively observed running in task file (and PID not dead)
+            observedRunning = true;
+          } else {
+            reclaimBlocker = `task_status_unrecognized:${parsedStatus || "undefined"}`;
           }
         } catch {
-          /* ignore read error */
+          reclaimBlocker = "task_file_unreadable";
         }
       }
-    }
-
-    // Timeout defensivo de seguridad si la tarea desapareció o tardó más de 12 minutos
-    if (!isDone && now - item.startedAt > 12 * 60 * 1000) {
-      isDone = true;
-      finalStatus = "timeout";
     }
 
     if (isDone) {
       activeBackgroundPlans.delete(key);
       try {
-        cleanupEphemeralAgent(item.plan, {
-          sessionId: item.sessionId,
-          startedAt: item.startedAt,
-          endedAt: now,
-          status: finalStatus,
-          taskId: item.taskId,
-        });
-        appendTaxiLog("INFO", "EPHEMERAL_AGENT_BACKGROUND_REAPED", {
-          agent: item.plan.agentName,
-          account: item.plan.leasedAccount,
-          taskId: item.taskId,
-          durationMs: now - item.startedAt,
-          status: finalStatus,
-        });
+        const cleaned = cleanupEphemeralAgent(
+          item.plan,
+          {
+            sessionId: item.sessionId,
+            startedAt: item.startedAt,
+            endedAt: now,
+            status: finalStatus,
+            taskId: item.taskId,
+          },
+          fleetPath,
+          historyPath,
+        );
+        if (cleaned) {
+          appendTaxiLog("INFO", "EPHEMERAL_AGENT_BACKGROUND_REAPED", {
+            agent: item.plan.agentName,
+            account: item.plan.leasedAccount,
+            taskId: item.taskId,
+            durationMs: now - item.startedAt,
+            status: finalStatus,
+          });
+        }
       } catch {
         /* defensive */
       }
-    } else if (status === "running") {
+    } else if (observedRunning) {
+      // Genuinely observed running worker:
+      // Keep running past 12 min without timeout
       // Sincronizar en caliente los tokens y el costo en el pasajero del taxi para que el taxímetro se vea en vivo
       if (taskTokens !== undefined || taskCost !== undefined) {
         try {
-          updateTaxiPassengerUsage(item.plan.leasedAccount, taskTokens || 0, taskCost, fleetPath);
+          updateTaxiPassengerUsage(item.plan.leasedAccount, taskTokens || 0, taskCost, fleetPath, {
+            plate: item.plan.plate,
+            sessionId: item.sessionId,
+          });
         } catch {
           /* defensive */
         }
@@ -164,6 +198,7 @@ export function sweepBackgroundPlansOnce(tasksDirOverride?: string, fleetPath?: 
             sessionId: item.sessionId,
             originalTaskId: item.originalTaskId || item.taskId,
             previousAccount: item.plan.leasedAccount,
+            plate: item.plan.plate,
             reason: handoverEval.reason || "token_limit_90",
             tokens: handoverEval.tokens,
             tasksDir,
@@ -179,12 +214,28 @@ export function sweepBackgroundPlansOnce(tasksDirOverride?: string, fleetPath?: 
         });
       }
 
-      // Emitir pulso de vida (heartbeat) para mantener el taxi arrendado y prevenir que reapAbandonedTaxis
-      // lo marque como zombi por expiración de TTL
+      // Emitir pulso de vida (heartbeat) ONLY for positively observed running workers
       try {
-        heartbeatTaxi(item.plan.leasedAccount, fleetPath);
+        heartbeatTaxi(item.plan.leasedAccount, fleetPath, {
+          plate: item.plan.plate,
+          sessionId: item.sessionId,
+        });
       } catch {
         /* defensive */
+      }
+    } else {
+      // Unproven worker (missing task file, unreadable JSON, unrecognized status):
+      // 1. DO NOT assume missing file proves terminated or automatically kill/release still running worker.
+      // 2. STOP perpetually heartbeating unproven worker.
+      // 3. Report exact blocker.
+      if (reclaimBlocker) {
+        appendTaxiLog("WARN", "TAXI_SWEEPER_CANNOT_RECLAIM", {
+          agent: item.plan.agentName,
+          account: item.plan.leasedAccount,
+          plate: item.plan.plate,
+          taskId: item.taskId,
+          blocker: reclaimBlocker,
+        });
       }
     }
   }
@@ -419,7 +470,12 @@ export function registerDcEphemeralTools(pi: ExtensionAPI): void {
           // Activar pulso de vida (heartbeat) cada 45 segundos para que la tarea nunca sea reapeada por TTL (solo modo síncrono)
           if (plan.mode !== "background") {
             heartbeatTimer = setInterval(() => {
-              if (plan) heartbeatTaxi(plan.leasedAccount);
+              if (plan) {
+                heartbeatTaxi(plan.leasedAccount, undefined, {
+                  plate: plan.plate,
+                  sessionId,
+                });
+              }
             }, 45000);
             heartbeatTimer.unref?.();
           }

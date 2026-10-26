@@ -181,6 +181,8 @@ export interface ExecuteTaxiHandoverParams {
   leaseTtlMs?: number;
   allowedAccounts?: string[];
   quotaGetter?: (account: string) => DcTaxiQuotaInfo | undefined;
+  plate?: string;
+  hasRuntimeAccountSwitch?: boolean;
 }
 
 export interface ExecuteTaxiHandoverResult {
@@ -189,6 +191,9 @@ export interface ExecuteTaxiHandoverResult {
   newAccount?: string;
   previousAccount?: string;
   error?: string;
+  unsupported?: boolean;
+  notPerformed?: boolean;
+  reason?: string;
 }
 
 /**
@@ -265,6 +270,27 @@ export function executeTaxiHandover(
     };
   }
 
+  const isBackground = plan?.mode === "background" || Boolean(params.trackingItem);
+
+  if (isBackground && !params.hasRuntimeAccountSwitch) {
+    appendTaxiLog("WARN", "TAXI_HANDOVER_BACKGROUND_UNSUPPORTED", {
+      agent: plan?.agentName,
+      account: previousAccount,
+      taskId: originalTaskId,
+      reason,
+      plate: params.plate || plan?.plate,
+      message: "Background subagent runtime account-switch is unsupported by runner. Preserving original reservation.",
+    });
+    return {
+      success: false,
+      notPerformed: true,
+      unsupported: true,
+      reason: "unsupported_background_runtime_switch",
+      previousAccount,
+      error: "El relevo en caliente para subagentes en background no está soportado por el runner en tiempo de ejecución. Se preserva la reserva original.",
+    };
+  }
+
   // 1. Extraer o sintetizar resumen de avance
   const handoffSummary = extractHandoffSummary(
     originalTaskId,
@@ -322,6 +348,44 @@ export function executeTaxiHandover(
     const previousUnit = state.fleet[previousAccount];
     const prevPassenger = previousUnit?.passenger;
 
+    if (!previousUnit || previousUnit.status !== "ocupado" || !prevPassenger) {
+      appendTaxiLog("WARN", "TAXI_HANDOVER_STALE_IGNORED", {
+        previousAccount,
+        originalTaskId,
+        reason,
+        sessionId,
+      });
+      return {
+        success: false,
+        error: `La unidad previa (${previousAccount}) no se encuentra ocupada por un pasajero activo.`,
+      };
+    }
+
+    const expectedPlate = params.plate || params.plan?.plate || params.trackingItem?.plan?.plate;
+    if (expectedPlate && prevPassenger.plate && prevPassenger.plate !== expectedPlate) {
+      appendTaxiLog("WARN", "TAXI_HANDOVER_OWNERSHIP_MISMATCH", {
+        previousAccount,
+        expectedPlate: prevPassenger.plate,
+        attemptedPlate: expectedPlate,
+      });
+      return {
+        success: false,
+        error: `Discrepancia de reserva (placa): la tarea no posee el taxi actual (${prevPassenger.plate} !== ${expectedPlate}).`,
+      };
+    }
+
+    if (sessionId && prevPassenger.sessionId && prevPassenger.sessionId !== sessionId) {
+      appendTaxiLog("WARN", "TAXI_HANDOVER_SESSION_MISMATCH", {
+        previousAccount,
+        expectedSession: prevPassenger.sessionId,
+        attemptedSession: sessionId,
+      });
+      return {
+        success: false,
+        error: `Discrepancia de sesión: la tarea no posee el taxi actual (${prevPassenger.sessionId} !== ${sessionId}).`,
+      };
+    }
+
     // Asignar pasajero a la nueva unidad
     const newPlate = `DC-${randomUUID().slice(0, 6).toUpperCase()}`;
     newUnit.status = "ocupado";
@@ -362,6 +426,7 @@ export function executeTaxiHandover(
       success: true,
       newAccount,
       previousAccount,
+      newPlate,
     };
   });
 
@@ -373,6 +438,7 @@ export function executeTaxiHandover(
   }
 
   const newAccount = lockResult.newAccount;
+  const newPlate = lockResult.newPlate;
 
   // 3. Crear TaxiHandoverPacket
   const handoverPacket: TaxiHandoverPacket = {
@@ -420,11 +486,16 @@ export function executeTaxiHandover(
   // 3c. Actualizar tracking si fue provisto
   if (params.trackingItem) {
     if (plan) {
+      plan.leasedAccount = newAccount;
+      plan.plate = newPlate;
       params.trackingItem.plan = plan;
     }
     params.trackingItem.handoverPacket = handoverPacket;
     params.trackingItem.originalTaskId = originalTaskId;
     params.trackingItem.handoverCount = (params.trackingItem.handoverCount || 0) + 1;
+  } else if (plan) {
+    plan.leasedAccount = newAccount;
+    plan.plate = newPlate;
   }
 
   // 5. Registra en log estructurado TAXI_HANDOVER_EXECUTED
