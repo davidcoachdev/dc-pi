@@ -28,6 +28,8 @@ import { getContextUsageInfo } from "../dc-sidebar/providers/dc-context-provider
 import { fetchJson } from "../../integrations/dc-http/dc-fetch.ts";
 import { registerDcEphemeralTools } from "./tools/dc-ephemeral-tools.ts";
 import { TaxiWorkshopCoordinator } from "./core/dc-taxi-workshop.ts";
+import { installSubagentInboxInterceptor, uninstallSubagentInboxInterceptor } from "./core/dc-subagent-inbox.ts";
+import { registerSubagentInboxTools } from "./tools/dc-subagent-inbox-tools.ts";
 import { DcAgentsPanel } from "./views/dc-agents-panel.ts";
 import { DcTaxisPanel } from "./views/dc-taxis-panel.ts";
 
@@ -735,8 +737,12 @@ export function openAgentsViewer(ctx: ExtensionContext): void {
  * - Registra los comandos /agents, /dc-agents, /dc-taxis y el atajo Alt+Shift+T.
  */
 export default function dcAgentsExtension(pi: ExtensionAPI): void {
-  // Registrar herramienta de agentes efímeros para el orquestador
+  // Instalar el interceptor de buzón pasivo para subagentes en background (evita secuestro por triggerTurn)
+  installSubagentInboxInterceptor();
+
+  // Registrar herramientas de agentes efímeros y buzón para el orquestador
   registerDcEphemeralTools(pi);
+  registerSubagentInboxTools(pi);
 
   // Al arrancar sesión, verifica y restaura subagentes y skills si faltan, y purga huérfanos
   pi.on("session_start", async (_event, ctx) => {
@@ -832,6 +838,7 @@ export default function dcAgentsExtension(pi: ExtensionAPI): void {
   // Al cerrar o apagar sesión, liberar el taxi del orquestador
   pi.on("session_shutdown", (_event, ctx) => {
     try {
+      uninstallSubagentInboxInterceptor();
       if (!ctx.hasUI || ctx.mode !== "tui" || process.argv.includes("rpc")) return;
       const sessionId = ctx.sessionManager?.getSessionId?.() || `ambient-${Date.now()}`;
       releaseOrchestratorTaxi(sessionId, process.pid);

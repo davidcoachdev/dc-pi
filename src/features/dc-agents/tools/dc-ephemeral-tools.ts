@@ -41,6 +41,8 @@ import {
   evaluateTaxiHandoverRequired,
   executeTaxiHandover,
 } from "../core/dc-taxi-supervisor.ts";
+import { formatCanonicalFailureReport } from "../core/dc-subagent-failure-formatter.ts";
+import { subagentInboxManager } from "../core/dc-subagent-inbox.ts";
 
 export interface ExtractedSubagentMetrics {
   tokens?: {
@@ -153,14 +155,46 @@ export function sweepBackgroundPlansOnce(tasksDirOverride?: string, fleetPath?: 
           fleetPath,
           historyPath,
         );
-        if (cleaned) {
-          appendTaxiLog("INFO", "EPHEMERAL_AGENT_BACKGROUND_REAPED", {
-            agent: item.plan.agentName,
-            account: item.plan.leasedAccount,
-            taskId: item.taskId,
-            durationMs: now - item.startedAt,
-            status: finalStatus,
-          });
+        if (isDone && finalStatus !== "completed") {
+          try {
+            const canonicalReport = formatCanonicalFailureReport({
+              taskTitleOrSummary: `Fallo en subagente ${item.plan.agentName} (ID: ${item.taskId})`,
+              error: `El worker terminó con estado "${finalStatus}" en disco o proceso finalizado`,
+              rootCause: `La tarea en segundo plano no concluyó satisfactoriamente (status: ${finalStatus})`,
+              falsifiedPremises: [
+                "La tarea se ejecutaría hasta completarse con éxito en el subproceso",
+              ],
+              recoverySteps: [
+                "Consultar el archivo de estado de la tarea en ~/.pi/agent/gentle-agents/tasks/",
+                "Revisar si el modelo o la cuota del taxi asignado se agotaron",
+              ],
+              diagnostics: {
+                taskId: item.taskId,
+                account: item.plan.leasedAccount,
+                agent: item.plan.agentName,
+                durationMs: now - item.startedAt,
+              },
+            });
+
+            subagentInboxManager.deposit({
+              id: `failure-${Date.now()}-${item.taskId}`,
+              taskId: item.taskId || `unknown-${Date.now()}`,
+              agent: item.plan.agentName,
+              label: `Fallo de ejecución: ${item.plan.agentName}`,
+              status: finalStatus,
+              outcomeText: canonicalReport.formattedMarkdown,
+              receivedAt: now,
+              read: false,
+              errorDetails: {
+                summary: canonicalReport.summary,
+                rootCause: canonicalReport.rootCause,
+                falsifiedPremises: canonicalReport.falsifiedPremises,
+                recoverySteps: canonicalReport.recoverySteps,
+              },
+            });
+          } catch {
+            /* defensive */
+          }
         }
       } catch {
         /* defensive */
@@ -610,9 +644,27 @@ export function registerDcEphemeralTools(pi: ExtensionAPI): void {
           sessionId,
         });
 
+        const canonicalReport = formatCanonicalFailureReport({
+          taskTitleOrSummary: `Fallo al despachar subagente efímero`,
+          error: err,
+          rootCause: err.message,
+          falsifiedPremises: [
+            "El subagente y su toolset se inicializarían sin error de sintaxis ni de entorno",
+          ],
+          recoverySteps: [
+            "Verificar si la cuenta de taxi asignada tiene cuota disponible",
+            "Comprobar los argumentos pasados en la llamada de la herramienta",
+          ],
+        });
+
         return {
-          content: [{ type: "text", text: `Error al despachar subagente efímero: ${err.message}` }],
-          details: { error: err.message },
+          content: [
+            {
+              type: "text",
+              text: `Error al despachar subagente efímero.\n\n${canonicalReport.formattedMarkdown}`,
+            },
+          ],
+          details: { error: err.message, canonicalReport },
           isError: true,
         };
       }
