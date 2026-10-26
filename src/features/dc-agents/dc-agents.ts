@@ -26,6 +26,7 @@ import { getCachedTaxiQuota, fetchTaxiQuota, type DcTaxiQuotaInfo } from "./core
 import { appendTaxiLog } from "./core/dc-taxi-logger.ts";
 import { getContextUsageInfo } from "../dc-sidebar/providers/dc-context-provider.ts";
 import { fetchJson } from "../../integrations/dc-http/dc-fetch.ts";
+import { cliProxyClient } from "../../integrations/dc-cliproxy/dc-cliproxy-client.ts";
 import { registerDcEphemeralTools } from "./tools/dc-ephemeral-tools.ts";
 import { TaxiWorkshopCoordinator } from "./core/dc-taxi-workshop.ts";
 import { installSubagentInboxInterceptor, uninstallSubagentInboxInterceptor } from "./core/dc-subagent-inbox.ts";
@@ -193,12 +194,26 @@ export async function auditAccountForWorkshop(
     if (fetcher) {
       await fetcher(account);
     } else {
-      await fetchJson(`http://127.0.0.1:8325/quota/${encodeURIComponent(account)}`, {
-        timeoutMs: 400,
-      });
+      // Consultar el estado de autenticación real contra CLIProxy (:8317)
+      const res = await cliProxyClient.getManagement<any>(`/auth-files`, {
+        timeoutMs: 1500,
+      }).catch(() => null);
+
+      if (res && Array.isArray(res.files)) {
+        // Si el archivo de cuenta existe en CLIProxy y está marcado como disabled o status no active
+        const disabledFile = res.files.find(
+          (f: any) =>
+            (f.name?.includes(account) || f.id?.includes(account) || f.account?.includes(account)) &&
+            (f.disabled === true || f.status === "disabled" || f.unavailable === true),
+        );
+        if (disabledFile) {
+          sendTaxiToWorkshop(account, "Cuenta Deshabilitada", fleetPath);
+          return true;
+        }
+      }
     }
 
-    // Si la llamada fue exitosa y la unidad estaba en taller (ej: token renovado o restaurado), repararla
+    // Si la unidad estaba en taller pero no tiene fallo fatal activo en CLIProxy, repararla
     const fleetSummary = getFleetStatusSummary(fleetPath);
     const unit = fleetSummary.units.find((u) => u.account === account);
     if (unit && unit.status === "en_taller") {
