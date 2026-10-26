@@ -19,7 +19,7 @@ import type {
 } from "./dc-ephemeral-types.ts";
 import { DEFAULT_DC_AGENTS_CONFIG } from "./dc-ephemeral-types.ts";
 import { appendTaxiLog } from "./dc-taxi-logger.ts";
-import { discoverCpamAccounts } from "./dc-taxi-accounts.ts";
+import { discoverCpamAccounts, discoverVipAccounts, isVipAccount } from "./dc-taxi-accounts.ts";
 import {
   fetchAllTaxisQuotas,
   getCachedTaxiQuota,
@@ -397,7 +397,15 @@ export function loadFleetState(
       const discovered = discoverCpamAccounts();
       for (const ac of discovered) {
         if (!fleet[ac]) {
-          fleet[ac] = { account: ac, status: "libre", passenger: null };
+          fleet[ac] = { account: ac, status: "libre", passenger: null, tier: "standard" };
+        }
+      }
+      const vips = discoverVipAccounts();
+      for (const vip of vips) {
+        if (!fleet[vip]) {
+          fleet[vip] = { account: vip, status: "libre", passenger: null, tier: "vip" };
+        } else if (!fleet[vip].tier) {
+          fleet[vip].tier = "vip";
         }
       }
     }
@@ -565,7 +573,7 @@ export function acquireOrchestratorTaxi(
       parts = modelId.split("/");
       for (let i = 0; i < parts.length; i++) {
         const lower = parts[i].toLowerCase();
-        if (lower.startsWith("ac")) {
+        if (lower.startsWith("ac") || lower.startsWith("cc")) {
           currentAccount = lower;
           accountIndex = i;
           break;
@@ -649,11 +657,17 @@ export function acquireOrchestratorTaxi(
       }
     }
 
-    // Caso 2: Si el modelo no especifica cuenta ac* o si su cuenta solicitada está ocupada/excluida:
-    // Seleccionar entre los taxis libres disponibles con mayor cuota mediante balanceo de carga
-    // para distribuir el uso uniformemente entre las 44 cuentas (ac01..ac44).
+    // Caso 2: Si el modelo no especifica cuenta o si su cuenta solicitada está ocupada/excluida:
+    // Seleccionar entre los taxis libres disponibles con mayor cuota mediante balanceo de carga.
+    // AISLAMIENTO VIP: Si el orquestador no solicitó una cuenta VIP explícita, NUNCA asignar una cuenta VIP en balanceo automático.
+    const isExplicitVip = isVipAccount(currentAccount);
     const freeUnits = Object.entries(state.fleet)
-      .filter(([ac, unit]) => unit.status === "libre" && !isExcluded(ac))
+      .filter(([ac, unit]) => {
+        if (unit.status !== "libre" || isExcluded(ac)) return false;
+        const unitIsVip = unit.tier === "vip" || isVipAccount(ac);
+        // Solo considerar VIP si el usuario lo pidió explícitamente
+        return isExplicitVip ? unitIsVip : !unitIsVip;
+      })
       .map(([ac, unit]) => {
         const q = getCachedTaxiQuota(ac);
         const quotaPct = typeof q?.gemini5hPct === "number" ? q.gemini5hPct : 100;
@@ -790,26 +804,34 @@ export function leaseTaxi(
     };
 
     // 1. Intentar cuenta preferida si está estrictamente libre
+    // Si la cuenta preferida es VIP, solo se admite si el pasajero lo solicitó explícitamente y está autorizado
     if (preferredAccount && state.fleet[preferredAccount] && state.fleet[preferredAccount].status === "libre") {
-      const unit = state.fleet[preferredAccount];
-      unit.status = "ocupado";
-      unit.passenger = fullPassenger;
-      saveFleetState(state, fleetPath);
+      const preferredIsVip = state.fleet[preferredAccount].tier === "vip" || isVipAccount(preferredAccount);
+      // Los subagentes nunca pueden arrendar cuentas VIP
+      if (!preferredIsVip) {
+        const unit = state.fleet[preferredAccount];
+        unit.status = "ocupado";
+        unit.passenger = fullPassenger;
+        saveFleetState(state, fleetPath);
 
-      appendTaxiLog("INFO", "TAXI_LEASED", {
-        account: preferredAccount,
-        type: fullPassenger.type,
-        sessionId: fullPassenger.sessionId,
-        pid: fullPassenger.pid,
-        model: fullPassenger.model,
-        preferred: true,
-      });
+        appendTaxiLog("INFO", "TAXI_LEASED", {
+          account: preferredAccount,
+          type: fullPassenger.type,
+          sessionId: fullPassenger.sessionId,
+          pid: fullPassenger.pid,
+          model: fullPassenger.model,
+          preferred: true,
+        });
 
-      return { account: preferredAccount, unit };
+        return { account: preferredAccount, unit };
+      }
     }
 
-    // 2. Buscar entre los taxis libres disponibles con mayor cuota restante mediante balanceo de carga
-    const freeUnits = Object.values(state.fleet).filter((u) => u.status === "libre");
+    // 2. Buscar entre los taxis libres disponibles con mayor cuota restante mediante balanceo de carga.
+    // AISLAMIENTO VIP: Subagentes y pasajeros comunes NUNCA pueden arrendar taxis VIP (tier === 'vip' o cc*).
+    const freeUnits = Object.values(state.fleet).filter(
+      (u) => u.status === "libre" && u.tier !== "vip" && !isVipAccount(u.account),
+    );
     if (freeUnits.length > 0) {
       const unitsWithQuota = freeUnits.map((u) => {
         const quota = getEffectiveQuotaPct(quotaGetter(u.account)) ?? 100;
@@ -1128,8 +1150,10 @@ export function leaseAvailableTaxis(
       }
     }
 
-    // Filtrar estrictamente unidades 'libre', ignorando 'en_taller', 'ocupado', 'recargando'
-    const freeUnits = Object.values(state.fleet).filter((u) => u.status === "libre");
+    // Filtrar estrictamente unidades 'libre', ignorando 'en_taller', 'ocupado', 'recargando' y 'vip'
+    const freeUnits = Object.values(state.fleet).filter(
+      (u) => u.status === "libre" && u.tier !== "vip" && !isVipAccount(u.account),
+    );
 
     // Ordenar de mayor a menor cuota restante
     freeUnits.sort((a, b) => {
