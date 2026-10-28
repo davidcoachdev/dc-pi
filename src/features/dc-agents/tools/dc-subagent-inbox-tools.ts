@@ -1,4 +1,5 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { dcNotifier } from "../../../integrations/dc-notify/dc-notifier.ts";
 import { subagentInboxManager } from "../core/dc-subagent-inbox.ts";
 
 /**
@@ -97,11 +98,16 @@ export function registerSubagentInboxTools(pi: ExtensionAPI): void {
     handler: async (_args: string | undefined, ctx: ExtensionContext) => {
       const reports = subagentInboxManager.list();
       if (reports.length === 0) {
-        ctx.ui.notify("📬 El buzón de subagentes está vacío.", "info");
+        dcNotifier.notify(ctx, "Buzón de Subagentes", "El buzón de subagentes está vacío.", "info");
         return;
       }
       const unreadCount = reports.filter((r) => !r.read).length;
-      ctx.ui.notify(`📬 Buzón: ${reports.length} reportes (${unreadCount} nuevos sin leer).`, unreadCount > 0 ? "warning" : "info");
+      dcNotifier.notify(
+        ctx,
+        "Buzón de Subagentes",
+        `Buzón: ${reports.length} reportes (${unreadCount} nuevos sin leer).`,
+        unreadCount > 0 ? "warning" : "info",
+      );
     },
   });
 }
