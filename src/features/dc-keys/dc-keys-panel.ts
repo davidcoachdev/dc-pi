@@ -39,6 +39,7 @@ export function getDefaultCategories(): ShortcutCategory[] {
         { key: "Alt+Shift+C", action: "picker de kaomojis (caritas)" },
         { key: "Alt+T", action: "visor de planes ODD y tareas (Plan)" },
         { key: "Alt+Shift+T", action: "monitor de Flota de Taxis y tokens" },
+        { key: "Alt+Q", action: "cerrar y salir limpiamente de Pi (Exit)" },
         { key: "Alt+?", action: "visor de atajos de teclado (Keyboard Shortcuts)" },
         { key: "/dc-plan", action: "abrir visor interactivo de planificación ODD y tareas" },
         { key: "/dc-agents", action: "abrir visor de subagentes y ejecuciones" },

@@ -106,3 +106,28 @@ test("dcExitExtension registers /exit command that calls ctx.shutdown()", async 
   });
   assert.equal(shutdownCalled, true);
 });
+
+test("dcExitExtension registers alt+q shortcut that calls ctx.shutdown()", async () => {
+  const shortcuts = new Map<string, { handler: Function }>();
+  let shutdownCalled = false;
+
+  const mockPi = {
+    on() {},
+    registerCommand() {},
+    registerShortcut(shortcut: string, def: any) {
+      shortcuts.set(shortcut, def);
+    },
+  } as unknown as ExtensionAPI;
+
+  dcExitExtension(mockPi);
+
+  assert.ok(shortcuts.has("alt+q"));
+  const shortcut = shortcuts.get("alt+q")!;
+  await shortcut.handler({
+    shutdown: () => {
+      shutdownCalled = true;
+    },
+  });
+  assert.equal(shutdownCalled, true);
+});
+

@@ -13,8 +13,8 @@ export function resolveKeybindingsPath(customPath?: string): string {
 }
 
 /**
- * Asegura que Alt+F y Alt+B queden libres de cursorWordRight/cursorWordLeft del core de Pi,
- * evitando advertencias de conflicto de atajos en consola/diagnósticos.
+ * Asegura que Alt+F, Alt+B y Alt+Q queden libres de atajos por defecto de Pi (WSL/Windows),
+ * permitiendo que Alt+F abra diff, Alt+B controle sidebar y Alt+Q cierre Pi limpiamente.
  */
 export function enforceKeybindings(keybindingsFile?: string): boolean {
   try {
@@ -41,6 +41,12 @@ export function enforceKeybindings(keybindingsFile?: string): boolean {
       (Array.isArray(currentLeft) && currentLeft.includes("alt+b")) ||
       currentLeft === "alt+b";
 
+    const currentDequeue = cfg["app.message.dequeue"];
+    const needsUpdateDequeue =
+      !currentDequeue ||
+      (Array.isArray(currentDequeue) && currentDequeue.includes("alt+q")) ||
+      currentDequeue === "alt+q";
+
     let changed = false;
     if (needsUpdateRight) {
       cfg["tui.editor.cursorWordRight"] = ["alt+right", "ctrl+right"];
@@ -48,6 +54,10 @@ export function enforceKeybindings(keybindingsFile?: string): boolean {
     }
     if (needsUpdateLeft) {
       cfg["tui.editor.cursorWordLeft"] = ["alt+left", "ctrl+left"];
+      changed = true;
+    }
+    if (needsUpdateDequeue) {
+      cfg["app.message.dequeue"] = "alt+up";
       changed = true;
     }
 

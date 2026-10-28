@@ -56,6 +56,17 @@ export default function dcExitExtension(
     /* fallback si el host no lo soporta */
   }
 
+  try {
+    pi.registerShortcut?.("alt+q" as never, {
+      description: "Cierra la sesión y sale ordenadamente de Pi (Alt+Q)",
+      handler: async (ctx) => {
+        ctx.shutdown();
+      },
+    });
+  } catch {
+    /* fallback si el host no lo soporta */
+  }
+
   pi.on("session_shutdown", (event) => {
     const reason = (event as { reason?: string } | undefined)?.reason;
     if (isSessionChangeReason(reason)) return;
