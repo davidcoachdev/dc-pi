@@ -1,4 +1,5 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { matchesKey } from "@earendil-works/pi-tui";
 
 /** Secuencia ANSI: Limpia pantalla (2J) + scrollback (3J) + cursor al inicio (H). */
 export const CLEAR_SCREEN = "\x1b[2J\x1b[3J\x1b[H";
@@ -56,7 +57,38 @@ export default function dcExitExtension(
     /* fallback si el host no lo soporta */
   }
 
+  try {
+    pi.registerShortcut?.("alt+q" as never, {
+      description: "Cierra la sesión y sale ordenadamente de Pi (Alt+Q)",
+      handler: async (ctx) => {
+        ctx.shutdown();
+      },
+    });
+  } catch {
+    /* fallback si el host no lo soporta */
+  }
+
+  let unsubTerminalInput: (() => void) | undefined;
+
+  pi.on("session_start", (_event, ctx) => {
+    unsubTerminalInput?.();
+    unsubTerminalInput = undefined;
+
+    if (ctx.hasUI && ctx.ui?.onTerminalInput) {
+      unsubTerminalInput = ctx.ui.onTerminalInput((data: string) => {
+        if (matchesKey(data, "alt+q") || data === "\x1bq" || data === "\x1bQ") {
+          ctx.shutdown();
+          return { consume: true };
+        }
+        return undefined;
+      });
+    }
+  });
+
   pi.on("session_shutdown", (event) => {
+    unsubTerminalInput?.();
+    unsubTerminalInput = undefined;
+
     const reason = (event as { reason?: string } | undefined)?.reason;
     if (isSessionChangeReason(reason)) return;
     if (armed) return;

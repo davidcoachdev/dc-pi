@@ -17,6 +17,7 @@ test("enforceKeybindings configures cursorWordLeft and cursorWordRight without a
     const cfg1 = JSON.parse(fs.readFileSync(tmpFile, "utf8"));
     assert.deepEqual(cfg1["tui.editor.cursorWordLeft"], ["alt+left", "ctrl+left"]);
     assert.deepEqual(cfg1["tui.editor.cursorWordRight"], ["alt+right", "ctrl+right"]);
+    assert.equal(cfg1["app.message.dequeue"], "alt+up");
 
     // 2. Archivo ya configurado -> no hace cambios innecesarios
     const updated2 = enforceKeybindings(tmpFile);
