@@ -14,6 +14,24 @@ import {
 import { SentinelDatabase } from "../src/features/dc-sentinel/core/dc-sentinel-db.ts";
 import dcSentinelExtension from "../src/features/dc-sentinel/dc-sentinel.ts";
 
+test("dc-sentinel-panel: oversized chronicles show editor guidance instead of content", t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "dc-chronicle-panel-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(root, "docs", "chronicle"), { recursive: true });
+  fs.writeFileSync(path.join(root, "docs", "chronicle", "large.md"), "x".repeat(256 * 1024 + 1));
+  const panel = new SentinelPanel({
+    theme: { fg: (_r: string, text: string) => text, bg: (_r: string, text: string) => text, bold: (text: string) => text },
+    recorder: new SentinelRecorder("test", root), projectRoot: root,
+    requestRender: () => {}, maxRows: 20,
+  });
+  panel.handleInput("2");
+  const text = panel.render(160).join("\n");
+  assert.ok(text.includes("large"));
+  assert.ok(text.includes("256 KiB"));
+  assert.ok(text.includes("editor"));
+  assert.ok(!text.includes("xxxxxxxxxxxxxxxx"));
+});
+
 test("dc-sentinel-panel: renders 2-panel layout for session turns", () => {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "dc-sentinel-panel-test-"));
   const recorder = new SentinelRecorder("test-session", tmpDir);
