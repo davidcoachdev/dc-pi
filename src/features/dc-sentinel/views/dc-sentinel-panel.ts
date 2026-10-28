@@ -27,6 +27,7 @@ import {
   globalSentinelRecorder,
   listChronicleFiles,
   type ChronicleFileItem,
+  CHRONICLE_CONTENT_LIMIT_BYTES,
 } from "../core/dc-sentinel-recorder.ts";
 import { SentinelDatabase } from "../core/dc-sentinel-db.ts";
 import { resolveMetroLine } from "../core/dc-sentinel-deterministic-extractor.ts";
@@ -644,7 +645,11 @@ export class SentinelPanel implements Component {
       rightContent.push(t.fg("border", "─".repeat(Math.max(1, rightW - 2))));
       rightContent.push("");
 
-      const md = new Markdown(file.content, 0, 0, mdTheme);
+      // Large files remain searchable by name; their bytes are never loaded here.
+      const preview = file.sizeBytes > CHRONICLE_CONTENT_LIMIT_BYTES
+        ? "Archivo mayor de 256 KiB. Contenido no cargado; ábrelo en el editor."
+        : file.content;
+      const md = new Markdown(preview, 0, 0, mdTheme);
       const renderedLines = md.render(Math.max(20, rightW - 2));
       for (const line of renderedLines) {
         rightContent.push(` ${line}`);

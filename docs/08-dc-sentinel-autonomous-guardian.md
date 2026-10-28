@@ -112,7 +112,7 @@ Siguiendo el principio de OpenHuman (*"The pack never enters the transcript"*):
 
 Se abre con **/dc-sentinel** o el atajo global **`Alt+Shift+S`**:
 - **Pestaña `[1] Sesión Activa`:** Registros de vuelo, prompts, subagentes lanzados y herramientas auditadas de la sesión actual de Pi.
-- **Pestaña `[2] Bitácora Disco`:** Visualizador de archivos Markdown históricos bajo `docs/chronicle/`.
+- **Pestaña `[2] Bitácora Disco`:** Visualizador de archivos Markdown históricos bajo `docs/chronicle/`. Los archivos de hasta **256 KiB** conservan su vista de contenido. Los mayores se listan con nombre, tamaño y fecha, sin leer su contenido: el panel indica que deben abrirse en el editor. No se truncan ni modifican los originales. La búsqueda por contenido solo cubre los archivos cargados; los grandes se buscan por nombre. Se omiten enlaces simbólicos bajo la raíz canónica del proyecto, entradas que no sean archivos regulares y textos con bytes nulos o UTF-8 inválido. Un archivo inaccesible no oculta las demás entradas. Las comprobaciones de ruta y descriptor detectan sustituciones habituales, pero no constituyen aislamiento del sistema operativo.
 - **Pestaña `[3] Metro (Conocimiento)`:** El Mapa de Metro con las notas atómicas categorizadas por glifos, `topic_key` evolutivo y transbordos interactivos con `Enter`.
   * **Tecla `[d]`:** Olvida/descarta la nota seleccionada en vivo (soft-delete).
   * **Tecla `[p]`:** Fija o desfija la nota (`pinned = 1`) para protegerla de decaimiento.

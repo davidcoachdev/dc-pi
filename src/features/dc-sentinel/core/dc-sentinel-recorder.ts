@@ -245,27 +245,83 @@ export interface ChronicleFileItem {
   content: string;
 }
 
-/**
- * Lee y lista los archivos Markdown de bitácora bajo docs/chronicle/ ordenados por fecha descendente.
+export const CHRONICLE_CONTENT_LIMIT_BYTES = 256 * 1024;
+
+/** Reject symlinks below the canonical project root; a root alias is allowed.
+ * This detects ordinary path replacement, not an OS-level filesystem sandbox.
+ */
+function checkedChroniclePath(root: string, fullPath: string): void {
+  const rel = path.relative(root, fullPath);
+  if (!rel || rel === ".." || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel)) {
+    throw new Error("Chronicle path outside project");
+  }
+  let cursor = root;
+  for (const part of rel.split(path.sep)) {
+    cursor = path.join(cursor, part);
+    if (fs.lstatSync(cursor).isSymbolicLink()) throw new Error("Chronicle symlink refused");
+  }
+  if (fs.realpathSync(fullPath) !== fullPath) throw new Error("Chronicle path changed");
+}
+
+function readChronicleItem(root: string, fullPath: string, name: string): ChronicleFileItem {
+  checkedChroniclePath(root, fullPath);
+  // Reject non-files before opening (including directories and named pipes).
+  if (!fs.lstatSync(fullPath).isFile()) throw new Error("Not a chronicle file");
+  const fd = fs.openSync(fullPath, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
+  try {
+    const before = fs.fstatSync(fd);
+    if (!before.isFile()) throw new Error("Not a chronicle file");
+    const verify = () => {
+      checkedChroniclePath(root, fullPath);
+      const current = fs.fstatSync(fd);
+      const named = fs.lstatSync(fullPath);
+      if (named.ino !== before.ino || named.dev !== before.dev ||
+          current.ino !== before.ino || current.dev !== before.dev ||
+          current.size !== before.size || current.mtimeMs !== before.mtimeMs ||
+          current.ctimeMs !== before.ctimeMs) throw new Error("Chronicle changed during read");
+    };
+    verify();
+    let content = "";
+    if (before.size <= CHRONICLE_CONTENT_LIMIT_BYTES) {
+      const read = () => {
+        const bytes = Buffer.alloc(before.size);
+        let offset = 0;
+        while (offset < bytes.length) {
+          const count = fs.readSync(fd, bytes, offset, bytes.length - offset, offset);
+          if (!count) throw new Error("Incomplete chronicle read");
+          offset += count;
+        }
+        return bytes;
+      };
+      const bytes = read();
+      if (!bytes.equals(read()) || bytes.includes(0)) throw new Error("Invalid chronicle text");
+      content = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    }
+    verify();
+    return { name, fullPath, sizeBytes: before.size,
+      updatedAt: before.mtime.toISOString().slice(0, 16).replace("T", " "), content };
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+/** List Markdown chronicles newest-name first. Files above 256 KiB are metadata-only;
+ * unsafe/unreadable entries are omitted independently without modifying source files.
  */
 export function listChronicleFiles(projectRoot: string = process.cwd()): ChronicleFileItem[] {
   try {
-    const dir = path.join(projectRoot, "docs", "chronicle");
-    if (!fs.existsSync(dir)) return [];
+    const root = fs.realpathSync(projectRoot);
+    const dir = path.join(root, "docs", "chronicle");
+    checkedChroniclePath(root, dir);
     return fs.readdirSync(dir)
       .filter((f) => f.endsWith(".md"))
       .sort((a, b) => b.localeCompare(a))
-      .map((name) => {
-        const fullPath = path.join(dir, name);
-        const stat = fs.statSync(fullPath);
-        const content = fs.readFileSync(fullPath, "utf8");
-        return {
-          name,
-          fullPath,
-          sizeBytes: stat.size,
-          updatedAt: stat.mtime.toISOString().slice(0, 16).replace("T", " "),
-          content,
-        };
+      .flatMap((name) => {
+        try {
+          return [readChronicleItem(root, path.join(dir, name), name)];
+        } catch {
+          return [];
+        }
       });
   } catch {
     return [];
