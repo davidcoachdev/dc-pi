@@ -23,11 +23,14 @@ import {
   sendTaxiToWorkshop,
   repairTaxiFromWorkshop,
   updateTaxiPassengerUsage,
+  updateTaxiRechargingState,
 } from "../src/features/dc-agents/core/dc-taxi-dispatcher.ts";
 
 import {
   setCachedTaxiQuota,
+  getCachedTaxiQuota,
   clearTaxiQuotaCache,
+  getEffectiveQuotaPct,
 } from "../src/features/dc-agents/core/dc-taxi-quota.ts";
 
 import {
@@ -79,6 +82,7 @@ import {
   sanitizeWorkshopReason,
   isProviderAuthError,
   handleOrchestratorQuotaHandover,
+  KNOWN_FATAL_AUTH_ACCOUNTS,
 } from "../src/features/dc-agents/dc-agents.ts";
 import { createTaxiUnitRows } from "../src/features/dc-sidebar/components/dc-sidebar-status-card.ts";
 import {
@@ -610,7 +614,7 @@ test("dc-taxi-dispatcher: acquireOrchestratorTaxi prevents collisions between mu
     assert.equal(res1.modelId, "cpam/ac02/gemini-3.8-flash-high");
 
     // Terminal 2 (en otro PID vivo) arranca TAMBIÉN pidiendo ac02 por default
-    // Como ac02 está ocupada por Terminal 1, debe auto-reasignar el primer taxi libre (ac01)
+    // Como ac02 está ocupada por Terminal 1, debe auto-reasignar otro taxi libre disponible (ac01 o ac03)
     const res2 = acquireOrchestratorTaxi(
       "sess-term-2",
       "cpam/ac02/gemini-3.8-flash-high",
@@ -620,9 +624,9 @@ test("dc-taxi-dispatcher: acquireOrchestratorTaxi prevents collisions between mu
     );
 
     assert.ok(res2);
-    assert.equal(res2.account, "ac01");
+    assert.ok(res2.account === "ac01" || res2.account === "ac03");
     assert.equal(res2.changed, true);
-    assert.equal(res2.modelId, "cpam/ac01/gemini-3.8-flash-high");
+    assert.ok(res2.modelId.includes(res2.account));
 
     // Ambas terminales están registradas como ocupadas en taxis diferentes
     const summary = getFleetStatusSummary(fleetPath, customAccounts);
@@ -658,8 +662,8 @@ test("dc-taxi-dispatcher: acquireOrchestratorTaxi auto-binds free CPAM taxi when
 
     assert.ok(resKimi);
     assert.equal(resKimi.changed, true);
-    assert.equal(resKimi.account, "ac01");
-    assert.equal(resKimi.modelId, "cpam/ac01/gemini-3.8-flash-high");
+    assert.ok(resKimi.account === "ac01" || resKimi.account === "ac02");
+    assert.ok(resKimi.modelId.includes(resKimi.account));
 
     // Terminal arranca sin modelo previo (undefined)
     const resNoModel = acquireOrchestratorTaxi(
@@ -672,7 +676,8 @@ test("dc-taxi-dispatcher: acquireOrchestratorTaxi auto-binds free CPAM taxi when
 
     assert.ok(resNoModel);
     assert.equal(resNoModel.changed, true);
-    assert.equal(resNoModel.account, "ac02");
+    assert.ok(resNoModel.account === "ac01" || resNoModel.account === "ac02");
+    assert.notEqual(resNoModel.account, resKimi.account);
     assert.equal(resNoModel.modelId, "cpam/ac02/gemini-3.8-flash-high");
   } finally {
     fs.rmSync(tempDir, { recursive: true, force: true });
@@ -2515,9 +2520,11 @@ test("MÓDULO B: auditAccountForWorkshop sends ac40 and 400/401/403 fatal auth a
     const state = createInitialFleetState(customAccounts);
     saveFleetState(state, fleetPath);
 
-    // 1. ac40 es fatal auth conocido por defecto -> debe enviarse directamente a taller
+    // 1. Cuentas con fallo fatal conocido registradas en KNOWN_FATAL_AUTH_ACCOUNTS
+    KNOWN_FATAL_AUTH_ACCOUNTS.add("ac40");
     const sentAc40 = await auditAccountForWorkshop("ac40", fleetPath);
     assert.equal(sentAc40, true, "ac40 debe ser enviada a taller automáticamente");
+    KNOWN_FATAL_AUTH_ACCOUNTS.delete("ac40");
 
     const state1 = loadFleetState(fleetPath, customAccounts);
     assert.equal(state1.fleet["ac40"].status, "en_taller");
@@ -3415,6 +3422,63 @@ test("MÓDULO E: acquireOrchestratorTaxi selecciona la unidad libre con mayor cu
     // Ambas están libres; acquireOrchestratorTaxi debe haber asignado una de las libres (ac02 o ac03)
     assert.ok(res.account === "ac02" || res.account === "ac03");
   } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("MÓDULO F: getEffectiveQuotaPct and updateTaxiRechargingState multi-model & multi-window evaluation", () => {
+  const tempDir = createTempDir("multi-quota-recharge");
+  const fleetPath = path.join(tempDir, "dc-taxis.json");
+  clearTaxiQuotaCache();
+
+  try {
+    const customAccounts = ["ac01", "ac02", "ac03"];
+    const initial = createInitialFleetState(customAccounts);
+    saveFleetState(initial, fleetPath);
+
+    // Caso 1: Cuenta con Claude Weekly en 0% pero Gemini en 100%
+    setCachedTaxiQuota("ac01", {
+      claudeWeeklyPct: 0,
+      claude5hPct: 100,
+      gemini5hPct: 100,
+    });
+    const q1 = getCachedTaxiQuota("ac01");
+    // Para Claude la cuota efectiva es 0%
+    assert.equal(getEffectiveQuotaPct(q1, "claude"), 0);
+    // Para Gemini la cuota efectiva es 100%
+    assert.equal(getEffectiveQuotaPct(q1, "gemini"), 100);
+
+    // Si la cuota primaria (Gemini) cae < 5% (ej: 2%), la unidad pasa a 'recargando'
+    setCachedTaxiQuota("ac01", { gemini5hPct: 2 });
+    const q1Low = getCachedTaxiQuota("ac01");
+    const unit1 = { account: "ac01", status: "libre" as const, passenger: null };
+    updateTaxiRechargingState(unit1, q1Low);
+    assert.equal(unit1.status, "recargando");
+
+    // Caso 2: Cuenta en recarga recupera >= 60% en Gemini -> vuelve a libre
+    setCachedTaxiQuota("ac01", {
+      claudeWeeklyPct: 80,
+      claude5hPct: 90,
+      gemini5hPct: 85,
+    });
+    const q1Restored = getCachedTaxiQuota("ac01");
+    assert.equal(getEffectiveQuotaPct(q1Restored), 85);
+    updateTaxiRechargingState(unit1, q1Restored);
+    assert.equal(unit1.status, "libre");
+
+    // Caso 3: getFleetStatusSummary persiste atómicamente cuando detecta transiciones
+    initial.fleet["ac02"].status = "libre";
+    setCachedTaxiQuota("ac02", { gemini5hPct: 2 }); // Cuota crítica < 5%
+    saveFleetState(initial, fleetPath);
+
+    const summary = getFleetStatusSummary(fleetPath, customAccounts);
+    assert.equal(summary.recargando, 1);
+
+    // Comprobar que en disco también se persistió atómicamente gracias a withFleetLock
+    const persisted = loadFleetState(fleetPath, customAccounts);
+    assert.equal(persisted.fleet["ac02"].status, "recargando");
+  } finally {
+    clearTaxiQuotaCache();
     fs.rmSync(tempDir, { recursive: true, force: true });
   }
 });

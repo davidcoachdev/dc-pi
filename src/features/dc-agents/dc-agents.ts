@@ -12,6 +12,7 @@ import {
   releaseOrchestratorTaxi,
   syncOrchestratorTaxi,
   sendTaxiToWorkshop as dispatcherSendTaxiToWorkshop,
+  repairTaxiFromWorkshop,
   loadFleetState,
   saveFleetState,
   withFleetLock,
@@ -25,7 +26,7 @@ import { registerDcEphemeralTools } from "./tools/dc-ephemeral-tools.ts";
 import { DcAgentsPanel } from "./views/dc-agents-panel.ts";
 import { DcTaxisPanel } from "./views/dc-taxis-panel.ts";
 
-export const KNOWN_FATAL_AUTH_ACCOUNTS = new Set(["ac40"]);
+export const KNOWN_FATAL_AUTH_ACCOUNTS = new Set<string>();
 
 /**
  * Resume cualquier motivo de error o fallo a máximo 3 palabras concisas.
@@ -168,7 +169,7 @@ export async function auditAccountForWorkshop(
 ): Promise<boolean> {
   const normAc = account.toLowerCase();
 
-  // 1. Cuentas con fallo fatal conocido (ej. ac40)
+  // 1. Cuentas con fallo fatal conocido dinámico
   if (KNOWN_FATAL_AUTH_ACCOUNTS.has(normAc)) {
     const reason = sanitizeWorkshopReason(`Auth Error ${account}`);
     sendTaxiToWorkshop(
@@ -187,6 +188,13 @@ export async function auditAccountForWorkshop(
       await fetchJson(`http://127.0.0.1:8325/quota/${encodeURIComponent(account)}`, {
         timeoutMs: 400,
       });
+    }
+
+    // Si la llamada fue exitosa y la unidad estaba en taller (ej: token renovado o restaurado), repararla
+    const fleetSummary = getFleetStatusSummary(fleetPath);
+    const unit = fleetSummary.units.find((u) => u.account === account);
+    if (unit && unit.status === "en_taller") {
+      repairTaxiFromWorkshop(account, fleetPath);
     }
   } catch (err: any) {
     const status = err?.status || err?.statusCode;
@@ -579,25 +587,30 @@ export default function dcAgentsExtension(pi: ExtensionAPI): void {
       const sessionId = ctx.sessionManager?.getSessionId?.() || `ambient-${Date.now()}`;
       
       const taxiResult = acquireOrchestratorTaxi(sessionId, currentModelId);
-      if (taxiResult && taxiResult.changed && taxiResult.modelId) {
+      if (taxiResult && taxiResult.modelId) {
         try {
           const slashIdx = taxiResult.modelId.indexOf("/");
           const targetProvider = slashIdx > 0 ? taxiResult.modelId.slice(0, slashIdx) : "cpam";
           const targetId = slashIdx > 0 ? taxiResult.modelId.slice(slashIdx + 1) : taxiResult.modelId;
 
-          const available = await (ctx as any).modelRegistry?.getAvailable?.();
-          const foundModel = ctx.modelRegistry?.find?.(targetProvider, targetId)
-            || (Array.isArray(available) ? available.find((m: any) => m.id === targetId || m.id === taxiResult.modelId) : undefined);
+          const currentEffectiveId = ctx.model ? `${ctx.model.provider || "cpam"}/${ctx.model.id}` : undefined;
+          const isModelMismatch = !currentEffectiveId || currentEffectiveId !== taxiResult.modelId;
 
-          if (foundModel) {
-            await (pi as any).setModel(foundModel);
-            if (ctx.hasUI) {
-              dcNotifier.notify(
-                ctx,
-                "🚕 Flota de Taxis",
-                `Taxi ${taxiResult.account.toUpperCase()} asignado a esta terminal (${targetId})`,
-                "info",
-              );
+          if (taxiResult.changed || isModelMismatch) {
+            const available = await (ctx as any).modelRegistry?.getAvailable?.();
+            const foundModel = ctx.modelRegistry?.find?.(targetProvider, targetId)
+              || (Array.isArray(available) ? available.find((m: any) => m.id === targetId || m.id === taxiResult.modelId) : undefined);
+
+            if (foundModel) {
+              await (pi as any).setModel(foundModel);
+              if (ctx.hasUI) {
+                dcNotifier.notify(
+                  ctx,
+                  "🚕 Flota de Taxis",
+                  `Taxi ${taxiResult.account.toUpperCase()} asignado a esta terminal (${targetId})`,
+                  "info",
+                );
+              }
             }
           }
         } catch {
@@ -669,13 +682,70 @@ export default function dcAgentsExtension(pi: ExtensionAPI): void {
     try {
       // 1. Auditoría de taller por fallos fatales de auth
       const outcome = handleTurnEndForWorkshop(event, ctx);
-      if (outcome.sent && outcome.account && ctx.hasUI) {
-        dcNotifier.notify(
-          ctx,
-          "🛠️ Flota de Taxis",
-          `Taxi ${outcome.account.toUpperCase()} enviado a taller: ${outcome.reason}`,
-          "error",
-        );
+      if (outcome.sent && outcome.account) {
+        if (ctx.hasUI) {
+          dcNotifier.notify(
+            ctx,
+            "🛠️ Flota de Taxis",
+            `Taxi ${outcome.account.toUpperCase()} enviado a taller: ${outcome.reason}`,
+            "error",
+          );
+        }
+
+        // Si la unidad que falló con error fatal de autenticación era la del orquestador activo,
+        // relevarla de inmediato a una nueva unidad libre operativa en lugar de dejar la terminal varada.
+        try {
+          const sessionId = ctx.sessionManager?.getSessionId?.() || `ambient-${Date.now()}`;
+          const currentModelId = ctx.model ? `${ctx.model.provider || "cpam"}/${ctx.model.id}` : undefined;
+          const taxiResult = acquireOrchestratorTaxi(
+            sessionId,
+            currentModelId,
+            undefined,
+            process.pid,
+            undefined,
+            "gemini-3.8-flash-high",
+            "cpam",
+            [outcome.account],
+          );
+
+          if (taxiResult && taxiResult.account !== outcome.account && pi && taxiResult.modelId) {
+            const slashIdx = taxiResult.modelId.indexOf("/");
+            const targetProvider = slashIdx > 0 ? taxiResult.modelId.slice(0, slashIdx) : "cpam";
+            const targetId = slashIdx > 0 ? taxiResult.modelId.slice(slashIdx + 1) : taxiResult.modelId;
+
+            const available = await (ctx as any).modelRegistry?.getAvailable?.();
+            let foundModel = ctx.modelRegistry?.find?.(targetProvider, targetId)
+              || (Array.isArray(available) ? available.find((m: any) => m.id === targetId || m.id === taxiResult.modelId) : undefined);
+
+            if (!foundModel) {
+              const fallbackId = `${taxiResult.account}/gemini-3.8-flash-high`;
+              foundModel = ctx.modelRegistry?.find?.(targetProvider, fallbackId)
+                || (Array.isArray(available) ? available.find((m: any) => m.id === fallbackId || m.id === `${targetProvider}/${fallbackId}`) : undefined);
+            }
+
+            if (foundModel) {
+              await (pi as any).setModel(foundModel);
+              if (foundModel.id?.includes("gemini-3.8-flash-high")) {
+                try {
+                  (pi as any).setThinkingLevel?.("medium");
+                } catch {
+                  /* optional thinking level */
+                }
+              }
+
+              if (ctx.hasUI) {
+                dcNotifier.notify(
+                  ctx,
+                  "🚕 Supervisor de Taxis",
+                  `Relevo automático por avería: ${outcome.account.toUpperCase()} → ${taxiResult.account.toUpperCase()} (${foundModel.id})`,
+                  "warning",
+                );
+              }
+            }
+          }
+        } catch {
+          /* best-effort auto-failover */
+        }
       }
 
       // 2. Sincronización continua de tokens y costo en el Pasajero del Orquestador

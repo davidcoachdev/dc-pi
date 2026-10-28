@@ -216,6 +216,7 @@ test("dc-taxi-provider: formatters and fleet summary helper", () => {
   assert.equal(formatFleetSummaryText(5, 0), "0 ocupados · 5 libres");
   assert.equal(formatFleetSummaryText(1, 1), "1 ocupado · 1 libre");
   assert.equal(formatFleetSummaryText(4, 2, 1), "2 ocupados · 4 libres · 1 recargando");
+  assert.equal(formatFleetSummaryText(3, 1, 1, 2), "1 ocupado · 3 libres · 1 recargando · 2 taller");
 
   // Elapsed duration format
   assert.equal(formatElapsedDuration(0), "0s");

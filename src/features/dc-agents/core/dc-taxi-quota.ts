@@ -144,6 +144,54 @@ export function getCachedTaxiQuota(account: string): DcTaxiQuotaInfo | undefined
 }
 
 /**
+ * Determina el porcentaje de cuota efectiva para una cuenta.
+ * Opcionalmente se puede filtrar por familia ('gemini' | 'claude').
+ * Si no se especifica familia (o para uso general de CPAM):
+ * - En cuentas de Google Antigravity en CPAM, el backend de cuotas únicamente
+ *   reporta el límite de modelos de terceros (Claude Opus/Sonnet y GPT).
+ *   Los modelos Gemini no están limitados por el bucket semanal de Claude y
+ *   operan al 100% (o bajo gemini5hPct si existe).
+ * - Por tanto, si se evalúa Gemini, se consideran gemini5hPct / geminiWeeklyPct.
+ * - Si se evalúa Claude, se consideran claude5hPct / claudeWeeklyPct.
+ */
+export function getEffectiveQuotaPct(
+  quotaInfo?: DcTaxiQuotaInfo,
+  modelFamily?: "gemini" | "claude",
+): number | null {
+  if (!quotaInfo) return null;
+
+  if (modelFamily === "gemini") {
+    const candidates: number[] = [];
+    if (typeof quotaInfo.gemini5hPct === "number") candidates.push(quotaInfo.gemini5hPct);
+    if (typeof quotaInfo.geminiWeeklyPct === "number") candidates.push(quotaInfo.geminiWeeklyPct);
+    return candidates.length > 0 ? Math.min(...candidates) : 100;
+  }
+
+  if (modelFamily === "claude") {
+    const candidates: number[] = [];
+    if (typeof quotaInfo.claude5hPct === "number") candidates.push(quotaInfo.claude5hPct);
+    if (typeof quotaInfo.claudeWeeklyPct === "number") candidates.push(quotaInfo.claudeWeeklyPct);
+    return candidates.length > 0 ? Math.min(...candidates) : 100;
+  }
+
+  // Si no se especifica familia, evaluar la cuota primaria de CPAM (Gemini por defecto para la flota)
+  // evitando que el agotamiento exclusivo de Claude bloquee una cuenta que corre Gemini al 100%.
+  if (typeof quotaInfo.gemini5hPct === "number" && typeof quotaInfo.claudeWeeklyPct === "number") {
+    // Si la cuenta tiene gemini al 100% y claude weekly al 0%, la cuota disponible para gemini es 100%
+    return quotaInfo.gemini5hPct;
+  }
+
+  const candidates: number[] = [];
+  if (typeof quotaInfo.gemini5hPct === "number") candidates.push(quotaInfo.gemini5hPct);
+  if (typeof quotaInfo.geminiWeeklyPct === "number") candidates.push(quotaInfo.geminiWeeklyPct);
+  if (typeof quotaInfo.claude5hPct === "number") candidates.push(quotaInfo.claude5hPct);
+  if (typeof quotaInfo.claudeWeeklyPct === "number") candidates.push(quotaInfo.claudeWeeklyPct);
+
+  if (candidates.length === 0) return null;
+  return Math.min(...candidates);
+}
+
+/**
  * Permite registrar o actualizar manualmente la información de cuota en caché.
  * Muy útil para inyección síncrona en pruebas y sincronizaciones reactivas.
  */
@@ -156,6 +204,8 @@ export function setCachedTaxiQuota(
     account,
     gemini5hPct: info.gemini5hPct !== undefined ? info.gemini5hPct : (current?.gemini5hPct ?? 100),
     geminiWeeklyPct: info.geminiWeeklyPct !== undefined ? info.geminiWeeklyPct : (current?.geminiWeeklyPct ?? 100),
+    claude5hPct: info.claude5hPct !== undefined ? info.claude5hPct : (current?.claude5hPct ?? null),
+    claudeWeeklyPct: info.claudeWeeklyPct !== undefined ? info.claudeWeeklyPct : (current?.claudeWeeklyPct ?? null),
     resetTimeIso: info.resetTimeIso ?? current?.resetTimeIso,
     lastChecked: info.lastChecked ?? Date.now(),
   });

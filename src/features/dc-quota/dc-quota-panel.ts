@@ -44,6 +44,8 @@ export class DcQuotaPanel implements Component {
   private onRefresh?: () => void;
   private requestRender: () => void;
   private lastLeftW = 0;
+  private tabScrollOffset = 0;
+  private lastRowCount = 10;
 
   constructor(options: DcQuotaPanelOptions) {
     this.theme = options.theme;
@@ -115,8 +117,28 @@ export class DcQuotaPanel implements Component {
     }
 
     this.activeSectionIndex = targetIndex;
+    this.tabScrollOffset = 0;
     this.rowCursor = 0;
     this.setLoading(false);
+  }
+
+  private ensureTabCursorVisible(viewportHeight: number): void {
+    const filtered = this.getFilteredSections();
+    if (this.activeSectionIndex < 0) this.activeSectionIndex = 0;
+    if (this.activeSectionIndex >= filtered.length) {
+      this.activeSectionIndex = Math.max(0, filtered.length - 1);
+    }
+
+    if (this.activeSectionIndex < this.tabScrollOffset) {
+      this.tabScrollOffset = this.activeSectionIndex;
+    } else if (this.activeSectionIndex >= this.tabScrollOffset + viewportHeight) {
+      this.tabScrollOffset = this.activeSectionIndex - viewportHeight + 1;
+    }
+
+    const maxScroll = Math.max(0, filtered.length - viewportHeight);
+    if (this.tabScrollOffset > maxScroll) {
+      this.tabScrollOffset = maxScroll;
+    }
   }
 
   private startLoadingAnim(): void {
@@ -257,6 +279,7 @@ export class DcQuotaPanel implements Component {
       return v >= len ? truncateToWidth(s, len, "") : s + " ".repeat(len - v);
     };
 
+    // 1. Filas de cuentas reales con viewport y autoscroll
     let tabsLines: string[] = [];
     let detailLines: string[] = [];
 
@@ -266,7 +289,6 @@ export class DcQuotaPanel implements Component {
       tabsLines = skel.tabsLines;
       detailLines = skel.detailLines;
     } else {
-      // 1. Filas de cuentas reales
       filteredSections.forEach((sec, idx) => {
         const isSelected = idx === this.activeSectionIndex;
         const mark = isSelected ? t.fg("accent", "●") : t.fg("dim", "○");
@@ -349,10 +371,42 @@ export class DcQuotaPanel implements Component {
       }
     }
 
-    const rowsCount = Math.max(10, Math.max(tabsLines.length, detailLines.length));
+    const viewportHeight = Math.max(10, Math.min(22, Math.max(12, detailLines.length)));
+    this.lastRowCount = viewportHeight;
+    this.ensureTabCursorVisible(viewportHeight);
+
+    const rowsCount = viewportHeight;
 
     for (let i = 0; i < rowsCount; i++) {
-      const leftCell = cell(tabsLines[i] ?? "", leftW);
+      // 1. Columna Cuentas con scrollbar retro
+      let tabScrollChar = "";
+      if (filteredSections.length > rowsCount) {
+        if (i === 0) {
+          tabScrollChar = this.tabScrollOffset > 0 ? t.fg("accent", "▲") : t.fg("dim", "─");
+        } else if (i === rowsCount - 1) {
+          const hasMore = this.tabScrollOffset + rowsCount < filteredSections.length;
+          tabScrollChar = hasMore ? t.fg("accent", "▼") : t.fg("dim", "─");
+        } else {
+          const maxScroll = filteredSections.length - rowsCount;
+          const trackHeight = rowsCount - 2;
+          const thumbRow = Math.min(trackHeight - 1, Math.round((this.tabScrollOffset / maxScroll) * (trackHeight - 1)));
+          const isThumb = (i - 1) === thumbRow;
+          tabScrollChar = isThumb ? t.fg("accent", "█") : t.fg("dim", "░");
+        }
+      }
+      const tabCellW = filteredSections.length > rowsCount ? leftW - 1 : leftW;
+
+      let leftCell = " ".repeat(leftW);
+      if (this.loading && this.sections.length === 0) {
+        leftCell = cell(tabsLines[i] ?? "", leftW);
+      } else {
+        const tabIdx = this.tabScrollOffset + i;
+        if (tabIdx < tabsLines.length) {
+          const content = tabsLines[tabIdx] ?? "";
+          leftCell = cell(content, tabCellW) + tabScrollChar;
+        }
+      }
+
       const rightCell = cell(detailLines[i] ?? "", rightW);
       lines.push(`${leftCell}${divider}${rightCell}`);
     }
@@ -496,8 +550,9 @@ export class DcQuotaPanel implements Component {
       // Columna 1: Cuentas
       if (x <= this.lastLeftW) {
         const filtered = this.getFilteredSections();
-        if (rowIdx < filtered.length) {
-          this.activeSectionIndex = rowIdx;
+        const tabIdx = this.tabScrollOffset + rowIdx;
+        if (tabIdx < filtered.length) {
+          this.activeSectionIndex = tabIdx;
           this.rowCursor = 0;
           this.focus = "tabs";
           this.requestRender();

@@ -23,6 +23,7 @@ import { discoverCpamAccounts } from "./dc-taxi-accounts.ts";
 import {
   fetchAllTaxisQuotas,
   getCachedTaxiQuota,
+  getEffectiveQuotaPct,
   type DcTaxiQuotaInfo,
 } from "./dc-taxi-quota.ts";
 
@@ -494,16 +495,15 @@ export function reapAbandonedTaxis(
 
 /**
  * Aplica la política de cuota mínima:
- * Si una cuenta tiene < 5% en Gemini 5h, entra en 'recargando'.
+ * Si una cuenta tiene < 5% en su cuota efectiva (Gemini o Claude, 5h o Weekly), entra en 'recargando'.
  * No vuelve a 'libre' hasta tener al menos >= 60% de cuota.
  */
 export function updateTaxiRechargingState(
   unit: DcTaxiUnit,
   quotaInfo?: DcTaxiQuotaInfo,
 ): void {
-  if (!quotaInfo || quotaInfo.gemini5hPct === null) return;
-
-  const pct = quotaInfo.gemini5hPct;
+  const pct = getEffectiveQuotaPct(quotaInfo);
+  if (pct === null) return;
 
   // Si está ocupada por un pasajero real, no interrumpimos abruptamente salvo que esté libre
   if (unit.status === "libre" && pct < 5) {
@@ -511,7 +511,7 @@ export function updateTaxiRechargingState(
     appendTaxiLog("WARN", "TAXI_RECHARGING_ENTERED", {
       account: unit.account,
       pct,
-      resetTimeIso: quotaInfo.resetTimeIso,
+      resetTimeIso: quotaInfo?.resetTimeIso,
     });
   } else if (unit.status === "recargando") {
     if (pct >= 60) {
@@ -598,15 +598,29 @@ export function acquireOrchestratorTaxi(
 
     const isExcluded = (ac: string) => Array.isArray(excludedAccounts) && excludedAccounts.includes(ac);
 
-    // Caso 1: La cuenta preferida es de CPAM ac* y está libre o ya pertenece a este mismo proceso (y no está excluida)
+    // Caso 1: Si esta sesión o PID ya tiene un taxi ocupado en la flota, preservarlo salvo que esté excluido
+    for (const unit of Object.values(state.fleet)) {
+      if (
+        unit.status === "ocupado" &&
+        unit.passenger &&
+        unit.passenger.type === "orchestrator" &&
+        (unit.passenger.sessionId === sessionId || unit.passenger.pid === pid) &&
+        !isExcluded(unit.account)
+      ) {
+        unit.passenger.heartbeatAt = Date.now();
+        saveFleetState(state, fleetPath);
+        return {
+          account: unit.account,
+          modelId: unit.passenger.model || modelId || `${fallbackProvider}/${unit.account}/${fallbackBaseModel}`,
+          changed: false,
+        };
+      }
+    }
+
+    // Si se especifica una cuenta explícita en modelId (ej: cpam/ac02/...), respetar esa cuenta si está libre
     if (currentAccount && state.fleet[currentAccount] && !isExcluded(currentAccount)) {
       const preferredUnit = state.fleet[currentAccount];
-      const isMine =
-        preferredUnit?.passenger?.pid === pid ||
-        preferredUnit?.passenger?.sessionId === sessionId;
-      const isFree = preferredUnit?.status === "libre";
-
-      if (isFree || isMine) {
+      if (preferredUnit.status === "libre") {
         preferredUnit.status = "ocupado";
         preferredUnit.passenger = {
           type: "orchestrator",
@@ -615,7 +629,7 @@ export function acquireOrchestratorTaxi(
           model: modelId!,
           taskLabel: "Sesión Principal (Orquestador)",
           plate: `DC-HOST-${pid}`,
-          startedAt: preferredUnit.passenger?.startedAt || Date.now(),
+          startedAt: Date.now(),
           heartbeatAt: Date.now(),
         };
         saveFleetState(state, fleetPath);
@@ -632,19 +646,25 @@ export function acquireOrchestratorTaxi(
       }
     }
 
-    // Caso 2: Si el modelo no era de CPAM (ej: Kimi, OpenCode) O si su cuenta ac* está ocupada/excluida:
-    // ¡Tomar el Taxi LIBRE de la flota de CPAM con mayor cuota disponible!
+    // Caso 2: Si el modelo no especifica cuenta ac* o si su cuenta solicitada está ocupada/excluida:
+    // Seleccionar entre los taxis libres disponibles con mayor cuota mediante balanceo de carga
+    // para distribuir el uso uniformemente entre las 44 cuentas (ac01..ac44).
     const freeUnits = Object.entries(state.fleet)
       .filter(([ac, unit]) => unit.status === "libre" && !isExcluded(ac))
       .map(([ac, unit]) => {
         const q = getCachedTaxiQuota(ac);
         const quotaPct = typeof q?.gemini5hPct === "number" ? q.gemini5hPct : 100;
         return { ac, unit, quotaPct };
-      })
-      .sort((a, b) => b.quotaPct - a.quotaPct);
+      });
 
     if (freeUnits.length > 0) {
-      const selected = freeUnits[0];
+      // Filtrar el grupo de unidades con la máxima cuota disponible
+      const maxQuota = Math.max(...freeUnits.map((u) => u.quotaPct));
+      const topCandidates = freeUnits.filter((u) => u.quotaPct >= maxQuota - 10);
+      
+      // Selección pseudoaleatoria uniforme entre los mejores candidatos libres
+      const selectedIdx = Math.floor(Math.random() * topCandidates.length);
+      const selected = topCandidates[selectedIdx] ?? freeUnits[0]!;
       const ac = selected.ac;
       const unit = selected.unit;
       unit.status = "ocupado";
@@ -677,6 +697,7 @@ export function acquireOrchestratorTaxi(
         pid,
         originalModelId: modelId || "none",
         newModelId,
+        loadBalanced: true,
       });
 
       return { account: ac, modelId: newModelId, changed: true };
@@ -784,19 +805,23 @@ export function leaseTaxi(
       return { account: preferredAccount, unit };
     }
 
-    // 2. Buscar el mejor taxi libre disponible ordenado por mayor cuota restante (algoritmo inteligente)
+    // 2. Buscar entre los taxis libres disponibles con mayor cuota restante mediante balanceo de carga
     const freeUnits = Object.values(state.fleet).filter((u) => u.status === "libre");
     if (freeUnits.length > 0) {
-      freeUnits.sort((a, b) => {
-        const qA = quotaGetter(a.account)?.gemini5hPct ?? 100;
-        const qB = quotaGetter(b.account)?.gemini5hPct ?? 100;
-        if (qB !== qA) {
-          return qB - qA; // Descendente: priorizar unidades con más cuota
-        }
-        return a.account.localeCompare(b.account, undefined, { numeric: true });
+      const unitsWithQuota = freeUnits.map((u) => {
+        const quota = getEffectiveQuotaPct(quotaGetter(u.account)) ?? 100;
+        return { unit: u, quota };
       });
 
-      const selectedUnit = freeUnits[0];
+      const maxQuota = Math.max(...unitsWithQuota.map((u) => u.quota));
+      // Candidatos óptimos dentro del 10% de la cuota máxima
+      const topCandidates = unitsWithQuota.filter((u) => u.quota >= maxQuota - 10);
+
+      // Selección pseudoaleatoria uniforme entre los mejores candidatos libres
+      const selectedIdx = Math.floor(Math.random() * topCandidates.length);
+      const selected = topCandidates[selectedIdx] ?? unitsWithQuota[0]!;
+      const selectedUnit = selected.unit;
+
       selectedUnit.status = "ocupado";
       selectedUnit.passenger = fullPassenger;
       saveFleetState(state, fleetPath);
@@ -808,7 +833,8 @@ export function leaseTaxi(
         pid: fullPassenger.pid,
         model: fullPassenger.model,
         preferred: false,
-        quotaPct: quotaGetter(selectedUnit.account)?.gemini5hPct ?? null,
+        quotaPct: selected.quota,
+        loadBalanced: true,
       });
 
       return { account: selectedUnit.account, unit: selectedUnit };
@@ -1161,6 +1187,7 @@ export function repairTaxiFromWorkshop(
 
 /**
  * Devuelve un resumen estadístico de la flota para TUI y auditoría.
+ * Si se detectan procesos zombis o transiciones de cuota, persiste atómicamente el estado limpio.
  */
 export function getFleetStatusSummary(
   fleetPath: string = FLEET_STATE_PATH,
@@ -1173,29 +1200,40 @@ export function getFleetStatusSummary(
   en_taller: number;
   units: DcTaxiUnit[];
 } {
-  const state = loadFleetState(fleetPath, allowedAccounts);
-  reapAbandonedTaxis(state);
+  return withFleetLock(fleetPath, () => {
+    const state = loadFleetState(fleetPath, allowedAccounts);
+    const reaped = reapAbandonedTaxis(state);
 
-  for (const unit of Object.values(state.fleet)) {
-    if (unit.status === "recargando" || unit.status === "libre") {
-      const quota = getCachedTaxiQuota(unit.account);
-      updateTaxiRechargingState(unit, quota);
+    let stateChanged = reaped > 0;
+    for (const unit of Object.values(state.fleet)) {
+      if (unit.status === "recargando" || unit.status === "libre") {
+        const prevStatus = unit.status;
+        const quota = getCachedTaxiQuota(unit.account);
+        updateTaxiRechargingState(unit, quota);
+        if (unit.status !== prevStatus) {
+          stateChanged = true;
+        }
+      }
     }
-  }
 
-  const units = Object.values(state.fleet);
-  const total = units.length;
-  const libres = units.filter((u) => u.status === "libre").length;
-  const ocupados = units.filter((u) => u.status === "ocupado").length;
-  const recargando = units.filter((u) => u.status === "recargando").length;
-  const en_taller = units.filter((u) => u.status === "en_taller").length;
+    if (stateChanged) {
+      saveFleetState(state, fleetPath);
+    }
 
-  return {
-    total,
-    libres,
-    ocupados,
-    recargando,
-    en_taller,
-    units,
-  };
+    const units = Object.values(state.fleet);
+    const total = units.length;
+    const libres = units.filter((u) => u.status === "libre").length;
+    const ocupados = units.filter((u) => u.status === "ocupado").length;
+    const recargando = units.filter((u) => u.status === "recargando").length;
+    const en_taller = units.filter((u) => u.status === "en_taller").length;
+
+    return {
+      total,
+      libres,
+      ocupados,
+      recargando,
+      en_taller,
+      units,
+    };
+  });
 }

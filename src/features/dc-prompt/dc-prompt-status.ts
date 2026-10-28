@@ -5,6 +5,7 @@
 import type { ExtensionAPI, ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { dcNotifier } from "../../integrations/dc-notify/dc-notifier.ts";
+import { getFleetStatusSummary } from "../dc-agents/core/dc-taxi-dispatcher.ts";
 import {
   formatContextSize,
   formatCost,
@@ -131,8 +132,25 @@ export function buildPromptStatusLine(
 
     const sep = fg("dim", " · ");
 
+    // Resolver unidad de Taxi activa asignada al orquestador si modelId no incluye el prefijo explícito
+    let displayModelId = modelId;
+    if (!displayModelId.match(/\bac\d+\b/i)) {
+      try {
+        const sessionId = ctx.sessionManager?.getSessionId?.();
+        const fleetSummary = getFleetStatusSummary();
+        const myTaxi = fleetSummary.units.find(
+          (u) => u.passenger && (u.passenger.sessionId === sessionId || u.passenger.pid === process.pid),
+        );
+        if (myTaxi) {
+          displayModelId = `${myTaxi.account}/${displayModelId}`;
+        }
+      } catch {
+        /* best-effort taxi resolution */
+      }
+    }
+
     // Bloque Izquierdo: Modelo activo · Effort
-    const leftParts = [fg("text", modelId)];
+    const leftParts = [fg("text", displayModelId)];
     if (effort && effort !== "off") {
       leftParts.push(fg("syntaxFunction", effort));
     }
