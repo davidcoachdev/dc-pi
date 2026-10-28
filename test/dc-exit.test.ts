@@ -131,3 +131,51 @@ test("dcExitExtension registers alt+q shortcut that calls ctx.shutdown()", async
   assert.equal(shutdownCalled, true);
 });
 
+test("dcExitExtension captures alt+q in onTerminalInput and calls ctx.shutdown()", () => {
+  const listeners = new Map<string, Function>();
+  let shutdownCalled = false;
+  let terminalInputHandler: ((data: string) => any) | undefined;
+
+  const mockPi = {
+    on(event: string, fn: Function) {
+      listeners.set(event, fn);
+    },
+    registerCommand() {},
+    registerShortcut() {},
+  } as unknown as ExtensionAPI;
+
+  dcExitExtension(mockPi);
+
+  const sessionStart = listeners.get("session_start")!;
+  assert.ok(sessionStart);
+
+  sessionStart(
+    {},
+    {
+      hasUI: true,
+      ui: {
+        onTerminalInput(handler: (data: string) => any) {
+          terminalInputHandler = handler;
+          return () => {};
+        },
+      },
+      shutdown: () => {
+        shutdownCalled = true;
+      },
+    },
+  );
+
+  assert.ok(terminalInputHandler);
+
+  // Random key -> undefined
+  const otherResult = terminalInputHandler!("a");
+  assert.equal(otherResult, undefined);
+  assert.equal(shutdownCalled, false);
+
+  // Alt+Q (\x1bq) -> shutdown called & consumed
+  const altQResult = terminalInputHandler!("\x1bq");
+  assert.deepEqual(altQResult, { consume: true });
+  assert.equal(shutdownCalled, true);
+});
+
+
