@@ -31,11 +31,15 @@ import { registerDcEphemeralTools } from "./tools/dc-ephemeral-tools.ts";
 import { TaxiWorkshopCoordinator } from "./core/dc-taxi-workshop.ts";
 import { installSubagentInboxInterceptor, uninstallSubagentInboxInterceptor } from "./core/dc-subagent-inbox.ts";
 import { registerSubagentInboxTools } from "./tools/dc-subagent-inbox-tools.ts";
+import { isVipAccount } from "./core/dc-taxi-accounts.ts";
 import { DcAgentsPanel } from "./views/dc-agents-panel.ts";
 import { DcTaxisPanel } from "./views/dc-taxis-panel.ts";
 
 export let activeWorkshopCoordinator: TaxiWorkshopCoordinator | null = null;
 export const KNOWN_FATAL_AUTH_ACCOUNTS = new Set<string>();
+
+// Guardián para distinguir cambios internos de modelo (startup/failover/handover) de selecciones manuales humanas
+let isInternalModelSwitch = false;
 
 /**
  * Resume cualquier motivo de error o fallo a máximo 3 palabras concisas.
@@ -520,6 +524,7 @@ export async function handleOrchestratorQuotaHandover(
     // Confirmar éxito de setModel SIN retener el fleet lock a través de await
     let switchConfirmed = false;
     try {
+      isInternalModelSwitch = true;
       const switchRes = await (pi as any).setModel(foundModel);
       if (switchRes !== false) {
         switchConfirmed = true;
@@ -538,6 +543,8 @@ export async function handleOrchestratorQuotaHandover(
         previousAccount,
         error: err?.message || String(err),
       });
+    } finally {
+      isInternalModelSwitch = false;
     }
 
     if (!switchConfirmed) {
@@ -638,7 +645,13 @@ export async function handleOrchestratorQuotaHandover(
         || (Array.isArray(available) ? available.find((m: any) => m.id?.includes("gemini-3.8-flash-high")) : undefined);
 
       if (fallbackModel) {
-        const fallbackRes = await (pi as any).setModel(fallbackModel);
+        let fallbackRes: any = false;
+        try {
+          isInternalModelSwitch = true;
+          fallbackRes = await (pi as any).setModel(fallbackModel);
+        } finally {
+          isInternalModelSwitch = false;
+        }
         if (fallbackRes !== false) {
           try {
             (pi as any).setThinkingLevel?.("medium");
@@ -807,11 +820,29 @@ export default function dcAgentsExtension(pi: ExtensionAPI): void {
 
           if (taxiResult.changed || isModelMismatch) {
             const available = await (ctx as any).modelRegistry?.getAvailable?.();
-            const foundModel = ctx.modelRegistry?.find?.(targetProvider, targetId)
+            let foundModel = ctx.modelRegistry?.find?.(targetProvider, targetId)
               || (Array.isArray(available) ? available.find((m: any) => m.id === targetId || m.id === taxiResult.modelId) : undefined);
 
+            if (!foundModel) {
+              const fallbackId = `${taxiResult.account}/gemini-3.8-flash-high`;
+              foundModel = ctx.modelRegistry?.find?.(targetProvider, fallbackId)
+                || (Array.isArray(available) ? available.find((m: any) => m.id === fallbackId || m.id === `${targetProvider}/${fallbackId}`) : undefined);
+            }
+
             if (foundModel) {
-              await (pi as any).setModel(foundModel);
+              try {
+                isInternalModelSwitch = true;
+                await (pi as any).setModel(foundModel);
+              } finally {
+                isInternalModelSwitch = false;
+              }
+              if (foundModel.id?.includes("gemini-3.8-flash-high")) {
+                try {
+                  (pi as any).setThinkingLevel?.("medium");
+                } catch {
+                  /* optional */
+                }
+              }
               if (ctx.hasUI) {
                 dcNotifier.notify(
                   ctx,
@@ -934,7 +965,12 @@ export default function dcAgentsExtension(pi: ExtensionAPI): void {
             }
 
             if (foundModel) {
-              await (pi as any).setModel(foundModel);
+              try {
+                isInternalModelSwitch = true;
+                await (pi as any).setModel(foundModel);
+              } finally {
+                isInternalModelSwitch = false;
+              }
               if (foundModel.id?.includes("gemini-3.8-flash-high")) {
                 try {
                   (pi as any).setThinkingLevel?.("medium");
@@ -996,12 +1032,71 @@ export default function dcAgentsExtension(pi: ExtensionAPI): void {
   });
 
   // Sincronizar el taxi si cambia el modelo en caliente
-  pi.on("model_select", (_event, ctx) => {
+  pi.on("model_select", async (_event: any, ctx: ExtensionContext) => {
     try {
       if (!ctx.hasUI || ctx.mode !== "tui" || process.argv.includes("rpc")) return;
+      if (isInternalModelSwitch) return;
+      if (_event?.source === "restore") return;
+
       const currentModelId = ctx.model ? `${ctx.model.provider || "cpam"}/${ctx.model.id}` : undefined;
       const sessionId = ctx.sessionManager?.getSessionId?.() || `ambient-${Date.now()}`;
-      syncOrchestratorTaxi(sessionId, currentModelId);
+
+      let requestedAccount: string | undefined;
+      if (currentModelId && currentModelId.includes("/")) {
+        for (const part of currentModelId.split("/")) {
+          const lower = part.toLowerCase();
+          if (lower.startsWith("ac") || lower.startsWith("cc")) {
+            requestedAccount = lower;
+            break;
+          }
+        }
+      }
+
+      const isVipRequested = isVipAccount(requestedAccount);
+
+      if (isVipRequested) {
+        // Selección manual explícita de modelo VIP (cc1..cc4)
+        const taxiResult = acquireOrchestratorTaxi(
+          sessionId,
+          currentModelId,
+          undefined,
+          process.pid,
+          undefined,
+          "gemini-3.8-flash-high",
+          "cpam",
+          undefined,
+          { isExplicitSelection: true },
+        );
+
+        if (!taxiResult) {
+          // La unidad VIP solicitada está ocupada o no disponible:
+          if (ctx.hasUI) {
+            dcNotifier.notify(
+              ctx,
+              "🚕 Flota de Taxis VIP",
+              `Taxi VIP ${requestedAccount?.toUpperCase()} no disponible (ocupado o en recarga). Revisa /dc-taxis.`,
+              "warning",
+            );
+          }
+          if (_event?.previousModel) {
+            try {
+              isInternalModelSwitch = true;
+              await (pi as any).setModel(_event.previousModel);
+            } finally {
+              isInternalModelSwitch = false;
+            }
+          }
+        } else if (ctx.hasUI) {
+          dcNotifier.notify(
+            ctx,
+            "🚕 Flota de Taxis VIP",
+            `Taxi VIP ${taxiResult.account.toUpperCase()} asignado a esta terminal (${ctx.model?.id})`,
+            "info",
+          );
+        }
+      } else {
+        syncOrchestratorTaxi(sessionId, currentModelId);
+      }
     } catch {
       /* noop */
     }

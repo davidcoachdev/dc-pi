@@ -541,8 +541,19 @@ export function syncOrchestratorTaxi(
   modelId?: string,
   fleetPath: string = FLEET_STATE_PATH,
   pid: number = process.pid,
-): void {
-  acquireOrchestratorTaxi(sessionId, modelId, fleetPath, pid);
+  explicitOptions?: boolean | { isExplicitSelection?: boolean },
+): { account: string; modelId: string; changed: boolean } | null {
+  return acquireOrchestratorTaxi(
+    sessionId,
+    modelId,
+    fleetPath,
+    pid,
+    undefined,
+    "gemini-3.8-flash-high",
+    "cpam",
+    undefined,
+    explicitOptions,
+  );
 }
 
 /**
@@ -560,10 +571,15 @@ export function acquireOrchestratorTaxi(
   fallbackBaseModel: string = "gemini-3.8-flash-high",
   fallbackProvider: string = "cpam",
   excludedAccounts?: string[],
+  explicitOptions?: boolean | { isExplicitSelection?: boolean },
 ): { account: string; modelId: string; changed: boolean } | null {
   return withFleetLock(fleetPath, () => {
     const state = loadFleetState(fleetPath, allowedAccounts);
     reapAbandonedTaxis(state);
+
+    const isExplicit = typeof explicitOptions === "boolean"
+      ? explicitOptions
+      : Boolean(explicitOptions?.isExplicitSelection);
 
     let currentAccount = "";
     let accountIndex = -1;
@@ -583,23 +599,6 @@ export function acquireOrchestratorTaxi(
 
     const isExcluded = (ac: string) => Array.isArray(excludedAccounts) && excludedAccounts.includes(ac);
 
-    // Liberar cualquier taxi previo de esta misma sesión y PID que ya no use
-    for (const unit of Object.values(state.fleet)) {
-      if (
-        unit.passenger &&
-        unit.passenger.type === "orchestrator" &&
-        unit.passenger.sessionId === sessionId &&
-        unit.passenger.pid === pid &&
-        unit.account !== currentAccount &&
-        !isExcluded(unit.account)
-      ) {
-        unit.passenger = null;
-        unit.status = "libre";
-        const quota = getCachedTaxiQuota(unit.account);
-        updateTaxiRechargingState(unit, quota);
-      }
-    }
-
     // Evaluar unidades en 'recargando' o 'libre' con cuotas cacheadas
     for (const unit of Object.values(state.fleet)) {
       if (unit.status === "recargando" || unit.status === "libre") {
@@ -608,7 +607,8 @@ export function acquireOrchestratorTaxi(
       }
     }
 
-    // Caso 1: Si esta sesión y PID ya tiene un taxi ocupado en la flota, preservarlo salvo que esté excluido
+    // Identificar si la sesión ya posee una reserva legítima activa de orquestador
+    let existingReservationUnit: DcTaxiUnit | undefined;
     for (const unit of Object.values(state.fleet)) {
       if (
         unit.status === "ocupado" &&
@@ -618,20 +618,99 @@ export function acquireOrchestratorTaxi(
         unit.passenger.pid === pid &&
         !isExcluded(unit.account)
       ) {
-        unit.passenger.heartbeatAt = Date.now();
+        existingReservationUnit = unit;
+        break;
+      }
+    }
+
+    // Helper para liberar únicamente cuando una nueva reserva ha sido efectivamente confirmada
+    const releasePriorReservation = (newAccount: string) => {
+      for (const unit of Object.values(state.fleet)) {
+        if (
+          unit.passenger &&
+          unit.passenger.type === "orchestrator" &&
+          unit.passenger.sessionId === sessionId &&
+          unit.passenger.pid === pid &&
+          unit.account !== newAccount &&
+          !isExcluded(unit.account)
+        ) {
+          unit.passenger = null;
+          unit.status = "libre";
+          const quota = getCachedTaxiQuota(unit.account);
+          updateTaxiRechargingState(unit, quota);
+        }
+      }
+    };
+
+    // Caso 1: Si esta sesión ya tiene un taxi ocupado y no se solicita cambio explícito de cuenta,
+    // o la cuenta solicitada coincide con la actual: preservarlo en bookkeeping rutinario.
+    if (existingReservationUnit) {
+      if (!currentAccount || currentAccount === existingReservationUnit.account) {
+        existingReservationUnit.passenger!.heartbeatAt = Date.now();
         saveFleetState(state, fleetPath);
         return {
-          account: unit.account,
-          modelId: unit.passenger.model || modelId || `${fallbackProvider}/${unit.account}/${fallbackBaseModel}`,
+          account: existingReservationUnit.account,
+          modelId: existingReservationUnit.passenger!.model || modelId || `${fallbackProvider}/${existingReservationUnit.account}/${fallbackBaseModel}`,
           changed: false,
         };
       }
     }
 
-    // Si se especifica una cuenta explícita en modelId (ej: cpam/ac02/...), respetar esa cuenta si está libre
-    if (currentAccount && state.fleet[currentAccount] && !isExcluded(currentAccount)) {
+    const isCurrentAccountVip = isVipAccount(currentAccount);
+    const isAuthorizedVip = isCurrentAccountVip && isExplicit;
+
+    // Caso VIP Explícito:
+    // "Explicit manual cc4 selection may acquire only cc4; busy/unavailable cc4 must not assign any substitute or release existing legitimate reservation."
+    if (isAuthorizedVip) {
+      const preferredUnit = state.fleet[currentAccount];
+      if (preferredUnit && preferredUnit.status === "libre" && !isExcluded(currentAccount)) {
+        releasePriorReservation(currentAccount);
+
+        preferredUnit.status = "ocupado";
+        preferredUnit.passenger = {
+          type: "orchestrator",
+          sessionId,
+          pid,
+          model: modelId!,
+          taskLabel: "Sesión Principal (Orquestador)",
+          plate: `DC-HOST-${pid}`,
+          startedAt: Date.now(),
+          heartbeatAt: Date.now(),
+        };
+        saveFleetState(state, fleetPath);
+
+        appendTaxiLog("INFO", "TAXI_ORCHESTRATOR_ACQUIRED_VIP", {
+          account: currentAccount,
+          sessionId,
+          pid,
+          modelId,
+          changed: Boolean(existingReservationUnit && existingReservationUnit.account !== currentAccount),
+        });
+
+        return {
+          account: currentAccount,
+          modelId: modelId!,
+          changed: Boolean(existingReservationUnit && existingReservationUnit.account !== currentAccount),
+        };
+      }
+
+      // VIP solicitado no disponible (ocupado, taller, recarga o excluido):
+      // NUNCA asignar sustituto ni liberar la reserva existente del orquestador.
+      appendTaxiLog("WARN", "TAXI_ORCHESTRATOR_VIP_UNAVAILABLE", {
+        account: currentAccount,
+        status: preferredUnit?.status,
+        sessionId,
+        pid,
+      });
+      return null;
+    }
+
+    // Caso Estándar Preferido: si se especifica cuenta ac* estándar y está libre
+    if (currentAccount && !isCurrentAccountVip && state.fleet[currentAccount] && !isExcluded(currentAccount)) {
       const preferredUnit = state.fleet[currentAccount];
       if (preferredUnit.status === "libre") {
+        releasePriorReservation(currentAccount);
+
         preferredUnit.status = "ocupado";
         preferredUnit.passenger = {
           type: "orchestrator",
@@ -650,23 +729,24 @@ export function acquireOrchestratorTaxi(
           sessionId,
           pid,
           modelId,
-          changed: false,
+          changed: Boolean(existingReservationUnit && existingReservationUnit.account !== currentAccount),
         });
 
-        return { account: currentAccount, modelId: modelId!, changed: false };
+        return {
+          account: currentAccount,
+          modelId: modelId!,
+          changed: Boolean(existingReservationUnit && existingReservationUnit.account !== currentAccount),
+        };
       }
     }
 
-    // Caso 2: Si el modelo no especifica cuenta o si su cuenta solicitada está ocupada/excluida:
-    // Seleccionar entre los taxis libres disponibles con mayor cuota mediante balanceo de carga.
-    // AISLAMIENTO VIP: Si el orquestador no solicitó una cuenta VIP explícita, NUNCA asignar una cuenta VIP en balanceo automático.
-    const isExplicitVip = isVipAccount(currentAccount);
+    // Caso 2: Balanceo de carga automático (startup, failover o cuenta estándar solicitada ocupada).
+    // AISLAMIENTO VIP ESTRICTO: NUNCA asignar cuentas VIP en balanceo automático, ni al arrancar con modelo heredado cc*.
     const freeUnits = Object.entries(state.fleet)
       .filter(([ac, unit]) => {
         if (unit.status !== "libre" || isExcluded(ac)) return false;
         const unitIsVip = unit.tier === "vip" || isVipAccount(ac);
-        // Solo considerar VIP si el usuario lo pidió explícitamente
-        return isExplicitVip ? unitIsVip : !unitIsVip;
+        return !unitIsVip;
       })
       .map(([ac, unit]) => {
         const q = getCachedTaxiQuota(ac);
@@ -678,16 +758,21 @@ export function acquireOrchestratorTaxi(
       // Filtrar el grupo de unidades con la máxima cuota disponible
       const maxQuota = Math.max(...freeUnits.map((u) => u.quotaPct));
       const topCandidates = freeUnits.filter((u) => u.quotaPct >= maxQuota - 10);
-      
+
       // Selección pseudoaleatoria uniforme entre los mejores candidatos libres
       const selectedIdx = Math.floor(Math.random() * topCandidates.length);
       const selected = topCandidates[selectedIdx] ?? freeUnits[0]!;
       const ac = selected.ac;
       const unit = selected.unit;
+
+      releasePriorReservation(ac);
+
       unit.status = "ocupado";
 
+      // Fallback a modelo estándar de Gemini válido (evitar acXX/gpt... si el modelo previo era VIP o GPT):
       let newModelId: string;
-      if (currentAccount && accountIndex >= 0 && parts.length > 0) {
+      const isOriginalModelGemini = parts.length > 0 && parts[parts.length - 1].toLowerCase().includes("gemini");
+      if (currentAccount && !isCurrentAccountVip && accountIndex >= 0 && parts.length > 0 && isOriginalModelGemini) {
         const newParts = [...parts];
         newParts[accountIndex] = ac;
         newModelId = newParts.join("/");
