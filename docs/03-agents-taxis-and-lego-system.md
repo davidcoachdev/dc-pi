@@ -108,7 +108,16 @@ Cuando el orquestador necesita ejecutar una tarea especializada:
 
 ## 2. La Flota de Taxis (`dc-taxi-dispatcher.ts`)
 
-Cuando múltiples terminales de Pi y múltiples subagentes usan la misma cuenta de proveedor al mismo tiempo, se producen errores `429 Too Many Requests`. La **Flota de Taxis** administra un pool de cuentas (`ac01` a `ac10` en CLIProxyAPI) como si fueran unidades de radiotaxi.
+Cuando múltiples terminales de Pi y múltiples subagentes usan la misma cuenta de proveedor al mismo tiempo, se producen errores `429 Too Many Requests`. La **Flota de Taxis** administra un pool dinámico de cuentas estándar (`ac01` hasta `ac44` o las descubiertas dinámicamente desde `models.json`) y unidades VIP (`cc1`..`cc4`) como si fueran unidades de radiotaxi.
+
+### Unidades VIP (`cc1`..`cc4`) y Aislamiento Estricto
+
+* **Exclusión Absoluta en Startup y Failover:** Al abrir otra terminal o iniciar una nueva sesión de Pi (`session_start`), el orquestador **nunca** adquiere una unidad VIP, incluso si hereda un modelo `cc*` guardado en la configuración o sesión anterior. El despachador asigna forzosamente una cuenta estándar disponible (`ac*`) y construye un modelo estándar válido de Gemini (`cpam/${ac}/gemini-3.8-flash-high`), evitando combinaciones inválidas como `acXX/gpt...`.
+* **Asignación Exclusiva por Selección Manual:** Las unidades VIP solo se activan cuando el usuario selecciona explícitamente una cuenta `cc*` en caliente a través de la interfaz (comando `/model`, atajo `Ctrl+P` o modal `/dc-models`).
+* **Rechazo Exacto sin Sustitución ni Pérdida de Reserva:** La selección explícita de una cuenta VIP (`cc*`) solo puede adquirir esa unidad exacta. Si dicha unidad está ocupada o no disponible, la solicitud se rechaza de inmediato (`null`), notificando al usuario en la UI, sin asignar sustitutos automáticos (ninguna otra unidad VIP ni cuenta estándar) y **sin liberar la reserva legítima previa** que la terminal ya poseía.
+* **Preservación en Bookkeeping:** Si una terminal ya cuenta con una asignación VIP autorizada, los ciclos rutinarios de sincronización y heartbeat la preservan intacta.
+* **Guardián de Conmutación Interna:** Los cambios de modelo internos (ajustes de arranque, handover de cuota pre-prompt y relevos de taller) se marcan internamente para no disparar reasignaciones VIP espurias en el hook `model_select`.
+* **Prohibición para Subagentes:** Los subagentes efímeros tienen bloqueado el acceso a cualquier unidad de nivel VIP (`tier === "vip"`), garantizando carriles exclusivos y limpios para la interacción del usuario.
 
 ### Máquina de Estados de una Unidad Taxi
 

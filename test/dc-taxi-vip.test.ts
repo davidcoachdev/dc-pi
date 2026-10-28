@@ -143,10 +143,39 @@ test("dc-taxi-vip: acquireOrchestratorTaxi solo asigna VIP bajo selección expl�
       fleetPath,
       process.pid + 20,
       ["ac01", "cc4"],
+      "gemini-3.8-flash-high",
+      "cpam",
+      undefined,
+      { isExplicitSelection: true },
     );
 
     assert.ok(vipResult);
     assert.equal(vipResult?.account, "cc4", "Selección explícita de cc4 asigna con éxito el taxi VIP cc4");
+
+    // 4. Orquestador arrancando con modelo heredado cc4 (sin selección explícita)
+    // Con ac01 y cc4 ambos libres, DEBE tomar ac01 con gemini fallback, JAMÁS cc4
+    const freshState = loadFleetState(fleetPath, ["ac01", "cc4"]);
+    freshState.fleet.ac01.status = "libre";
+    freshState.fleet.ac01.passenger = null;
+    freshState.fleet.cc4.status = "libre";
+    freshState.fleet.cc4.passenger = null;
+    saveFleetState(freshState, fleetPath);
+
+    const startupResult = acquireOrchestratorTaxi(
+      "orch-sess-startup-inherited",
+      "cpam/cc4/gpt-6.1-sol",
+      fleetPath,
+      process.pid + 30,
+      ["ac01", "cc4"],
+    );
+    assert.ok(startupResult);
+    assert.equal(startupResult?.account, "ac01", "Startup con modelo heredado cc4 debe auto-asignar ac01 estándar");
+    assert.ok(
+      startupResult?.modelId.includes("gemini-3.8-flash-high"),
+      "Fallback debe construir modelo Gemini estándar, nunca gpt",
+    );
+    const afterStartupState = loadFleetState(fleetPath, ["ac01", "cc4"]);
+    assert.equal(afterStartupState.fleet.cc4.status, "libre", "cc4 VIP debe permanecer libre tras el startup");
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
