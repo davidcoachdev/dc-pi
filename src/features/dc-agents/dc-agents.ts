@@ -1,5 +1,7 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import { openDcModal } from "../../ui/dc-modal.ts";
 import { dcNotifier } from "../../integrations/dc-notify/dc-notifier.ts";
 import { syncDcAgents, syncDcSkills, type DcAgentsSyncResult } from "./core/dc-agents-sync.ts";
@@ -18,14 +20,21 @@ import {
   withFleetLock,
   getFleetStatusSummary,
   updateTaxiPassengerUsage,
+  updateTaxiRechargingState,
 } from "./core/dc-taxi-dispatcher.ts";
 import { getCachedTaxiQuota, fetchTaxiQuota, type DcTaxiQuotaInfo } from "./core/dc-taxi-quota.ts";
+import { appendTaxiLog } from "./core/dc-taxi-logger.ts";
 import { getContextUsageInfo } from "../dc-sidebar/providers/dc-context-provider.ts";
 import { fetchJson } from "../../integrations/dc-http/dc-fetch.ts";
+import { cliProxyClient } from "../../integrations/dc-cliproxy/dc-cliproxy-client.ts";
 import { registerDcEphemeralTools } from "./tools/dc-ephemeral-tools.ts";
+import { TaxiWorkshopCoordinator } from "./core/dc-taxi-workshop.ts";
+import { installSubagentInboxInterceptor, uninstallSubagentInboxInterceptor } from "./core/dc-subagent-inbox.ts";
+import { registerSubagentInboxTools } from "./tools/dc-subagent-inbox-tools.ts";
 import { DcAgentsPanel } from "./views/dc-agents-panel.ts";
 import { DcTaxisPanel } from "./views/dc-taxis-panel.ts";
 
+export let activeWorkshopCoordinator: TaxiWorkshopCoordinator | null = null;
 export const KNOWN_FATAL_AUTH_ACCOUNTS = new Set<string>();
 
 /**
@@ -185,12 +194,26 @@ export async function auditAccountForWorkshop(
     if (fetcher) {
       await fetcher(account);
     } else {
-      await fetchJson(`http://127.0.0.1:8325/quota/${encodeURIComponent(account)}`, {
-        timeoutMs: 400,
-      });
+      // Consultar el estado de autenticación real contra CLIProxy (:8317)
+      const res = await cliProxyClient.getManagement<any>(`/auth-files`, {
+        timeoutMs: 1500,
+      }).catch(() => null);
+
+      if (res && Array.isArray(res.files)) {
+        // Si el archivo de cuenta existe en CLIProxy y está marcado como disabled o status no active
+        const disabledFile = res.files.find(
+          (f: any) =>
+            (f.name?.includes(account) || f.id?.includes(account) || f.account?.includes(account)) &&
+            (f.disabled === true || f.status === "disabled" || f.unavailable === true),
+        );
+        if (disabledFile) {
+          sendTaxiToWorkshop(account, "Cuenta Deshabilitada", fleetPath);
+          return true;
+        }
+      }
     }
 
-    // Si la llamada fue exitosa y la unidad estaba en taller (ej: token renovado o restaurado), repararla
+    // Si la unidad estaba en taller pero no tiene fallo fatal activo en CLIProxy, repararla
     const fleetSummary = getFleetStatusSummary(fleetPath);
     const unit = fleetSummary.units.find((u) => u.account === account);
     if (unit && unit.status === "en_taller") {
@@ -291,6 +314,8 @@ export async function handleOrchestratorQuotaHandover(
   fleetPath?: string,
   quotaGetter?: (account: string) => DcTaxiQuotaInfo | undefined,
 ): Promise<{ performed: boolean; previousAccount?: string; newAccount?: string }> {
+  const resolvedFleetPath = fleetPath || path.join(os.homedir(), ".pi", "agent", "dc-studio", "dc-taxis.json");
+
   // Identificar la cuenta activa del orquestador
   const currentModelId = ctx.model ? `${ctx.model.provider || "cpam"}/${ctx.model.id}` : undefined;
   let account: string | undefined;
@@ -305,9 +330,9 @@ export async function handleOrchestratorQuotaHandover(
   const sessionId = ctx.sessionManager?.getSessionId?.() || `ambient-${Date.now()}`;
 
   if (!account) {
-    const fleetSummary = getFleetStatusSummary(fleetPath);
+    const fleetSummary = getFleetStatusSummary(resolvedFleetPath);
     const myTaxi = fleetSummary.units.find(
-      (u) => u.passenger && (u.passenger.sessionId === sessionId || u.passenger.pid === process.pid),
+      (u) => u.passenger && u.passenger.sessionId === sessionId && u.passenger.pid === process.pid,
     );
     if (myTaxi) {
       account = myTaxi.account;
@@ -339,107 +364,287 @@ export async function handleOrchestratorQuotaHandover(
     return { performed: false };
   }
 
-  if (effectivePct < 10) {
-    const previousAccount = account;
+  if (effectivePct >= 10) {
+    return { performed: false };
+  }
 
-    // 1. Cargar las cuentas existentes en el fleetPath para no inventar cuentas de CPAM externas en tests
-    let existingAccounts: string[] | undefined;
+  const previousAccount = account;
+
+  // 1. Cargar las cuentas existentes en el fleetPath para no inventar cuentas de CPAM externas en tests
+  let existingAccounts: string[] | undefined;
+  try {
+    if (resolvedFleetPath && fs.existsSync(resolvedFleetPath)) {
+      const raw = JSON.parse(fs.readFileSync(resolvedFleetPath, "utf8"));
+      if (raw?.fleet) existingAccounts = Object.keys(raw.fleet);
+    }
+  } catch {
+    /* defensive */
+  }
+
+  // Inspeccionar y registrar la placa de reserva actual bajo lock (estricto sessionId AND pid)
+  let previousPlate: string | undefined;
+  withFleetLock(resolvedFleetPath, () => {
+    const state = loadFleetState(resolvedFleetPath, existingAccounts);
+    const prevUnit = state.fleet[previousAccount];
+    if (
+      prevUnit &&
+      prevUnit.status === "ocupado" &&
+      prevUnit.passenger &&
+      prevUnit.passenger.type === "orchestrator" &&
+      prevUnit.passenger.sessionId === sessionId &&
+      prevUnit.passenger.pid === process.pid
+    ) {
+      previousPlate = prevUnit.passenger.plate;
+    }
+  });
+
+  // 2. Intentar reservar candidato libre excluyendo el actual
+  const handoverModelId = currentModelId && currentModelId.includes(previousAccount)
+    ? currentModelId
+    : `cpam/${previousAccount}/gemini-3.8-flash-high`;
+
+  const taxiResult = acquireOrchestratorTaxi(
+    sessionId,
+    handoverModelId,
+    resolvedFleetPath,
+    process.pid,
+    existingAccounts,
+    "gemini-3.8-flash-high",
+    "cpam",
+    [previousAccount],
+  );
+
+  if (taxiResult && taxiResult.account !== previousAccount) {
+    const candidateAccount = taxiResult.account;
+    let candidatePlate: string | undefined;
+    let candidateStartedAt: number | undefined;
+
+    // Snapshot atómico de la generación e identidad exacta del candidato asignado
+    withFleetLock(resolvedFleetPath, () => {
+      const state = loadFleetState(resolvedFleetPath, existingAccounts);
+      const cand = state.fleet[candidateAccount];
+      if (
+        cand &&
+        cand.status === "ocupado" &&
+        cand.passenger &&
+        cand.passenger.type === "orchestrator" &&
+        cand.passenger.sessionId === sessionId &&
+        cand.passenger.pid === process.pid
+      ) {
+        candidatePlate = cand.passenger.plate;
+        candidateStartedAt = cand.passenger.startedAt;
+      }
+    });
+
+    const rollbackCandidate = () => {
+      withFleetLock(resolvedFleetPath, () => {
+        const state = loadFleetState(resolvedFleetPath, existingAccounts);
+        const candUnit = state.fleet[candidateAccount];
+        // Validar titularidad y generación exacta antes de revertir
+        if (
+          candUnit &&
+          candUnit.status === "ocupado" &&
+          candUnit.passenger &&
+          candUnit.passenger.type === "orchestrator" &&
+          candUnit.passenger.sessionId === sessionId &&
+          candUnit.passenger.pid === process.pid &&
+          (!candidatePlate || candUnit.passenger.plate === candidatePlate) &&
+          (candidateStartedAt === undefined || candUnit.passenger.startedAt === candidateStartedAt)
+        ) {
+          candUnit.passenger = null;
+          candUnit.status = "libre";
+          const quota = quotaGetter ? quotaGetter(candidateAccount) : getCachedTaxiQuota(candidateAccount);
+          updateTaxiRechargingState(candUnit, quota);
+          saveFleetState(state, resolvedFleetPath);
+          appendTaxiLog("INFO", "TAXI_ORCHESTRATOR_HANDOVER_ROLLBACK", {
+            candidateAccount,
+            previousAccount,
+            sessionId,
+            pid: process.pid,
+            plate: candidatePlate,
+            startedAt: candidateStartedAt,
+          });
+        } else {
+          appendTaxiLog("WARN", "TAXI_ORCHESTRATOR_ROLLBACK_SKIPPED_GENERATION_MISMATCH", {
+            candidateAccount,
+            expectedStartedAt: candidateStartedAt,
+            actualStartedAt: candUnit?.passenger?.startedAt,
+            expectedPlate: candidatePlate,
+            actualPlate: candUnit?.passenger?.plate,
+          });
+        }
+      });
+    };
+
+    // Si no existe API de Pi o setModel no es una función, abortar y revertir candidato
+    if (!pi || typeof (pi as any).setModel !== "function") {
+      rollbackCandidate();
+      appendTaxiLog("WARN", "TAXI_ORCHESTRATOR_HANDOVER_UNSUPPORTED", {
+        reason: "no_pi_runtime_api",
+        candidateAccount,
+        previousAccount,
+      });
+      return { performed: false, previousAccount };
+    }
+
+    // Resolver modelo destino en modelRegistry
+    const slashIdx = taxiResult.modelId.indexOf("/");
+    const targetProvider = slashIdx > 0 ? taxiResult.modelId.slice(0, slashIdx) : "cpam";
+    const targetId = slashIdx > 0 ? taxiResult.modelId.slice(slashIdx + 1) : taxiResult.modelId;
+
+    let foundModel: any = undefined;
     try {
-      if (fleetPath && fs.existsSync(fleetPath)) {
-        const raw = JSON.parse(fs.readFileSync(fleetPath, "utf8"));
-        if (raw?.fleet) existingAccounts = Object.keys(raw.fleet);
+      const available = await (ctx as any).modelRegistry?.getAvailable?.();
+      foundModel = ctx.modelRegistry?.find?.(targetProvider, targetId)
+        || (Array.isArray(available) ? available.find((m: any) => m.id === targetId || m.id === taxiResult.modelId) : undefined);
+
+      if (!foundModel) {
+        const fallbackId = `${candidateAccount}/gemini-3.8-flash-high`;
+        foundModel = ctx.modelRegistry?.find?.(targetProvider, fallbackId)
+          || (Array.isArray(available) ? available.find((m: any) => m.id === fallbackId || m.id === `${targetProvider}/${fallbackId}`) : undefined);
       }
     } catch {
       /* defensive */
     }
 
-    // 2. Intentar adquirir un nuevo taxi libre excluyendo el actual
-    const taxiResult = acquireOrchestratorTaxi(
-      sessionId,
-      currentModelId,
-      fleetPath,
-      process.pid,
-      existingAccounts,
-      "gemini-3.8-flash-high",
-      "cpam",
-      [previousAccount],
-    );
-
-    if (taxiResult && taxiResult.account !== previousAccount) {
-      // Enviar el taxi anterior a 'recargando'
-      withFleetLock(fleetPath || "", () => {
-        const state = loadFleetState(fleetPath);
-        const prevUnit = state.fleet[previousAccount];
-        if (prevUnit) {
-          prevUnit.status = "recargando";
-          prevUnit.passenger = null;
-          saveFleetState(state, fleetPath);
-        }
+    if (!foundModel) {
+      rollbackCandidate();
+      appendTaxiLog("WARN", "TAXI_ORCHESTRATOR_HANDOVER_FAILED", {
+        reason: "missing_target_model",
+        candidateAccount,
+        targetModelId: taxiResult.modelId,
       });
-      if (pi && taxiResult.modelId) {
-        try {
-          const slashIdx = taxiResult.modelId.indexOf("/");
-          const targetProvider = slashIdx > 0 ? taxiResult.modelId.slice(0, slashIdx) : "cpam";
-          const targetId = slashIdx > 0 ? taxiResult.modelId.slice(slashIdx + 1) : taxiResult.modelId;
-
-          const available = await (ctx as any).modelRegistry?.getAvailable?.();
-          let foundModel = ctx.modelRegistry?.find?.(targetProvider, targetId)
-            || (Array.isArray(available) ? available.find((m: any) => m.id === targetId || m.id === taxiResult.modelId) : undefined);
-
-          // Si el modelo idéntico no existe en la nueva cuenta, fallback a gemini-3.8-flash-high
-          if (!foundModel) {
-            const fallbackId = `${taxiResult.account}/gemini-3.8-flash-high`;
-            foundModel = ctx.modelRegistry?.find?.(targetProvider, fallbackId)
-              || (Array.isArray(available) ? available.find((m: any) => m.id === fallbackId || m.id === `${targetProvider}/${fallbackId}`) : undefined);
-          }
-
-          if (foundModel) {
-            await (pi as any).setModel(foundModel);
-
-            // Si el modelo resultante es gemini-3.8-flash-high, asegurar effort medium
-            if (foundModel.id?.includes("gemini-3.8-flash-high")) {
-              try {
-                (pi as any).setThinkingLevel?.("medium");
-              } catch {
-                /* optional thinking level */
-              }
-            }
-          }
-        } catch {
-          /* fallback */
-        }
-      }
-
-      // 3. Notificar al usuario mediante 'dcNotifier.notify' que el orquestador relevó de unidad por cuota baja
-      if (ctx.hasUI) {
-        dcNotifier.notify(
-          ctx as ExtensionContext,
-          "🚕 Flota de Taxis",
-          `Taxi orquestador relevado por cuota baja (< 10%): ${previousAccount.toUpperCase()} → ${taxiResult.account.toUpperCase()}. Unidad anterior en recarga.`,
-          "warning",
-        );
-      }
-
-      return {
-        performed: true,
-        previousAccount,
-        newAccount: taxiResult.account,
-      };
+      return { performed: false, previousAccount };
     }
 
-    // 4. Si no se pudo cambiar de cuenta (flota saturada): cambiar de modelo a gemini-3.8-flash-high con effort medium
-    if (pi) {
-      try {
-        const available = await (ctx as any).modelRegistry?.getAvailable?.();
-        const fallbackId = `${account}/gemini-3.8-flash-high`;
-        const fallbackModel = ctx.modelRegistry?.find?.("cpam", fallbackId)
-          || ctx.modelRegistry?.find?.("cpam", `${account}/gemini-3.8-flash-high`)
-          || (Array.isArray(available) ? available.find((m: any) => m.id === fallbackId || m.id === `cpam/${fallbackId}`) : undefined)
-          || (Array.isArray(available) ? available.find((m: any) => m.id?.includes("gemini-3.8-flash-high")) : undefined);
+    // Confirmar éxito de setModel SIN retener el fleet lock a través de await
+    let switchConfirmed = false;
+    try {
+      const switchRes = await (pi as any).setModel(foundModel);
+      if (switchRes !== false) {
+        switchConfirmed = true;
+        if (foundModel.id?.includes("gemini-3.8-flash-high")) {
+          try {
+            (pi as any).setThinkingLevel?.("medium");
+          } catch {
+            /* optional */
+          }
+        }
+      }
+    } catch (err: any) {
+      switchConfirmed = false;
+      appendTaxiLog("WARN", "TAXI_ORCHESTRATOR_HANDOVER_REJECTED", {
+        candidateAccount,
+        previousAccount,
+        error: err?.message || String(err),
+      });
+    }
 
-        if (fallbackModel) {
-          await (pi as any).setModel(fallbackModel);
-          (pi as any).setThinkingLevel?.("medium");
+    if (!switchConfirmed) {
+      rollbackCandidate();
+      return { performed: false, previousAccount };
+    }
+
+    // setModel confirmado con éxito: verificar que el candidato siga perteneciendo a nuestra generación
+    // y finalizar la unidad anterior solo si la propiedad aún coincide con el orquestador legítimo
+    let alignmentGuaranteed = false;
+    withFleetLock(resolvedFleetPath, () => {
+      const state = loadFleetState(resolvedFleetPath, existingAccounts);
+      const candUnit = state.fleet[candidateAccount];
+      const prevUnit = state.fleet[previousAccount];
+
+      const candidateStillOurs = Boolean(
+        candUnit &&
+        candUnit.status === "ocupado" &&
+        candUnit.passenger &&
+        candUnit.passenger.type === "orchestrator" &&
+        candUnit.passenger.sessionId === sessionId &&
+        candUnit.passenger.pid === process.pid &&
+        (!candidatePlate || candUnit.passenger.plate === candidatePlate) &&
+        (candidateStartedAt === undefined || candUnit.passenger.startedAt === candidateStartedAt),
+      );
+
+      if (!candidateStillOurs) {
+        appendTaxiLog("WARN", "TAXI_ORCHESTRATOR_HANDOVER_CANDIDATE_LOST", {
+          candidateAccount,
+          previousAccount,
+          sessionId,
+          pid: process.pid,
+          expectedStartedAt: candidateStartedAt,
+          actualStartedAt: candUnit?.passenger?.startedAt,
+        });
+        return;
+      }
+
+      alignmentGuaranteed = true;
+
+      if (
+        prevUnit &&
+        prevUnit.passenger &&
+        prevUnit.passenger.type === "orchestrator" &&
+        prevUnit.passenger.sessionId === sessionId &&
+        prevUnit.passenger.pid === process.pid &&
+        (!previousPlate || prevUnit.passenger.plate === previousPlate)
+      ) {
+        prevUnit.status = "recargando";
+        prevUnit.passenger = null;
+        saveFleetState(state, resolvedFleetPath);
+        appendTaxiLog("INFO", "TAXI_ORCHESTRATOR_HANDOVER_FINALIZED", {
+          previousAccount,
+          newAccount: candidateAccount,
+          sessionId,
+          pid: process.pid,
+        });
+      } else {
+        appendTaxiLog("WARN", "TAXI_ORCHESTRATOR_HANDOVER_OLD_LEASE_MISMATCH", {
+          previousAccount,
+          newAccount: candidateAccount,
+          sessionId,
+          pid: process.pid,
+          expectedPlate: previousPlate,
+          actualPlate: prevUnit?.passenger?.plate,
+        });
+      }
+    });
+
+    if (!alignmentGuaranteed) {
+      return { performed: false, previousAccount };
+    }
+
+    if (ctx.hasUI) {
+      dcNotifier.notify(
+        ctx as ExtensionContext,
+        "🚕 Flota de Taxis",
+        `Taxi orquestador relevado por cuota baja (< 10%): ${previousAccount.toUpperCase()} → ${candidateAccount.toUpperCase()}. Unidad anterior en recarga.`,
+        "warning",
+      );
+    }
+
+    return {
+      performed: true,
+      previousAccount,
+      newAccount: candidateAccount,
+    };
+  }
+
+  // 4. Si no se pudo cambiar de cuenta (flota saturada): cambiar de modelo a gemini-3.8-flash-high con effort medium
+  if (pi && typeof (pi as any).setModel === "function") {
+    try {
+      const available = await (ctx as any).modelRegistry?.getAvailable?.();
+      const fallbackId = `${account}/gemini-3.8-flash-high`;
+      const fallbackModel = ctx.modelRegistry?.find?.("cpam", fallbackId)
+        || ctx.modelRegistry?.find?.("cpam", `${account}/gemini-3.8-flash-high`)
+        || (Array.isArray(available) ? available.find((m: any) => m.id === fallbackId || m.id === `cpam/${fallbackId}`) : undefined)
+        || (Array.isArray(available) ? available.find((m: any) => m.id?.includes("gemini-3.8-flash-high")) : undefined);
+
+      if (fallbackModel) {
+        const fallbackRes = await (pi as any).setModel(fallbackModel);
+        if (fallbackRes !== false) {
+          try {
+            (pi as any).setThinkingLevel?.("medium");
+          } catch {
+            /* optional */
+          }
           if (ctx.hasUI) {
             dcNotifier.notify(
               ctx as ExtensionContext,
@@ -450,13 +655,13 @@ export async function handleOrchestratorQuotaHandover(
           }
           return { performed: true, previousAccount: account, newAccount: account };
         }
-      } catch {
-        /* defensive */
       }
+    } catch {
+      /* defensive */
     }
   }
 
-  return { performed: false };
+  return { performed: false, previousAccount: account };
 }
 
 /**
@@ -547,8 +752,12 @@ export function openAgentsViewer(ctx: ExtensionContext): void {
  * - Registra los comandos /agents, /dc-agents, /dc-taxis y el atajo Alt+Shift+T.
  */
 export default function dcAgentsExtension(pi: ExtensionAPI): void {
-  // Registrar herramienta de agentes efímeros para el orquestador
+  // Instalar el interceptor de buzón pasivo para subagentes en background (evita secuestro por triggerTurn)
+  installSubagentInboxInterceptor();
+
+  // Registrar herramientas de agentes efímeros y buzón para el orquestador
   registerDcEphemeralTools(pi);
+  registerSubagentInboxTools(pi);
 
   // Al arrancar sesión, verifica y restaura subagentes y skills si faltan, y purga huérfanos
   pi.on("session_start", async (_event, ctx) => {
@@ -644,6 +853,7 @@ export default function dcAgentsExtension(pi: ExtensionAPI): void {
   // Al cerrar o apagar sesión, liberar el taxi del orquestador
   pi.on("session_shutdown", (_event, ctx) => {
     try {
+      uninstallSubagentInboxInterceptor();
       if (!ctx.hasUI || ctx.mode !== "tui" || process.argv.includes("rpc")) return;
       const sessionId = ctx.sessionManager?.getSessionId?.() || `ambient-${Date.now()}`;
       releaseOrchestratorTaxi(sessionId, process.pid);

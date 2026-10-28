@@ -463,6 +463,10 @@ export class DcTaxisPanel implements Component {
     lines.push(th.fg("muted", "─".repeat(Math.max(10, width - 2))));
 
     // 1. Estado y Pasajero Actual
+    const isVip = unit.tier === "vip" || (unit.account && unit.account.startsWith("cc"));
+    if (isVip) {
+      lines.push(`  Categoría:        ${th.bold(th.fg("accent", "👑 VIP (Exclusivo Orquestador / Selección Explícita)"))}`);
+    }
     let statusText = th.fg("success", "🟢 LIBRE (Disponible en parada)");
     if (unit.status === "ocupado") {
       statusText = th.fg("error", "🔴 OCUPADO (Viaje en curso)");
@@ -629,7 +633,12 @@ export class DcTaxisPanel implements Component {
         durationStr = `${elapsedSec}s`;
       }
 
-      const rawLine = ` ${unit.account.toUpperCase().padEnd(8)} ${statusGlyph} ${quotaStr} ${passengerStr} ${modelStr} ${pidStr} ${durationStr}`;
+      const isVip = unit.tier === "vip" || (unit.account && unit.account.startsWith("cc"));
+      const unitLabel = isVip
+        ? `${unit.account.toUpperCase()} 👑`
+        : unit.account.toUpperCase();
+
+      const rawLine = ` ${unitLabel.padEnd(8)} ${statusGlyph} ${quotaStr} ${passengerStr} ${modelStr} ${pidStr} ${durationStr}`;
       const truncated = truncateToWidth(rawLine, Math.max(10, width - 4));
 
       if (isSelected) {

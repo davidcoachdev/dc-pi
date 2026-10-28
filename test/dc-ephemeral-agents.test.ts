@@ -678,7 +678,7 @@ test("dc-taxi-dispatcher: acquireOrchestratorTaxi auto-binds free CPAM taxi when
     assert.equal(resNoModel.changed, true);
     assert.ok(resNoModel.account === "ac01" || resNoModel.account === "ac02");
     assert.notEqual(resNoModel.account, resKimi.account);
-    assert.equal(resNoModel.modelId, "cpam/ac02/gemini-3.8-flash-high");
+    assert.equal(resNoModel.modelId, `cpam/${resNoModel.account}/gemini-3.8-flash-high`);
   } finally {
     fs.rmSync(tempDir, { recursive: true, force: true });
   }
@@ -1963,9 +1963,10 @@ test("dc-ephemeral-tools: dc_ephemeral_batch_run in background mode registers al
 
   const initialBgCount = activeBackgroundPlans.size;
   const dispatchedWorkers: Array<{ agent: string; taskId: string }> = [];
+  const batchTestSessionId = `sess-batch-bg-${Date.now()}`;
 
   const fakeCtx = {
-    sessionManager: { getSessionId: () => `sess-batch-bg-${Date.now()}` },
+    sessionManager: { getSessionId: () => batchTestSessionId },
     model: { provider: "cpam", id: "ac01/gemini-3.8-flash-high" },
     executeTool: async (name: string, args: any) => {
       assert.equal(name, "subagent_run");
@@ -2047,7 +2048,7 @@ test("dc-ephemeral-tools: dc_ephemeral_batch_run in background mode registers al
     }
     for (const acc of accountsToClean) {
       try {
-        releaseTaxi(acc, "cleanup-test");
+        releaseTaxi(acc, batchTestSessionId);
       } catch {}
     }
   }
@@ -2766,7 +2767,7 @@ test("MÓDULO C: executeTaxiHandover leases new unit avoiding occupied/workshop,
     fullModelRef: "cpam/ac01/gemini-3.8-flash-high",
     effectiveEffort: "high" as const,
     tools: ["read", "write"],
-    mode: "background" as const,
+    mode: "task" as const,
   };
 
   try {
@@ -2849,7 +2850,7 @@ test("MÓDULO C: executeTaxiHandover releases previous taxi to 'recargando' when
     fullModelRef: "cpam/ac01/gemini-3.8-flash-high",
     effectiveEffort: "high" as const,
     tools: ["read"],
-    mode: "background" as const,
+    mode: "task" as const,
   };
 
   try {
@@ -2946,27 +2947,24 @@ test("MÓDULO C: sweepBackgroundPlansOnce evaluates and executes taxi handover t
     // Ejecutar un sweep
     sweepBackgroundPlansOnce(tasksDir, fleetPath);
 
-    // Verificar que el handover se ejecutó transparentemente:
-    // 1. La tarea sigue en activeBackgroundPlans (no colapsó ni fue descartada)
+    // Verificar que el handover en background no se simula ficticiamente:
+    // 1. La tarea sigue en activeBackgroundPlans con su arriendo original en ac01 preservado
     const trackedItem = activeBackgroundPlans.get(mockPlan.ephemeralId);
     assert.ok(trackedItem, "La tarea debe seguir activa en background");
-    assert.equal(trackedItem.plan.leasedAccount, "ac02", "El arriendo debe haberse transferido a ac02");
-    assert.ok(trackedItem.handoverPacket, "El tracking debe contener el HandoverPacket");
-    assert.equal(trackedItem.handoverPacket?.previousAccount, "ac01");
-    assert.equal(trackedItem.handoverPacket?.newAccount, "ac02");
+    assert.equal(trackedItem.plan.leasedAccount, "ac01", "El arriendo debe preservarse en ac01 (sin relevo ficticio)");
+    assert.equal(trackedItem.handoverPacket, undefined, "No debe registrar handoverPacket ficticio");
 
-    // 2. Estado de la flota: ac01 libre, ac02 ocupado con el nuevo pasajero
+    // 2. Estado de la flota: ac01 sigue ocupado, ac02 sigue libre
     const stateAfter = loadFleetState(fleetPath, customAccounts);
-    assert.equal(stateAfter.fleet["ac02"].status, "ocupado");
-    assert.equal(stateAfter.fleet["ac01"].status, "libre");
-    assert.equal(stateAfter.fleet["ac01"].passenger, null);
+    assert.equal(stateAfter.fleet["ac01"].status, "ocupado", "ac01 debe seguir ocupado por el worker original");
+    assert.equal(stateAfter.fleet["ac02"].status, "libre", "ac02 debe permanecer libre");
 
-    // 2b. Los tokens del subagente en background deben haberse sincronizado en el taxímetro del taxi ac01 antes del relevo
-    assert.equal(stateAfter.fleet["ac02"].passenger?.tokens, 124_500, "El nuevo taxi debe registrar los tokens en el taxímetro");
+    // 2b. Los tokens del subagente en background deben haberse sincronizado en el taxímetro del taxi ac01
+    assert.equal(stateAfter.fleet["ac01"].passenger?.tokens, 124_500, "El taxi ac01 debe registrar los tokens en el taxímetro");
 
-    // 3. Log TAXI_HANDOVER_EXECUTED registrado
+    // 3. Log TAXI_HANDOVER_BACKGROUND_UNSUPPORTED registrado verazmente
     const logs = readRecentTaxiLogs(15);
-    assert.ok(logs.some((l) => l.includes("TAXI_HANDOVER_EXECUTED") && l.includes("ac02")));
+    assert.ok(logs.some((l) => l.includes("TAXI_HANDOVER_BACKGROUND_UNSUPPORTED")));
   } finally {
     activeBackgroundPlans.delete(mockPlan.ephemeralId);
     fs.rmSync(tempDir, { recursive: true, force: true });
@@ -3188,7 +3186,7 @@ test("MÓDULO D: Relevo automático del orquestador ante cuota < 10%", async () 
     const stGood = loadFleetState(fleetPath, customAccounts);
     assert.equal(stGood.fleet["ac01"].status, "ocupado");
 
-    // Caso 2: Cuota cae < 10% (ej: 4%) -> debe relevar a ac02 y enviar ac01 a recargando
+    // Caso 2: Cuota cae < 10% (ej: 4%) -> evaluar relevo
     const mockQuotaCritical = (ac: string) => ({
       account: ac,
       gemini5hPct: ac === "ac01" ? 4 : 95,
@@ -3196,10 +3194,31 @@ test("MÓDULO D: Relevo automático del orquestador ante cuota < 10%", async () 
       lastChecked: Date.now(),
     });
 
-    const resCritical = await handleOrchestratorQuotaHandover(mockCtx, undefined, fleetPath, mockQuotaCritical);
+    // Caso 2a: Sin mockPi / runtime capability: no debe realizar relevo ficticio
+    const resNoPi = await handleOrchestratorQuotaHandover(mockCtx, undefined, fleetPath, mockQuotaCritical);
+    assert.equal(resNoPi.performed, false, "Sin runtime setModel capability no debe reportar performed: true");
+    const stNoPi = loadFleetState(fleetPath, customAccounts);
+    assert.equal(stNoPi.fleet["ac01"].status, "ocupado", "Taxi anterior debe preservarse si no hay confirmación de cambio");
+    assert.equal(stNoPi.fleet["ac02"].status, "libre", "Candidato debe revertirse a libre");
+
+    // Caso 2b: Con mockPi y confirmación de setModel: debe realizar relevo automático confirmado
+    let switchedModel: any;
+    const mockPi: any = {
+      setModel: async (m: any) => {
+        switchedModel = m;
+        return true;
+      },
+    };
+    mockCtx.modelRegistry = {
+      getAvailable: async () => [{ provider: "cpam", id: "ac02/gemini-3.8-flash-high" }],
+      find: (_p: string, id: string) => ({ provider: "cpam", id }),
+    };
+
+    const resCritical = await handleOrchestratorQuotaHandover(mockCtx, mockPi, fleetPath, mockQuotaCritical);
     assert.equal(resCritical.performed, true, "Debe realizar relevo automático");
     assert.equal(resCritical.previousAccount, "ac01");
     assert.equal(resCritical.newAccount, "ac02");
+    assert.ok(switchedModel, "setModel debe ser invocado");
 
     // Verificar estado de la flota
     const stHandover = loadFleetState(fleetPath, customAccounts);
@@ -3479,6 +3498,82 @@ test("MÓDULO F: getEffectiveQuotaPct and updateTaxiRechargingState multi-model 
     assert.equal(persisted.fleet["ac02"].status, "recargando");
   } finally {
     clearTaxiQuotaCache();
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("FINDING DISPATCHER: Ephemeral worker with LIVE parent PID must NOT be reaped to libre on TTL without termination evidence", () => {
+  const tempDir = createTempDir("ephemeral-ttl-live-pid");
+  const fleetPath = path.join(tempDir, "dc-taxis.json");
+  const tasksDir = path.join(tempDir, "tasks");
+  fs.mkdirSync(tasksDir, { recursive: true });
+
+  const customAccounts = ["ac01"];
+  const initial = createInitialFleetState(customAccounts);
+  const now = Date.now();
+  const pastHeartbeat = now - 1_000_000; // > 15m default TTL (900_000ms)
+
+  initial.fleet["ac01"].status = "ocupado";
+  initial.fleet["ac01"].passenger = {
+    type: "ephemeral_subagent",
+    sessionId: "sess-live-parent",
+    pid: process.pid, // Live parent PID!
+    plate: "DC-LIVE-PID-1",
+    model: "gemini-3.8-flash-high",
+    taskLabel: "Subagente en ejecución",
+    startedAt: pastHeartbeat,
+    heartbeatAt: pastHeartbeat,
+  };
+  saveFleetState(initial, fleetPath);
+
+  // 1. Sweeper runs with unknown/missing task file
+  const mockPlan: any = {
+    ephemeralId: "live-plan-1",
+    agentName: "dc-sub-live",
+    leasedAccount: "ac01",
+    plate: "DC-LIVE-PID-1",
+  };
+  activeBackgroundPlans.set("live-plan-1", {
+    plan: mockPlan,
+    sessionId: "sess-live-parent",
+    startedAt: pastHeartbeat,
+    taskId: "task-missing-unknown",
+  });
+
+  try {
+    sweepBackgroundPlansOnce(tasksDir, fleetPath);
+
+    // 2. Client calls getFleetStatusSummary (which invokes reapAbandonedTaxis with TTL=10s)
+    const summary = getFleetStatusSummary(fleetPath, customAccounts);
+
+    // 3. Since parent PID is alive and there is NO termination evidence:
+    // ac01 MUST NOT be reaped to 'libre' (preventing double-use by another worker)
+    assert.equal(summary.libres, 0, "Unit must NOT be marked libre while parent PID is alive without termination evidence");
+    assert.equal(summary.ocupados, 1, "Unit must remain ocupado to protect from double-allocation");
+
+    const stAfter = loadFleetState(fleetPath, customAccounts);
+    assert.equal(stAfter.fleet["ac01"].status, "ocupado", "Status must remain ocupado");
+    assert.equal((stAfter.fleet["ac01"].passenger as any)?.leaseHealth, "uncertain", "Lease health should be marked uncertain");
+
+    // 4. Attempting to lease a taxi must NOT allocate ac01 to a new worker (NO double-use!)
+    const secondLease = leaseTaxi(
+      {
+        type: "ephemeral_subagent",
+        sessionId: "sess-second",
+        pid: process.pid,
+        agentName: "dc-sub-second",
+        model: "gemini-3.8-flash-high",
+        taskLabel: "Second worker",
+      },
+      undefined,
+      fleetPath,
+      10_000,
+      customAccounts,
+    );
+
+    assert.equal(secondLease, null, "Must NOT double-lease ac01 to a new worker while first worker PID is alive");
+  } finally {
+    activeBackgroundPlans.delete("live-plan-1");
     fs.rmSync(tempDir, { recursive: true, force: true });
   }
 });

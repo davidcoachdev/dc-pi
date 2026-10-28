@@ -19,7 +19,7 @@ import type {
 } from "./dc-ephemeral-types.ts";
 import { DEFAULT_DC_AGENTS_CONFIG } from "./dc-ephemeral-types.ts";
 import { appendTaxiLog } from "./dc-taxi-logger.ts";
-import { discoverCpamAccounts } from "./dc-taxi-accounts.ts";
+import { discoverCpamAccounts, discoverVipAccounts, isVipAccount } from "./dc-taxi-accounts.ts";
 import {
   fetchAllTaxisQuotas,
   getCachedTaxiQuota,
@@ -397,7 +397,15 @@ export function loadFleetState(
       const discovered = discoverCpamAccounts();
       for (const ac of discovered) {
         if (!fleet[ac]) {
-          fleet[ac] = { account: ac, status: "libre", passenger: null };
+          fleet[ac] = { account: ac, status: "libre", passenger: null, tier: "standard" };
+        }
+      }
+      const vips = discoverVipAccounts();
+      for (const vip of vips) {
+        if (!fleet[vip]) {
+          fleet[vip] = { account: vip, status: "libre", passenger: null, tier: "vip" };
+        } else if (!fleet[vip].tier) {
+          fleet[vip].tier = "vip";
         }
       }
     }
@@ -565,7 +573,7 @@ export function acquireOrchestratorTaxi(
       parts = modelId.split("/");
       for (let i = 0; i < parts.length; i++) {
         const lower = parts[i].toLowerCase();
-        if (lower.startsWith("ac")) {
+        if (lower.startsWith("ac") || lower.startsWith("cc")) {
           currentAccount = lower;
           accountIndex = i;
           break;
@@ -573,13 +581,17 @@ export function acquireOrchestratorTaxi(
       }
     }
 
+    const isExcluded = (ac: string) => Array.isArray(excludedAccounts) && excludedAccounts.includes(ac);
+
     // Liberar cualquier taxi previo de esta misma sesión y PID que ya no use
     for (const unit of Object.values(state.fleet)) {
       if (
         unit.passenger &&
         unit.passenger.type === "orchestrator" &&
-        (unit.passenger.sessionId === sessionId || unit.passenger.pid === pid) &&
-        unit.account !== currentAccount
+        unit.passenger.sessionId === sessionId &&
+        unit.passenger.pid === pid &&
+        unit.account !== currentAccount &&
+        !isExcluded(unit.account)
       ) {
         unit.passenger = null;
         unit.status = "libre";
@@ -596,15 +608,14 @@ export function acquireOrchestratorTaxi(
       }
     }
 
-    const isExcluded = (ac: string) => Array.isArray(excludedAccounts) && excludedAccounts.includes(ac);
-
-    // Caso 1: Si esta sesión o PID ya tiene un taxi ocupado en la flota, preservarlo salvo que esté excluido
+    // Caso 1: Si esta sesión y PID ya tiene un taxi ocupado en la flota, preservarlo salvo que esté excluido
     for (const unit of Object.values(state.fleet)) {
       if (
         unit.status === "ocupado" &&
         unit.passenger &&
         unit.passenger.type === "orchestrator" &&
-        (unit.passenger.sessionId === sessionId || unit.passenger.pid === pid) &&
+        unit.passenger.sessionId === sessionId &&
+        unit.passenger.pid === pid &&
         !isExcluded(unit.account)
       ) {
         unit.passenger.heartbeatAt = Date.now();
@@ -646,11 +657,17 @@ export function acquireOrchestratorTaxi(
       }
     }
 
-    // Caso 2: Si el modelo no especifica cuenta ac* o si su cuenta solicitada está ocupada/excluida:
-    // Seleccionar entre los taxis libres disponibles con mayor cuota mediante balanceo de carga
-    // para distribuir el uso uniformemente entre las 44 cuentas (ac01..ac44).
+    // Caso 2: Si el modelo no especifica cuenta o si su cuenta solicitada está ocupada/excluida:
+    // Seleccionar entre los taxis libres disponibles con mayor cuota mediante balanceo de carga.
+    // AISLAMIENTO VIP: Si el orquestador no solicitó una cuenta VIP explícita, NUNCA asignar una cuenta VIP en balanceo automático.
+    const isExplicitVip = isVipAccount(currentAccount);
     const freeUnits = Object.entries(state.fleet)
-      .filter(([ac, unit]) => unit.status === "libre" && !isExcluded(ac))
+      .filter(([ac, unit]) => {
+        if (unit.status !== "libre" || isExcluded(ac)) return false;
+        const unitIsVip = unit.tier === "vip" || isVipAccount(ac);
+        // Solo considerar VIP si el usuario lo pidió explícitamente
+        return isExplicitVip ? unitIsVip : !unitIsVip;
+      })
       .map(([ac, unit]) => {
         const q = getCachedTaxiQuota(ac);
         const quotaPct = typeof q?.gemini5hPct === "number" ? q.gemini5hPct : 100;
@@ -727,21 +744,21 @@ export function releaseOrchestratorTaxi(
       let changed = false;
 
       for (const unit of Object.values(state.fleet)) {
-        if (
-          unit.passenger &&
-          unit.passenger.type === "orchestrator" &&
-          ((sessionId && unit.passenger.sessionId === sessionId) || unit.passenger.pid === pid)
-        ) {
-          unit.passenger = null;
-          unit.status = "libre";
-          const quota = getCachedTaxiQuota(unit.account);
-          updateTaxiRechargingState(unit, quota);
-          changed = true;
-          appendTaxiLog("INFO", "TAXI_ORCHESTRATOR_RELEASED", {
-            account: unit.account,
-            sessionId,
-            pid,
-          });
+        if (unit.passenger && unit.passenger.type === "orchestrator") {
+          const matchesSession = sessionId ? unit.passenger.sessionId === sessionId : true;
+          const matchesPid = pid !== undefined ? unit.passenger.pid === pid : true;
+          if (matchesSession && matchesPid) {
+            unit.passenger = null;
+            unit.status = "libre";
+            const quota = getCachedTaxiQuota(unit.account);
+            updateTaxiRechargingState(unit, quota);
+            changed = true;
+            appendTaxiLog("INFO", "TAXI_ORCHESTRATOR_RELEASED", {
+              account: unit.account,
+              sessionId,
+              pid,
+            });
+          }
         }
       }
 
@@ -787,26 +804,34 @@ export function leaseTaxi(
     };
 
     // 1. Intentar cuenta preferida si está estrictamente libre
+    // Si la cuenta preferida es VIP, solo se admite si el pasajero lo solicitó explícitamente y está autorizado
     if (preferredAccount && state.fleet[preferredAccount] && state.fleet[preferredAccount].status === "libre") {
-      const unit = state.fleet[preferredAccount];
-      unit.status = "ocupado";
-      unit.passenger = fullPassenger;
-      saveFleetState(state, fleetPath);
+      const preferredIsVip = state.fleet[preferredAccount].tier === "vip" || isVipAccount(preferredAccount);
+      // Los subagentes nunca pueden arrendar cuentas VIP
+      if (!preferredIsVip) {
+        const unit = state.fleet[preferredAccount];
+        unit.status = "ocupado";
+        unit.passenger = fullPassenger;
+        saveFleetState(state, fleetPath);
 
-      appendTaxiLog("INFO", "TAXI_LEASED", {
-        account: preferredAccount,
-        type: fullPassenger.type,
-        sessionId: fullPassenger.sessionId,
-        pid: fullPassenger.pid,
-        model: fullPassenger.model,
-        preferred: true,
-      });
+        appendTaxiLog("INFO", "TAXI_LEASED", {
+          account: preferredAccount,
+          type: fullPassenger.type,
+          sessionId: fullPassenger.sessionId,
+          pid: fullPassenger.pid,
+          model: fullPassenger.model,
+          preferred: true,
+        });
 
-      return { account: preferredAccount, unit };
+        return { account: preferredAccount, unit };
+      }
     }
 
-    // 2. Buscar entre los taxis libres disponibles con mayor cuota restante mediante balanceo de carga
-    const freeUnits = Object.values(state.fleet).filter((u) => u.status === "libre");
+    // 2. Buscar entre los taxis libres disponibles con mayor cuota restante mediante balanceo de carga.
+    // AISLAMIENTO VIP: Subagentes y pasajeros comunes NUNCA pueden arrendar taxis VIP (tier === 'vip' o cc*).
+    const freeUnits = Object.values(state.fleet).filter(
+      (u) => u.status === "libre" && u.tier !== "vip" && !isVipAccount(u.account),
+    );
     if (freeUnits.length > 0) {
       const unitsWithQuota = freeUnits.map((u) => {
         const quota = getEffectiveQuotaPct(quotaGetter(u.account)) ?? 100;
@@ -855,6 +880,8 @@ export function leaseTaxi(
 export interface ReleaseTaxiOptions {
   pid?: number;
   fromOrchestratorRelease?: boolean;
+  plate?: string;
+  expectedPlate?: string;
 }
 
 /**
@@ -897,6 +924,16 @@ export function releaseTaxi(
         });
         return false;
       }
+    }
+
+    const expectedPlate = options?.plate ?? options?.expectedPlate;
+    if (expectedPlate && unit.passenger && unit.passenger.plate && unit.passenger.plate !== expectedPlate) {
+      appendTaxiLog("WARN", "TAXI_RELEASE_PLATE_MISMATCH", {
+        account,
+        expectedPlate: unit.passenger.plate,
+        attemptedPlate: expectedPlate,
+      });
+      return false;
     }
 
     if (sessionId && unit.passenger && unit.passenger.sessionId !== sessionId) {
@@ -982,6 +1019,12 @@ export function updateTaxiPassengerPid(
   });
 }
 
+export interface TaxiIdentityOptions {
+  plate?: string;
+  sessionId?: string;
+  pid?: number;
+}
+
 /**
  * Envía un pulso de vida (heartbeat) para mantener el taxi arrendado.
  * Protegido atómicamente con withFleetLock para evitar sobrescrituras de estado.
@@ -989,12 +1032,35 @@ export function updateTaxiPassengerPid(
 export function heartbeatTaxi(
   account: string,
   fleetPath: string = FLEET_STATE_PATH,
+  identity?: TaxiIdentityOptions,
 ): boolean {
   return withFleetLock(fleetPath, () => {
     const state = loadFleetState(fleetPath);
     const unit = state.fleet[account];
 
     if (!unit || unit.status !== "ocupado" || !unit.passenger) {
+      return false;
+    }
+
+    if (identity?.plate && unit.passenger.plate && unit.passenger.plate !== identity.plate) {
+      appendTaxiLog("WARN", "TAXI_HEARTBEAT_OWNERSHIP_MISMATCH", {
+        account,
+        expectedPlate: unit.passenger.plate,
+        attemptedPlate: identity.plate,
+      });
+      return false;
+    }
+
+    if (identity?.sessionId && unit.passenger.sessionId && unit.passenger.sessionId !== identity.sessionId) {
+      appendTaxiLog("WARN", "TAXI_HEARTBEAT_OWNERSHIP_MISMATCH", {
+        account,
+        expectedSession: unit.passenger.sessionId,
+        attemptedSession: identity.sessionId,
+      });
+      return false;
+    }
+
+    if (identity?.pid !== undefined && unit.passenger.pid !== identity.pid) {
       return false;
     }
 
@@ -1013,12 +1079,35 @@ export function updateTaxiPassengerUsage(
   tokens: number,
   cost?: number,
   fleetPath: string = FLEET_STATE_PATH,
+  identity?: TaxiIdentityOptions,
 ): boolean {
   return withFleetLock(fleetPath, () => {
     const state = loadFleetState(fleetPath);
     const unit = state.fleet[account];
 
     if (!unit || unit.status !== "ocupado" || !unit.passenger) {
+      return false;
+    }
+
+    if (identity?.plate && unit.passenger.plate && unit.passenger.plate !== identity.plate) {
+      appendTaxiLog("WARN", "TAXI_USAGE_UPDATE_OWNERSHIP_MISMATCH", {
+        account,
+        expectedPlate: unit.passenger.plate,
+        attemptedPlate: identity.plate,
+      });
+      return false;
+    }
+
+    if (identity?.sessionId && unit.passenger.sessionId && unit.passenger.sessionId !== identity.sessionId) {
+      appendTaxiLog("WARN", "TAXI_USAGE_UPDATE_OWNERSHIP_MISMATCH", {
+        account,
+        expectedSession: unit.passenger.sessionId,
+        attemptedSession: identity.sessionId,
+      });
+      return false;
+    }
+
+    if (identity?.pid !== undefined && unit.passenger.pid !== identity.pid) {
       return false;
     }
 
@@ -1061,8 +1150,10 @@ export function leaseAvailableTaxis(
       }
     }
 
-    // Filtrar estrictamente unidades 'libre', ignorando 'en_taller', 'ocupado', 'recargando'
-    const freeUnits = Object.values(state.fleet).filter((u) => u.status === "libre");
+    // Filtrar estrictamente unidades 'libre', ignorando 'en_taller', 'ocupado', 'recargando' y 'vip'
+    const freeUnits = Object.values(state.fleet).filter(
+      (u) => u.status === "libre" && u.tier !== "vip" && !isVipAccount(u.account),
+    );
 
     // Ordenar de mayor a menor cuota restante
     freeUnits.sort((a, b) => {
@@ -1119,8 +1210,12 @@ export function leaseAvailableTaxis(
   });
 }
 
+let lastWorkshopSince = 0;
+
 /**
  * Envía una unidad de taxi al taller por avería o fallo de autenticación fatal (ej: HTTP 400/401/403).
+ * Garantiza que workshopSince sea estrictamente monótono para evitar colisiones de generación
+ * en eventos sucesivos dentro del mismo milisegundo.
  */
 export function sendTaxiToWorkshop(
   account: string,
@@ -1135,10 +1230,18 @@ export function sendTaxiToWorkshop(
       return false;
     }
 
+    const now = Date.now();
+    const maxExisting = Object.values(state.fleet).reduce(
+      (max, u) => Math.max(max, u.workshopSince ?? 0),
+      lastWorkshopSince,
+    );
+    const workshopSince = now <= maxExisting ? maxExisting + 1 : now;
+    lastWorkshopSince = workshopSince;
+
     unit.status = "en_taller";
     unit.passenger = null;
     unit.workshopReason = reason;
-    unit.workshopSince = Date.now();
+    unit.workshopSince = workshopSince;
 
     saveFleetState(state, fleetPath);
 
@@ -1152,19 +1255,47 @@ export function sendTaxiToWorkshop(
   });
 }
 
+export interface RepairTaxiOptions {
+  expectedWorkshopSince?: number;
+}
+
 /**
  * Repara una unidad de taxi en taller y la devuelve al estado libre (o recargando si cuota < 5%).
+ * Protegido contra colisiones de generación (expectedWorkshopSince) y rechaza reparación
+ * si la unidad posee una reserva activa.
  */
 export function repairTaxiFromWorkshop(
   account: string,
   fleetPath: string = FLEET_STATE_PATH,
   allowedAccounts?: string[],
   quotaGetter: (account: string) => DcTaxiQuotaInfo | undefined = getCachedTaxiQuota,
+  options?: RepairTaxiOptions,
 ): boolean {
   return withFleetLock(fleetPath, () => {
     const state = loadFleetState(fleetPath, allowedAccounts);
     const unit = state.fleet[account];
     if (!unit || unit.status !== "en_taller") {
+      return false;
+    }
+
+    if (
+      typeof options?.expectedWorkshopSince === "number" &&
+      unit.workshopSince !== options.expectedWorkshopSince
+    ) {
+      appendTaxiLog("WARN", "TAXI_WORKSHOP_GENERATION_MISMATCH", {
+        account,
+        expectedWorkshopSince: options.expectedWorkshopSince,
+        actualWorkshopSince: unit.workshopSince,
+      });
+      return false;
+    }
+
+    if (unit.passenger !== null) {
+      appendTaxiLog("WARN", "TAXI_WORKSHOP_REPAIR_ACTIVE_LEASE", {
+        account,
+        plate: unit.passenger.plate,
+        sessionId: unit.passenger.sessionId,
+      });
       return false;
     }
 

@@ -25,10 +25,13 @@ export interface DcTaxiPassenger {
   heartbeatAt: number;
 }
 
+export type DcTaxiTier = "standard" | "vip";
+
 export interface DcTaxiUnit {
   account: string;
   status: DcTaxiStatus;
   passenger: DcTaxiPassenger | null;
+  tier?: DcTaxiTier;
   workshopReason?: string;
   workshopSince?: number;
 }

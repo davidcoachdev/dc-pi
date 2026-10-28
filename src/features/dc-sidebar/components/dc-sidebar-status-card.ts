@@ -619,11 +619,12 @@ export function createStatusCard(reqRender: () => void): Component {
         let entry = this.unitsMap.get(unit.account);
         const rows = createTaxiUnitRows(unit);
         
-        let titleBadge = bloodSoft("○ libre");
-        let titleExtra = dim("(libre)");
+        const isVip = unit.tier === "vip" || (unit.account && unit.account.startsWith("cc"));
+        let titleBadge = isVip ? bloodBright("👑 VIP") : bloodSoft("○ libre");
+        let titleExtra = isVip ? bloodBright("[VIP]") : dim("(libre)");
         if (unit.status === "ocupado") {
           const role = unit.passenger ? formatPassengerRole(unit.passenger) : "ocupado";
-          titleBadge = bloodBright("● ocupado");
+          titleBadge = isVip ? bloodBright("👑 VIP ●") : bloodBright("● ocupado");
           titleExtra = bloodSoft(`[${role}]`);
         } else if (unit.status === "recargando") {
           titleBadge = bloodBright("◐ recarga");

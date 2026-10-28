@@ -43,6 +43,7 @@ export interface EphemeralAgentLaunchPlan {
   effectiveEffort: DcReasoningEffort;
   tools: string[];
   mode: "task" | "background";
+  plate?: string;
 }
 
 export interface AssembledLegoPlan {
@@ -470,6 +471,8 @@ export function prepareEphemeralAgent(
     sessionId: contextMeta.sessionId,
   });
 
+  const plate = leaseResult.unit.passenger?.plate || `DC-${uuidShort.toUpperCase()}`;
+
   return {
     ephemeralId: uuidShort,
     agentName,
@@ -479,6 +482,7 @@ export function prepareEphemeralAgent(
     effectiveEffort,
     tools,
     mode: options.mode || "task",
+    plate,
   };
 }
 
@@ -497,7 +501,9 @@ export function cleanupEphemeralAgent(
     costEstimated?: number;
     error?: string;
   },
-): void {
+  fleetPath?: string,
+  historyPath?: string,
+): boolean {
   // 1. Eliminar archivo de definición en disco
   try {
     if (fs.existsSync(plan.agentFilePath)) {
@@ -508,7 +514,21 @@ export function cleanupEphemeralAgent(
   }
 
   // 2. Liberar el Taxi a la flota
-  releaseTaxi(plan.leasedAccount, executionResult.sessionId);
+  const released = releaseTaxi(plan.leasedAccount, executionResult.sessionId, fleetPath, undefined, undefined, {
+    plate: plan.plate,
+  });
+
+  if (!released) {
+    appendTaxiLog("WARN", "TAXI_CLEANUP_OWNERSHIP_REJECTED", {
+      agentName: plan.agentName,
+      account: plan.leasedAccount,
+      plate: plan.plate,
+      sessionId: executionResult.sessionId,
+      status: executionResult.status,
+      reason: "release_taxi_rejected_or_stale",
+    });
+    return false;
+  }
 
   // 3. Registrar el viaje en el historial persistente
   const durationMs = Math.max(0, executionResult.endedAt - executionResult.startedAt);
@@ -529,7 +549,7 @@ export function cleanupEphemeralAgent(
     error: executionResult.error,
   };
 
-  recordTaxiTrip(tripRecord);
+  recordTaxiTrip(tripRecord, historyPath);
 
   appendTaxiLog("INFO", "EPHEMERAL_AGENT_CLEANED", {
     agentName: plan.agentName,
@@ -537,6 +557,8 @@ export function cleanupEphemeralAgent(
     durationMs,
     status: executionResult.status,
   });
+
+  return true;
 }
 
 /**
