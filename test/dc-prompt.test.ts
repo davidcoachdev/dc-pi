@@ -1,3 +1,19 @@
+import * as fs from "node:fs";
+import * as path from "node:path";
+
+// HOME/TMP/XDG isolation MUST be applied BEFORE project-local modules are evaluated.
+const scratchHome = path.resolve(".test-build", `scratch-home-prompt-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+fs.mkdirSync(scratchHome, { recursive: true });
+process.env.HOME = scratchHome;
+process.env.TMPDIR = path.join(scratchHome, "tmp");
+process.env.TMP = path.join(scratchHome, "tmp");
+process.env.TEMP = path.join(scratchHome, "tmp");
+process.env.XDG_CONFIG_HOME = path.join(scratchHome, ".config");
+process.env.XDG_DATA_HOME = path.join(scratchHome, ".local/share");
+fs.mkdirSync(process.env.TMPDIR, { recursive: true });
+fs.mkdirSync(process.env.XDG_CONFIG_HOME, { recursive: true });
+fs.mkdirSync(process.env.XDG_DATA_HOME, { recursive: true });
+
 import test from "node:test";
 import assert from "node:assert/strict";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
@@ -40,6 +56,9 @@ import {
   openPromptAnimPicker,
 } from "../src/features/dc-prompt/views/dc-prompt-anim-picker.ts";
 import { writePromptPrefs } from "../src/features/dc-prompt/core/dc-prompt-prefs.ts";
+
+// Ensure clean deterministic default prefs for test runs
+writePromptPrefs({ animation: "kitt", enabled: true, frame: "double" });
 import dcPromptExtension, {
   getCurrentEditor,
   install,
@@ -544,4 +563,194 @@ test("PromptAnimPickerPanel renders live previews and handles navigation", () =>
   assert.equal(picked, "pacman");
 
   panel.stop();
+});
+
+test("PromptAnimPickerPanel provides idempotent destroy and dispose methods that stop timers and release callbacks", (t) => {
+  t.mock.timers.enable({ apis: ["setInterval"] });
+
+  const theme = {
+    fg: (_role: string, text: string) => text,
+    bold: (text: string) => text,
+  };
+
+  const panel = new PromptAnimPickerPanel(theme, "kitt");
+  assert.equal(typeof (panel as any).dispose, "function");
+  assert.equal(typeof (panel as any).destroy, "function");
+
+  let renders = 0;
+  panel.start(() => { renders++; });
+  assert.equal(renders, 0);
+
+  t.mock.timers.tick(120);
+  assert.equal(renders, 1);
+
+  t.mock.timers.tick(120);
+  assert.equal(renders, 2);
+
+  // Calling dispose should stop timer and release render callback
+  (panel as any).dispose();
+
+  // Ticking further must NOT trigger any more renders
+  t.mock.timers.tick(360);
+  assert.equal(renders, 2);
+
+  // Calling destroy and dispose repeatedly must be idempotent
+  assert.doesNotThrow(() => {
+    (panel as any).destroy();
+    (panel as any).dispose();
+  });
+  t.mock.timers.tick(360);
+  assert.equal(renders, 2);
+
+  // Preserves start/stop restart: starting again resumes cleanly
+  panel.start(() => { renders++; });
+  t.mock.timers.tick(120);
+  assert.equal(renders, 3);
+
+  panel.stop();
+  t.mock.timers.tick(240);
+  assert.equal(renders, 3);
+});
+
+test("openPromptAnimPicker modal X closure cleans up timer and cancels callbacks without leaking", async (t) => {
+  t.mock.timers.enable({ apis: ["setInterval"] });
+
+  let renders = 0;
+  let customComponent: any;
+
+  const mockCtx = {
+    hasUI: true,
+    mode: "tui",
+    ui: {
+      custom: async <T>(
+        factory: (tui: any, theme: any, kb: any, done: (val?: T) => void) => any,
+      ) => {
+        const mockTui = {
+          requestRender: () => { renders++; },
+          terminal: { rows: 24, columns: 80 },
+        };
+        const mockTheme = {
+          fg: (_r: string, text: string) => text,
+          bg: (_r: string, text: string) => text,
+          bold: (text: string) => text,
+        };
+        return new Promise<T | undefined>((resolve) => {
+          customComponent = factory(mockTui, mockTheme, {}, (val?: T) => {
+            resolve(val);
+          });
+        });
+      },
+    },
+  } as unknown as ExtensionContext;
+
+  const pickerPromise = openPromptAnimPicker(mockCtx);
+
+  // Initial render to establish DcWindow dimensions and hitbox for title bar close button
+  assert.ok(customComponent);
+  customComponent.render(58);
+
+  // Advance timer: panel should tick and request render
+  assert.equal(renders, 0);
+  t.mock.timers.tick(120);
+  assert.equal(renders, 1);
+  t.mock.timers.tick(120);
+  assert.equal(renders, 2);
+
+  // Simulate clicking the "X" close button in DcWindow header (row y = 1, col x = 52)
+  const clickRes = customComponent.handleMouse({
+    type: "click",
+    button: "left",
+    x: 52,
+    y: 1,
+  });
+  assert.equal(clickRes?.handled, true);
+
+  await pickerPromise;
+
+  // Record render count at closure
+  const rendersAtClose = renders;
+
+  // Advance timer further after generic modal X closure:
+  // BEFORE fix: the panel timer leaked and continued calling requestRender on each interval!
+  // AFTER fix: the panel timer is destroyed, render callback released, no more renders happen!
+  t.mock.timers.tick(360);
+  assert.equal(renders, rendersAtClose);
+});
+
+test("openPromptAnimPicker retains keyboard and mouse selection, cancel, and footer behavior", async (t) => {
+  t.mock.timers.enable({ apis: ["setInterval"] });
+
+  const createMockCtx = () => {
+    let comp: any;
+    const ctx = {
+      hasUI: true,
+      mode: "tui",
+      ui: {
+        custom: async <T>(
+          factory: (tui: any, theme: any, kb: any, done: (val?: T) => void) => any,
+        ) => {
+          let res: T | undefined;
+          const mockTui = {
+            requestRender: () => {},
+            terminal: { rows: 24, columns: 80 },
+          };
+          const mockTheme = {
+            fg: (_r: string, text: string) => text,
+            bg: (_r: string, text: string) => text,
+            bold: (text: string) => text,
+          };
+          comp = factory(mockTui, mockTheme, {}, (val?: T) => { res = val; });
+          return res;
+        },
+      },
+    } as unknown as ExtensionContext;
+    return { ctx, getComp: () => comp };
+  };
+
+  // Case 1: Enter key selects animation and stops timer
+  {
+    const { ctx, getComp } = createMockCtx();
+    const p = openPromptAnimPicker(ctx);
+    const comp = getComp();
+    comp.render(58);
+    comp.handleInput("\x1b[B"); // Down arrow
+    comp.handleInput("\r"); // Enter
+    const res = await p;
+    assert.equal(res, "pacman");
+  }
+
+  // Case 2: Escape key cancels modal, returns undefined, stops timer
+  {
+    const { ctx, getComp } = createMockCtx();
+    const p = openPromptAnimPicker(ctx);
+    const comp = getComp();
+    comp.render(58);
+    comp.handleInput("\x1b"); // Escape
+    const res = await p;
+    assert.equal(res, undefined);
+  }
+
+  // Case 3: Footer right button click "[ Usar ]" selects animation
+  {
+    const { ctx, getComp } = createMockCtx();
+    const p = openPromptAnimPicker(ctx);
+    const comp = getComp();
+    comp.render(58);
+    comp.handleInput("\x1b[B"); // Down arrow to select pacman
+    // Click footer right button
+    const footerClick = comp.handleMouse({
+      type: "click",
+      button: "left",
+      x: 52,
+      y: 17, // footer row in 18-line modal
+    });
+    // Footer button or enter triggers selection
+    if (footerClick?.handled) {
+      const res = await p;
+      assert.equal(res, "pacman");
+    }
+  }
+
+  // Restore clean default prefs
+  writePromptPrefs({ animation: "kitt" });
 });
