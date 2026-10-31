@@ -19,6 +19,54 @@ function createTempDir(prefix: string): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), `dc-test-${prefix}-`));
 }
 
+test("parallel swarm rejects absent runner and nested tool errors", async () => {
+  for (const executeToolFn of [undefined, async () => ({ result: { isError: true, content: [{ type: "text", text: "Rejected" }] } })]) {
+    const result = await executeResearchSwarm({ query: "Failure contract", channels: ["web"] }, {
+      sessionId: "swarm-failure-contract", executeToolFn,
+    });
+    assert.equal(result.channelResults.web.status, "failed");
+    assert.equal(result.channelResults.web.content, "");
+    assert.ok(result.channelResults.web.error);
+  }
+});
+
+test("parallel swarm forwards cancellation and never starts an already aborted channel", async () => {
+  const controller = new AbortController();
+  let calls = 0;
+  const context = {
+    sessionId: "swarm-cancellation", signal: controller.signal,
+    executeToolFn: async (_name: string, _params: any, execution?: { signal?: AbortSignal }) => {
+      calls++;
+      assert.equal(execution?.signal, controller.signal);
+      return { content: [{ type: "text", text: "Result" }] };
+    },
+  };
+  const active = await executeResearchSwarm({ query: "Cancellation", channels: ["web"] }, context);
+  assert.equal(active.channelResults.web.status, "success");
+  controller.abort();
+  const cancelled = await executeResearchSwarm({ query: "Cancellation", channels: ["docs"] }, context);
+  assert.equal(cancelled.channelResults.docs.status, "failed");
+  assert.equal(calls, 1);
+});
+
+test("parallel swarm honors maxConcurrency without dropping channels", async () => {
+  let active = 0;
+  let peak = 0;
+  const result = await executeResearchSwarm({ query: "Bounded concurrency", channels: ["web", "docs", "github"], maxConcurrency: 1 }, {
+    sessionId: "swarm-bounded",
+    executeToolFn: async () => {
+      active++;
+      peak = Math.max(peak, active);
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      active--;
+      return { content: [{ type: "text", text: "Result" }] };
+    },
+  });
+  assert.equal(peak, 1);
+  assert.equal(result.channelsExecuted.length, 3);
+  assert.ok(Object.values(result.channelResults).every((entry) => entry.status === "success"));
+});
+
 test("dc-research-swarm: DC_RESEARCH_CHANNELS contracts and configurations", () => {
   const expectedChannels: DcResearchChannel[] = ["web", "docs", "discussions", "github", "academic", "youtube"];
 

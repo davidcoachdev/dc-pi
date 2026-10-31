@@ -23,6 +23,7 @@ export interface DcTaxiPassenger {
   costEstimated?: number;
   startedAt: number;
   heartbeatAt: number;
+  leaseHealth?: "uncertain";
 }
 
 export type DcTaxiTier = "standard" | "vip";

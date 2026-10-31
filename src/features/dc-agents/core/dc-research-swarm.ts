@@ -125,7 +125,8 @@ export interface DcSwarmContextMeta {
   parentModel?: string;
   parentEffort?: string;
   pid?: number;
-  executeToolFn?: (toolName: string, params: any) => Promise<any>;
+  signal?: AbortSignal;
+  executeToolFn?: (toolName: string, params: any, execution?: { signal?: AbortSignal }) => Promise<any>;
 }
 
 /**
@@ -185,13 +186,15 @@ export async function executeResearchSwarm(
     sessionId: contextMeta.sessionId,
   });
 
-  const channelPromises = channelsToRun.map(async (channel): Promise<DcSwarmChannelResult> => {
+  const runChannel = async (channel: DcResearchChannel): Promise<DcSwarmChannelResult> => {
     const config = DC_RESEARCH_CHANNELS[channel];
     const channelStart = Date.now();
     let plan: EphemeralAgentLaunchPlan | undefined;
     let heartbeatTimer: NodeJS.Timeout | undefined;
+    let finalStatus: "completed" | "failed" = "failed";
 
     try {
+      contextMeta.signal?.throwIfAborted();
       // 1. Crear subagente efímero y arrendar Taxi exclusivo para este canal
       plan = prepareEphemeralAgent(
         {
@@ -221,7 +224,7 @@ export async function executeResearchSwarm(
 
       // Heartbeat para mantener el taxi vivo mientras corre
       heartbeatTimer = setInterval(() => {
-        if (plan) heartbeatTaxi(plan.leasedAccount);
+        if (plan) heartbeatTaxi(plan.leasedAccount, undefined, { plate: plan.plate, sessionId: contextMeta.sessionId });
       }, 45000);
       heartbeatTimer.unref?.();
 
@@ -232,7 +235,12 @@ export async function executeResearchSwarm(
           task: config.instructions(query),
           mode: "task",
           label: `swarm-${channel}`,
-        });
+        }, { signal: contextMeta.signal });
+        contextMeta.signal?.throwIfAborted();
+
+        if (!rawOutcome || rawOutcome.isError || rawOutcome.result?.isError) {
+          throw new Error("Research channel execution failed");
+        }
 
         // Extraer texto devuelto
         if (rawOutcome?.result?.content) {
@@ -247,9 +255,11 @@ export async function executeResearchSwarm(
           outputText = rawOutcome;
         }
       } else {
-        outputText = `[Simulación exitosa] Canal ${channel} procesó query: "${query}"`;
+        throw new Error("executeTool no disponible en host");
       }
 
+      if (!outputText.trim()) throw new Error("Research channel returned no content");
+      finalStatus = "completed";
       const durationMs = Date.now() - channelStart;
       return {
         channel,
@@ -277,11 +287,22 @@ export async function executeResearchSwarm(
           sessionId: contextMeta.sessionId,
           startedAt: channelStart,
           endedAt: Date.now(),
-          status: "completed",
+          status: finalStatus,
         });
       }
     }
-  });
+  };
+
+  const concurrency = options.maxConcurrency ?? channelsToRun.length;
+  if (!Number.isInteger(concurrency) || concurrency < 1) {
+    throw new Error("maxConcurrency must be a positive integer");
+  }
+  const channelPromises: Promise<DcSwarmChannelResult>[] = [];
+  for (let offset = 0; offset < channelsToRun.length; offset += concurrency) {
+    const group = channelsToRun.slice(offset, offset + concurrency).map(runChannel);
+    channelPromises.push(...group);
+    await Promise.allSettled(group);
+  }
 
   // Ejecución en paralelo estricto con tolerancia a fallos parciales
   const settled = await Promise.allSettled(channelPromises);

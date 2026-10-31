@@ -13,6 +13,8 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import {
   prepareEphemeralAgent,
   cleanupEphemeralAgent,
+  assembleLegoAgentPlan,
+  validateBoundedWriterAdmission,
 } from "../core/dc-ephemeral-manager.ts";
 import { executeResearchSwarm } from "../core/dc-research-swarm.ts";
 import {
@@ -735,7 +737,10 @@ export function registerDcEphemeralTools(pi: ExtensionAPI): void {
             parentModel,
             parentEffort,
             pid: process.pid,
-            executeToolFn: (name, p) => (ctx as any)?.executeTool?.(name, p),
+            signal: _signal,
+            executeToolFn: typeof (ctx as any)?.executeTool === "function"
+              ? (name, p, execution) => (ctx as any).executeTool(name, p, { ...execution, onUpdate: _onUpdate })
+              : undefined,
           },
         );
 
@@ -826,10 +831,37 @@ export function registerDcEphemeralTools(pi: ExtensionAPI): void {
         sessionId,
       });
 
+      // Validate the whole batch before acquiring any lease or launching workers.
+      try {
+        const claimed: Array<{ root: string; item: number }> = [];
+        for (const [index, item] of items.entries()) {
+          const recipe = assembleLegoAgentPlan(item);
+          const admission = validateBoundedWriterAdmission(item.task, item.seedContext, recipe.tools);
+          if (!admission.valid) throw new Error(admission.reason);
+          for (const surface of admission.surfaces || []) {
+            const wildcard = surface.search(/[*?{[!]/);
+            const prefix = wildcard < 0 ? surface : surface.slice(0, wildcard);
+            const root = wildcard < 0 ? prefix : prefix.slice(0, prefix.lastIndexOf("/") + 1).replace(/\/$/, "");
+            if (claimed.some((claim) => claim.item !== index &&
+                (!root || !claim.root || root === claim.root || root.startsWith(`${claim.root}/`) || claim.root.startsWith(`${root}/`)))) {
+              throw new Error("Allowed edit surfaces overlap between parallel writers; use disjoint paths or separate batches.");
+            }
+            claimed.push({ root, item: index });
+          }
+        }
+      } catch (error: any) {
+        return {
+          content: [{ type: "text", text: error.message }],
+          details: { total: items.length, completed: 0, failed: items.length, results: [] },
+          isError: true,
+        };
+      }
+
       // Ejecutar el abanico de subagentes concurrentemente mediante Promise.allSettled
       const promises = items.map(async (item, index) => {
         const itemRole = item.role || `worker-${index + 1}`;
         let plan: ReturnType<typeof prepareEphemeralAgent> | undefined;
+        let heartbeatTimer: NodeJS.Timeout | undefined;
 
         try {
           plan = prepareEphemeralAgent(
@@ -857,24 +889,20 @@ export function registerDcEphemeralTools(pi: ExtensionAPI): void {
           );
 
           if (typeof (ctx as any)?.executeTool !== "function") {
-            if (mode === "background") {
-              activeBackgroundPlans.set(plan.ephemeralId, {
-                plan,
-                sessionId,
-                startedAt: Date.now(),
-                taskId: undefined,
-              });
-              ensureBackgroundSweeper();
-            }
-            return {
-              itemRole,
-              agentName: plan.agentName,
-              account: plan.leasedAccount,
-              status: "prepared",
-              output: `Subagente preparado en ${plan.agentFilePath} (executeTool no disponible en host).`,
-            };
+            cleanupEphemeralAgent(plan, {
+              sessionId, startedAt: Date.now(), endedAt: Date.now(),
+              status: "failed", error: "executeTool no disponible en host",
+            });
+            plan = undefined;
+            throw new Error("executeTool no disponible en host");
           }
 
+          if (mode === "task") {
+            heartbeatTimer = setInterval(() => {
+              if (plan) heartbeatTaxi(plan.leasedAccount, undefined, { plate: plan.plate, sessionId });
+            }, 45000);
+            heartbeatTimer.unref?.();
+          }
           const rawOutcome = await (ctx as any).executeTool(
             "subagent_run",
             {
@@ -886,6 +914,7 @@ export function registerDcEphemeralTools(pi: ExtensionAPI): void {
             { signal: _signal, onUpdate: _onUpdate },
           );
 
+          let executionFailed = !rawOutcome || !!(rawOutcome.isError || rawOutcome.result?.isError);
           let textOutput = "";
           if (rawOutcome?.result?.content?.[0]?.text) {
             textOutput = rawOutcome.result.content[0].text;
@@ -893,8 +922,12 @@ export function registerDcEphemeralTools(pi: ExtensionAPI): void {
             textOutput = rawOutcome.content[0].text;
           } else if (typeof rawOutcome?.result === "string") {
             textOutput = rawOutcome.result;
-          } else {
-            textOutput = JSON.stringify(rawOutcome?.result || rawOutcome || "");
+          } else if (typeof rawOutcome === "string") {
+            textOutput = rawOutcome;
+          }
+          if (mode === "task" && !textOutput.trim()) {
+            executionFailed = true;
+            textOutput = "Runner returned no task content";
           }
 
           if (mode === "background") {
@@ -928,7 +961,7 @@ export function registerDcEphemeralTools(pi: ExtensionAPI): void {
               sessionId,
               startedAt: Date.now(),
               endedAt: Date.now(),
-              status: rawOutcome?.isError ? "failed" : "completed",
+              status: executionFailed ? "failed" : "completed",
             });
           }
 
@@ -936,10 +969,20 @@ export function registerDcEphemeralTools(pi: ExtensionAPI): void {
             itemRole,
             agentName: plan.agentName,
             account: plan.leasedAccount,
-            status: rawOutcome?.isError ? "failed" : "completed",
+            status: executionFailed ? "failed" : "completed",
             output: textOutput,
           };
         } catch (itemErr: any) {
+          if (plan && mode === "background") {
+            activeBackgroundPlans.set(plan.ephemeralId, {
+              plan, sessionId, startedAt: Date.now(), taskId: undefined,
+            });
+            ensureBackgroundSweeper();
+            appendTaxiLog("ERROR", "BATCH_BACKGROUND_LAUNCH_UNCERTAIN", {
+              agent: plan.agentName, account: plan.leasedAccount, sessionId,
+              error: itemErr.message,
+            });
+          }
           if (plan && mode !== "background") {
             cleanupEphemeralAgent(plan, {
               sessionId,
@@ -956,6 +999,8 @@ export function registerDcEphemeralTools(pi: ExtensionAPI): void {
             status: "failed",
             output: `Error: ${itemErr.message}`,
           };
+        } finally {
+          if (heartbeatTimer) clearInterval(heartbeatTimer);
         }
       });
 
@@ -993,6 +1038,7 @@ export function registerDcEphemeralTools(pi: ExtensionAPI): void {
 
       return {
         content: [{ type: "text", text: reportLines.join("\n") }],
+        isError: failedCount > 0,
         details: {
           total: items.length,
           completed: completedCount,

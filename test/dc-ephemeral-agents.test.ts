@@ -496,7 +496,7 @@ test("dc-taxi-dispatcher: reapAbandonedTaxis transitions dead PID unit to recarg
   }
 });
 
-test("dc-taxi-dispatcher: reapAbandonedTaxis auto-recovers dead PID and expired TTL taxis", () => {
+test("dc-taxi-dispatcher: reapAbandonedTaxis recovers dead PID but preserves live expired leases", () => {
   const tempDir = createTempDir("reap");
   const fleetPath = path.join(tempDir, "dc-taxis.json");
 
@@ -536,10 +536,10 @@ test("dc-taxi-dispatcher: reapAbandonedTaxis auto-recovers dead PID and expired 
     saveFleetState(state, fleetPath);
 
     const reaped = reapAbandonedTaxis(state, 300000); // 5 min TTL
-    assert.equal(reaped, 2);
+    assert.equal(reaped, 1);
 
     assert.equal(state.fleet["ac01"].status, "libre");
-    assert.equal(state.fleet["ac02"].status, "libre");
+    assert.equal(state.fleet["ac02"].status, "ocupado");
     assert.equal(state.fleet["ac03"].status, "ocupado");
   } finally {
     fs.rmSync(tempDir, { recursive: true, force: true });
@@ -579,13 +579,13 @@ test("dc-taxi-dispatcher: reapAbandonedTaxis never evicts a live orchestrator ba
     // Ejecutar reaper con TTL de 5 minutos (300_000 ms)
     const reaped = reapAbandonedTaxis(state, 300000);
 
-    // Solo debe reapear ac02 (el subagente colgado). ac01 (el orquestador vivo) DEBE permanecer intacto.
-    assert.equal(reaped, 1);
+    // Both recorded processes remain alive; TTL alone cannot prove termination.
+    assert.equal(reaped, 0);
     assert.equal(state.fleet["ac01"].status, "ocupado");
     assert.equal(state.fleet["ac01"].passenger?.sessionId, "live-long-sess");
 
-    assert.equal(state.fleet["ac02"].status, "libre");
-    assert.equal(state.fleet["ac02"].passenger, null);
+    assert.equal(state.fleet["ac02"].status, "ocupado");
+    assert.equal(state.fleet["ac02"].passenger?.sessionId, "ephem-hung-sess");
   } finally {
     fs.rmSync(tempDir, { recursive: true, force: true });
   }
@@ -1790,6 +1790,92 @@ test("dc-ephemeral-tools: dc_ephemeral_batch_run executes multiple tasks in para
   assert.equal(result.details.failed, 0);
 });
 
+test("parallel batch rejects overlapping writers before dispatch", async () => {
+  const registered: any[] = [];
+  registerDcEphemeralTools({ registerTool: (tool: any) => registered.push(tool) } as any);
+  const tool = registered.find((entry) => entry.name === "dc_ephemeral_batch_run");
+  for (const surfaces of [["src/auth/*.ts", "src/auth/token.ts"], ["src/auth", "src/auth/token.ts"]]) {
+    let calls = 0;
+    const result = await tool.execute("conflict", {
+      items: surfaces.map((surface) => ({ task: `Edit\n\n## Allowed edit surfaces\n${surface}`, toolBricks: ["fs-write"] })),
+    }, undefined, undefined, {
+      sessionManager: { getSessionId: () => "batch-conflict" },
+      executeTool: async () => { calls++; return { content: [{ type: "text", text: "Unexpected launch" }] }; },
+    });
+    assert.equal(result.isError, true);
+    assert.equal(calls, 0);
+    assert.match(result.content[0].text, /overlap/i);
+  }
+});
+
+test("parallel batch keeps a synchronous lease alive while awaiting runner", async (t) => {
+  const registered: any[] = [];
+  registerDcEphemeralTools({ registerTool: (tool: any) => registered.push(tool) } as any);
+  const tool = registered.find((entry) => entry.name === "dc_ephemeral_batch_run");
+  t.mock.timers.enable({ apis: ["setInterval"] });
+  let liveDuringRun = false;
+  try {
+    const result = await tool.execute("heartbeat", {
+      items: [{ task: "Read module", role: "analyst", toolBricks: ["fs-read"] }], mode: "task",
+    }, undefined, undefined, {
+      sessionManager: { getSessionId: () => "batch-heartbeat" },
+      executeTool: async () => {
+        const fleet = loadFleetState();
+        const unit = Object.values(fleet.fleet).find((entry) => entry.passenger?.sessionId === "batch-heartbeat");
+        assert.ok(unit?.passenger);
+        unit.passenger.heartbeatAt = 1;
+        saveFleetState(fleet);
+        t.mock.timers.tick(45000);
+        liveDuringRun = Object.values(loadFleetState().fleet).some((entry) => entry.passenger?.sessionId === "batch-heartbeat" && entry.passenger.heartbeatAt > 1);
+        return { content: [{ type: "text", text: "Result" }] };
+      },
+    });
+    assert.equal(result.details.completed, 1);
+    assert.equal(liveDuringRun, true);
+  } finally { t.mock.timers.reset(); }
+});
+
+test("parallel batch tracks ambiguous background launch failures until terminal evidence", async () => {
+  const registered: any[] = [];
+  registerDcEphemeralTools({ registerTool: (tool: any) => registered.push(tool) } as any);
+  const tool = registered.find((entry) => entry.name === "dc_ephemeral_batch_run");
+  const before = new Set(activeBackgroundPlans.keys());
+  const result = await tool.execute("background-failure", {
+    items: [{ task: "Read module", role: "analyst", toolBricks: ["fs-read"] }], mode: "background",
+  }, undefined, undefined, {
+    sessionManager: { getSessionId: () => "background-ambiguous" },
+    executeTool: async () => { throw new Error("Transport lost after dispatch"); },
+  });
+  const added = [...activeBackgroundPlans].filter(([key]) => !before.has(key));
+  try {
+    assert.equal(result.details.failed, 1);
+    assert.equal(added.length, 1);
+    assert.equal(added[0][1].taskId, undefined);
+    assert.ok(fs.existsSync(added[0][1].plan.agentFilePath));
+  } finally {
+    for (const [key, tracked] of added) {
+      activeBackgroundPlans.delete(key);
+      cleanupEphemeralAgent(tracked.plan, { sessionId: tracked.sessionId, startedAt: tracked.startedAt, endedAt: Date.now(), status: "failed" });
+    }
+  }
+});
+
+test("parallel batch rejects nested runner errors and missing execution host", async () => {
+  const registered: any[] = [];
+  registerDcEphemeralTools({ registerTool: (tool: any) => registered.push(tool) } as any);
+  const tool = registered.find((entry) => entry.name === "dc_ephemeral_batch_run");
+  for (const executeTool of [undefined, async () => ({ result: { isError: true, content: [{ type: "text", text: "Rejected" }] } }), async () => ({ result: { content: [] } }), async () => ({})]) {
+    const result = await tool.execute("failure", {
+      items: [{ task: "Read module", role: "analyst", toolBricks: ["fs-read"] }], mode: "task",
+    }, undefined, undefined, {
+      sessionManager: { getSessionId: () => "parallel-failure" }, executeTool,
+    });
+    assert.equal(result.details.failed, 1);
+    assert.equal(result.details.completed, 0);
+    assert.equal(result.isError, true);
+  }
+});
+
 test("dc-ephemeral-manager: injects Lego Tool Guidelines for active tool bricks", () => {
   const plan = assembleLegoAgentPlan({
     task: "Auditar seguridad y probar API",
@@ -2072,7 +2158,7 @@ test("dc-taxi-dispatcher: assigns unique plates to orchestrator and leased taxis
     );
     assert.ok(orcRes);
     const stateOrc = loadFleetState(fleetPath, customAccounts);
-    assert.equal(stateOrc.fleet["ac01"].passenger?.plate, "DC-HOST-99999");
+    assert.match(stateOrc.fleet["ac01"].passenger?.plate || "", /^DC-HOST-99999-[0-9a-f-]+$/);
 
     // 2. leaseTaxi with explicit plate
     const lease1 = leaseTaxi(
@@ -3169,6 +3255,7 @@ test("MÓDULO D: Relevo automático del orquestador ante cuota < 10%", async () 
 
     const mockCtx = {
       hasUI: true,
+      mode: "tui",
       model: { provider: "cpam", id: "ac01/gemini-3.8-flash-high" },
       sessionManager: { getSessionId: () => "orch-ho-sess" },
     } as any;
@@ -3358,12 +3445,12 @@ test("MÓDULO E: Fallback a gemini-3.8-flash-high con effort medium cuando la fl
   try {
     const customAccounts = ["ac01"]; // Solo ac01 existe en la flota
     const state = createInitialFleetState(customAccounts);
-    // ac01 ocupada por OTRA sesión para forzar saturación total de la flota
+    // The current session owns the only lease, so no replacement is available.
     state.fleet["ac01"].status = "ocupado";
     state.fleet["ac01"].passenger = {
       type: "orchestrator",
-      sessionId: "other-active-session",
-      pid: 9999999, // PID simulado ajeno
+      sessionId: "orch-sess-sat",
+      pid: process.pid,
       model: "cpam/ac01/claude-sonnet-4-6",
       taskLabel: "Otra Sesión",
       plate: `DC-HOST-9999999`,
@@ -3413,6 +3500,28 @@ test("MÓDULO E: Fallback a gemini-3.8-flash-high con effort medium cuando la fl
   } finally {
     fs.rmSync(tempDir, { recursive: true, force: true });
   }
+});
+
+test("parallel saturated fallback never switches to an unreserved account", async () => {
+  const tempDir = createTempDir("fallback-foreign");
+  const fleetPath = path.join(tempDir, "dc-taxis.json");
+  const state = createInitialFleetState(["ac01"]);
+  state.fleet.ac01.status = "ocupado";
+  state.fleet.ac01.passenger = { type: "orchestrator", sessionId: "foreign-fallback", pid: process.pid,
+    model: "cpam/ac01/claude-sonnet-4-6", plate: "owned", startedAt: Date.now(), heartbeatAt: Date.now() };
+  saveFleetState(state, fleetPath);
+  let calls = 0;
+  try {
+    const result = await handleOrchestratorQuotaHandover({ hasUI: true, mode: "tui",
+      model: { provider: "cpam", id: "ac01/claude-sonnet-4-6" },
+      sessionManager: { getSessionId: () => "foreign-fallback" },
+      modelRegistry: { find: () => undefined, getAvailable: async () => [{ provider: "cpam", id: "ac02/gemini-3.8-flash-high" }] },
+    } as any, { setModel: async () => { calls++; return true; } } as any, fleetPath,
+    () => ({ account: "ac01", claude5hPct: 2, gemini5hPct: 80, geminiWeeklyPct: 80, lastChecked: Date.now() }));
+    assert.equal(result.performed, false);
+    assert.equal(calls, 0);
+    assert.deepEqual(loadFleetState(fleetPath, ["ac01"]).fleet.ac01.passenger, state.fleet.ac01.passenger);
+  } finally { fs.rmSync(tempDir, { recursive: true, force: true }); }
 });
 
 test("MÓDULO E: acquireOrchestratorTaxi selecciona la unidad libre con mayor cuota disponible", () => {

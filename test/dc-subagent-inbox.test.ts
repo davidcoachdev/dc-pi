@@ -68,6 +68,27 @@ test("dc-subagent-inbox: gestiona el ciclo de vida de depósitos y lectura", () 
   assert.equal(unreadAfter.length, 0);
 });
 
+test("dc-subagent-inbox: duplicate completion preserves rich report and read state", () => {
+  subagentInboxManager.clear();
+  let notifications = 0;
+  const unsubscribe = subagentInboxManager.subscribe(() => notifications++);
+  const rich: BackgroundTaskReport = {
+    id: "rich", taskId: "duplicate-task", agent: "worker", status: "failed",
+    outcomeText: "Detailed failure", receivedAt: 10, read: false,
+    errorDetails: { summary: "Failure", rootCause: "Runner rejected" },
+  };
+  try {
+    subagentInboxManager.deposit(rich);
+    subagentInboxManager.markRead(rich.taskId);
+    subagentInboxManager.deposit({ ...rich, id: "generic", outcomeText: "", errorDetails: undefined, receivedAt: 20, read: false });
+    assert.equal(subagentInboxManager.get(rich.taskId)?.outcomeText, "Detailed failure");
+    assert.equal(subagentInboxManager.get(rich.taskId)?.errorDetails?.rootCause, "Runner rejected");
+    assert.equal(subagentInboxManager.get(rich.taskId)?.read, true);
+    assert.equal(subagentInboxManager.list(true).length, 0);
+    assert.equal(notifications, 1);
+  } finally { unsubscribe(); subagentInboxManager.clear(); }
+});
+
 test("dc-subagent-inbox: intercepta gentle-agents.wake suprimiendo triggerTurn: true", async () => {
   const agentSessionModule = await import("@earendil-works/pi-coding-agent");
   const proto = agentSessionModule.AgentSession.prototype;

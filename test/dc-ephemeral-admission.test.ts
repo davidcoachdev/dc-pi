@@ -61,14 +61,22 @@ test("Bounded Writer Admission: rechaza subagentes de escritura sin '## Allowed 
     "src/auth/utils.ts",
   ]);
 
-  // 5. Bypass explícito [mock-unbounded]
+  // Synthetic task markers must not bypass writer admission.
   const bypassResult = validateBoundedWriterAdmission(
     "Test mock [mock-unbounded]",
     undefined,
     ["edit"],
   );
-  assert.equal(bypassResult.valid, true);
-  assert.deepEqual(bypassResult.surfaces, ["*"]);
+  assert.equal(bypassResult.valid, false);
+});
+
+test("parallel writer admission rejects terminal writers and escaping or broad paths", () => {
+  assert.equal(validateBoundedWriterAdmission("Run command", undefined, ["bash"]).valid, false);
+  for (const surface of [".", "*", "**/*", "/tmp/file.ts", "../outside.ts", "src/../../outside.ts", "src\\outside.ts"]) {
+    const result = validateBoundedWriterAdmission(`Edit file\n\n## Allowed edit surfaces\n${surface}`, undefined, ["edit"]);
+    assert.equal(result.valid, false, surface);
+  }
+  assert.equal(validateBoundedWriterAdmission("Edit file\n\n## Allowed edit surfaces\nsrc/module/*.ts", undefined, ["bash"]).valid, true);
 });
 
 test("Bounded Writer Admission: prepareEphemeralAgent lanza excepción si falta la delimitación", () => {
