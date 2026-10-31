@@ -516,3 +516,35 @@ test("RULE 10: Claude-only quota reading does not fabricate 100%", async () => {
     cleanupScratchDir(scratchDir);
   }
 });
+
+test("RULE 11: Reconcile removes repaired account from knownFatalAccounts set if provided in options", async () => {
+  const scratchDir = createScratchDir("known-fatal-set");
+  const fleetPath = path.join(scratchDir, "dc-taxis.json");
+  const accounts = ["ac12"];
+  initFleetWithAccounts(fleetPath, accounts);
+
+  try {
+    sendTaxiToWorkshop("ac12", "Fatal auth", fleetPath, accounts);
+    const knownFatal = new Set<string>(["ac12"]);
+
+    const coordinator = new TaxiWorkshopCoordinator({
+      fleetPath,
+      allowedAccounts: accounts,
+      knownFatalAccounts: knownFatal,
+      probeDiagnostic: async (account) => {
+        return makeDiagnosticResult(account, {
+          gemini5hPct: 80,
+          geminiWeeklyPct: 90,
+          effectivePct: 80,
+        });
+      },
+    });
+
+    const result = await coordinator.reconcileWorkshopUnits();
+
+    assert.ok(result.repairedAccounts.includes("ac12"));
+    assert.equal(knownFatal.has("ac12"), false, "ac12 must be removed from knownFatalAccounts on repair");
+  } finally {
+    cleanupScratchDir(scratchDir);
+  }
+});

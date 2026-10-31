@@ -429,3 +429,98 @@ test("REGRESSION: getEffectiveQuotaPct resolves family correctly", () => {
   assert.equal(getEffectiveQuotaPct(info, "claude"), 40);
   assert.equal(getEffectiveQuotaPct(info), 80); // Default prioritizes Gemini when claudeWeekly also present
 });
+
+test("P1 RACE - diagnostic canCommit false leaves cache unchanged", async () => {
+  clearTaxiQuotaCache();
+  const mockFetcher = async () => ({
+    entries: [
+      { name: "gemini_5h", percentRemaining: 95 },
+      { name: "gemini_weekly", percentRemaining: 95 },
+    ],
+  });
+
+  const result = await probeTaxiQuotaDiagnostic("ac20", {
+    fetcher: mockFetcher,
+    canCommit: false,
+  });
+
+  assert.equal(result.isValid, true);
+  assert.equal(result.gemini5hPct, 95);
+  const cached = getCachedTaxiQuota("ac20");
+  assert.equal(cached, undefined, "Cache must not be mutated when canCommit is false");
+});
+
+test("P1 RACE - diagnostic canCommit predicate turns false during pending probe leaves cache unchanged", async () => {
+  clearTaxiQuotaCache();
+  let allowCommit = true;
+
+  let resolveProbe!: () => void;
+  const probePromise = new Promise<void>((r) => { resolveProbe = r; });
+
+  const deferredFetcher = async () => {
+    await probePromise;
+    return {
+      entries: [
+        { name: "gemini_5h", percentRemaining: 88 },
+        { name: "gemini_weekly", percentRemaining: 88 },
+      ],
+    };
+  };
+
+  const probeExecution = probeTaxiQuotaDiagnostic("ac21", {
+    fetcher: deferredFetcher,
+    canCommit: () => allowCommit,
+  });
+
+  allowCommit = false;
+  resolveProbe();
+
+  const result = await probeExecution;
+  assert.equal(result.isValid, true);
+  assert.equal(result.gemini5hPct, 88);
+
+  const cached = getCachedTaxiQuota("ac21");
+  assert.equal(cached, undefined, "Cache must not be mutated when predicate turned false before probe resolution");
+});
+
+test("P1 RACE - diagnostic default omitted canCommit preserves cache update", async () => {
+  clearTaxiQuotaCache();
+  const mockFetcher = async () => ({
+    entries: [
+      { name: "gemini_5h", percentRemaining: 91 },
+      { name: "gemini_weekly", percentRemaining: 91 },
+    ],
+  });
+
+  const result = await probeTaxiQuotaDiagnostic("ac22", {
+    fetcher: mockFetcher,
+  });
+
+  assert.equal(result.isValid, true);
+  assert.equal(result.gemini5hPct, 91);
+
+  const cached = getCachedTaxiQuota("ac22");
+  assert.ok(cached, "Cache must be updated when canCommit is omitted");
+  assert.equal(cached?.gemini5hPct, 91);
+});
+
+test("ITEM4 FINAL - ordinary quota fetch blocks late success and fallback cache writes", async () => {
+  for (const rejectRequest of [false, true]) {
+    clearTaxiQuotaCache();
+    let finish!: () => void;
+    let allowed = true;
+    const pending = new Promise<void>((resolve) => { finish = resolve; });
+    const result = fetchTaxiQuota("ac23", {
+      fetcher: async () => {
+        await pending;
+        if (rejectRequest) throw new Error("offline");
+        return { entries: [{ name: "gemini_5h", percentRemaining: 85 }] };
+      },
+      canCommit: () => allowed,
+    } as Parameters<typeof fetchTaxiQuota>[1]);
+    allowed = false;
+    finish();
+    await result;
+    assert.equal(getCachedTaxiQuota("ac23"), undefined);
+  }
+});

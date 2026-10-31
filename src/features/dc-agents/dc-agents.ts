@@ -22,7 +22,7 @@ import {
   updateTaxiPassengerUsage,
   updateTaxiRechargingState,
 } from "./core/dc-taxi-dispatcher.ts";
-import { getCachedTaxiQuota, fetchTaxiQuota, type DcTaxiQuotaInfo } from "./core/dc-taxi-quota.ts";
+import { getCachedTaxiQuota, fetchTaxiQuota, probeTaxiQuotaDiagnostic, type DcTaxiQuotaInfo, type DcTaxiQuotaDiagnosticResult } from "./core/dc-taxi-quota.ts";
 import { appendTaxiLog } from "./core/dc-taxi-logger.ts";
 import { getContextUsageInfo } from "../dc-sidebar/providers/dc-context-provider.ts";
 import { fetchJson } from "../../integrations/dc-http/dc-fetch.ts";
@@ -37,6 +37,8 @@ import { DcTaxisPanel } from "./views/dc-taxis-panel.ts";
 
 export let activeWorkshopCoordinator: TaxiWorkshopCoordinator | null = null;
 export const KNOWN_FATAL_AUTH_ACCOUNTS = new Set<string>();
+let extensionLifecycleGeneration = 0;
+const activeHandoverSessions = new Set<string>();
 
 // Guardián para distinguir cambios internos de modelo (startup/failover/handover) de selecciones manuales humanas
 let isInternalModelSwitch = false;
@@ -114,7 +116,16 @@ export function sendTaxiToWorkshop(
   reason: string,
   fleetPath?: string,
 ): boolean {
-  return dispatcherSendTaxiToWorkshop(account, sanitizeWorkshopReason(reason), fleetPath);
+  let existingAccounts: string[] | undefined;
+  try {
+    if (fleetPath && fs.existsSync(fleetPath)) {
+      const raw = JSON.parse(fs.readFileSync(fleetPath, "utf8"));
+      if (raw?.fleet) existingAccounts = Object.keys(raw.fleet);
+    }
+  } catch {
+    /* defensive */
+  }
+  return dispatcherSendTaxiToWorkshop(account, sanitizeWorkshopReason(reason), fleetPath, existingAccounts);
 }
 
 export function isProviderAuthError(errorMessage?: string, statusCode?: number): boolean {
@@ -181,60 +192,178 @@ export async function auditAccountForWorkshop(
   fetcher?: (account: string) => Promise<any>,
 ): Promise<boolean> {
   const normAc = account.toLowerCase();
+  const entryGen = extensionLifecycleGeneration;
 
-  // 1. Cuentas con fallo fatal conocido dinámico
-  if (KNOWN_FATAL_AUTH_ACCOUNTS.has(normAc)) {
-    const reason = sanitizeWorkshopReason(`Auth Error ${account}`);
-    sendTaxiToWorkshop(
-      account,
-      reason,
-      fleetPath,
-    );
-    return true;
-  }
-
-  // 2. Consulta de diagnóstico de cuota / autenticación
+  // Snapshot de workshopSince para asegurar reparación condicional contra colisiones de generación
+  let snapshotWorkshopSince: number | undefined;
+  let isCurrentlyInWorkshop = false;
   try {
-    if (fetcher) {
-      await fetcher(account);
-    } else {
-      // Consultar el estado de autenticación real contra CLIProxy (:8317)
-      const res = await cliProxyClient.getManagement<any>(`/auth-files`, {
-        timeoutMs: 1500,
-      }).catch(() => null);
-
-      if (res && Array.isArray(res.files)) {
-        // Si el archivo de cuenta existe en CLIProxy y está marcado como disabled o status no active
-        const disabledFile = res.files.find(
-          (f: any) =>
-            (f.name?.includes(account) || f.id?.includes(account) || f.account?.includes(account)) &&
-            (f.disabled === true || f.status === "disabled" || f.unavailable === true),
-        );
-        if (disabledFile) {
-          sendTaxiToWorkshop(account, "Cuenta Deshabilitada", fleetPath);
-          return true;
-        }
-      }
-    }
-
-    // Si la unidad estaba en taller pero no tiene fallo fatal activo en CLIProxy, repararla
     const fleetSummary = getFleetStatusSummary(fleetPath);
     const unit = fleetSummary.units.find((u) => u.account === account);
     if (unit && unit.status === "en_taller") {
-      repairTaxiFromWorkshop(account, fleetPath);
+      isCurrentlyInWorkshop = true;
+      snapshotWorkshopSince = unit.workshopSince;
+    }
+  } catch {
+    /* defensive */
+  }
+
+  const initialFatal = KNOWN_FATAL_AUTH_ACCOUNTS.has(normAc);
+  const auditStillCurrent = (): boolean => {
+    if (entryGen !== extensionLifecycleGeneration || KNOWN_FATAL_AUTH_ACCOUNTS.has(normAc) !== initialFatal) return false;
+    const unit = getFleetStatusSummary(fleetPath).units.find((u) => u.account === account);
+    return isCurrentlyInWorkshop
+      ? unit?.status === "en_taller" && unit.workshopSince === snapshotWorkshopSince
+      : unit?.status !== "en_taller";
+  };
+
+  // Si se provee fetcher (sonda diagnóstica de prueba o inyectada)
+  if (fetcher) {
+    try {
+      const diag = await probeTaxiQuotaDiagnostic(account, {
+        fetcher: async () => fetcher(account),
+        canCommit: auditStillCurrent,
+      });
+
+      if (!auditStillCurrent()) {
+        return false;
+      }
+
+      if (diag && diag.isValid) {
+        if (isCurrentlyInWorkshop) {
+          const repaired = repairTaxiFromWorkshop(
+            account,
+            fleetPath,
+            undefined,
+            () => diag,
+            { expectedWorkshopSince: snapshotWorkshopSince },
+          );
+          if (repaired) {
+            KNOWN_FATAL_AUTH_ACCOUNTS.delete(normAc);
+          }
+        } else {
+          KNOWN_FATAL_AUTH_ACCOUNTS.delete(normAc);
+        }
+        return false;
+      }
+      // An injected diagnostic is the complete probe; invalid results must not
+      // fall through to an unrelated live management request.
+      return false;
+    } catch (err: any) {
+      if (entryGen !== extensionLifecycleGeneration) {
+        return false;
+      }
+      const status = err?.status || err?.statusCode;
+      const msg = (err?.message || String(err)).toLowerCase();
+
+      if (isProviderAuthError(msg, status)) {
+        KNOWN_FATAL_AUTH_ACCOUNTS.add(normAc);
+        const rawReason = err?.message || `HTTP ${status || 401}`;
+        const reason = sanitizeWorkshopReason(rawReason);
+        sendTaxiToWorkshop(account, reason, fleetPath);
+        return true;
+      }
+
+      // A transient injected probe failure is not fresh authentication evidence.
+      return false;
+    }
+  }
+
+  // 1. Consulta de diagnóstico de cuota / autenticación contra CLIProxy (:8317)
+  try {
+    const res = await cliProxyClient.getManagement<any>(`/auth-files`, {
+      timeoutMs: 1500,
+    }).catch(() => null);
+
+    if (entryGen !== extensionLifecycleGeneration) {
+      return false;
+    }
+
+    if (res && Array.isArray(res.files)) {
+      // Si el archivo de cuenta existe en CLIProxy y está marcado como disabled o status no active
+      const disabledFile = res.files.find(
+        (f: any) =>
+          (f.name?.includes(account) || f.id?.includes(account) || f.account?.includes(account)) &&
+          (f.disabled === true || f.status === "disabled" || f.unavailable === true),
+      );
+      if (disabledFile) {
+        KNOWN_FATAL_AUTH_ACCOUNTS.add(normAc);
+        sendTaxiToWorkshop(account, "Cuenta Deshabilitada", fleetPath);
+        return true;
+      }
+    }
+
+    // 2. Sonda diagnóstica en producción (camino real sin fetcher) para validación de recuperación fresca
+    let diag: DcTaxiQuotaDiagnosticResult | undefined;
+    try {
+      diag = await probeTaxiQuotaDiagnostic(account, {
+        canCommit: auditStillCurrent,
+      });
+    } catch (probeErr: any) {
+      if (entryGen !== extensionLifecycleGeneration) {
+        return false;
+      }
+      const pStatus = probeErr?.status || probeErr?.statusCode;
+      const pMsg = (probeErr?.message || String(probeErr)).toLowerCase();
+      if (isProviderAuthError(pMsg, pStatus)) {
+        KNOWN_FATAL_AUTH_ACCOUNTS.add(normAc);
+        sendTaxiToWorkshop(account, sanitizeWorkshopReason(probeErr?.message || `HTTP ${pStatus || 401}`), fleetPath);
+        return true;
+      }
+      if (KNOWN_FATAL_AUTH_ACCOUNTS.has(normAc)) {
+        sendTaxiToWorkshop(account, sanitizeWorkshopReason(`Auth Error ${account}`), fleetPath);
+        return true;
+      }
+      return false;
+    }
+
+    if (!auditStillCurrent()) {
+      return false;
+    }
+
+    if (diag && diag.isValid) {
+      if (isCurrentlyInWorkshop) {
+        const repaired = repairTaxiFromWorkshop(
+          account,
+          fleetPath,
+          undefined,
+          () => diag,
+          { expectedWorkshopSince: snapshotWorkshopSince },
+        );
+        if (repaired) {
+          KNOWN_FATAL_AUTH_ACCOUNTS.delete(normAc);
+        }
+      } else {
+        KNOWN_FATAL_AUTH_ACCOUNTS.delete(normAc);
+      }
+      return false;
+    }
+
+    if (KNOWN_FATAL_AUTH_ACCOUNTS.has(normAc)) {
+      sendTaxiToWorkshop(account, sanitizeWorkshopReason(`Auth Error ${account}`), fleetPath);
+      return true;
     }
   } catch (err: any) {
+    if (entryGen !== extensionLifecycleGeneration) {
+      return false;
+    }
     const status = err?.status || err?.statusCode;
     const msg = (err?.message || String(err)).toLowerCase();
 
-    // Solo errores fatales de autenticación / cuenta deshabilitada mandan al taller.
-    // Un timeout de red transitorio NO es avería permanente de la unidad.
     if (isProviderAuthError(msg, status)) {
+      KNOWN_FATAL_AUTH_ACCOUNTS.add(normAc);
       const rawReason = err?.message || `HTTP ${status || 401}`;
       const reason = sanitizeWorkshopReason(rawReason);
       sendTaxiToWorkshop(account, reason, fleetPath);
       return true;
     }
+
+    if (KNOWN_FATAL_AUTH_ACCOUNTS.has(normAc)) {
+      sendTaxiToWorkshop(account, sanitizeWorkshopReason(`Auth Error ${account}`), fleetPath);
+      return true;
+    }
+
+    return false;
   }
 
   return false;
@@ -245,9 +374,12 @@ export async function auditFleetAccountsForWorkshop(
   fleetPath?: string,
   fetcher?: (account: string) => Promise<any>,
 ): Promise<string[]> {
+  const entryGen = extensionLifecycleGeneration;
   const sentToWorkshop: string[] = [];
   for (const ac of accounts) {
+    if (entryGen !== extensionLifecycleGeneration) break;
     const sent = await auditAccountForWorkshop(ac, fleetPath, fetcher);
+    if (entryGen !== extensionLifecycleGeneration) break;
     if (sent) {
       sentToWorkshop.push(ac);
     }
@@ -257,9 +389,10 @@ export async function auditFleetAccountsForWorkshop(
 
 export function handleTurnEndForWorkshop(
   event: any,
-  ctx: Partial<ExtensionContext> & { model?: any },
+  ctx: Partial<ExtensionContext> & { model?: any; fleetPath?: string },
   fleetPath?: string,
 ): { sent: boolean; account?: string; reason?: string } {
+  const resolvedFleetPath = fleetPath || (ctx as any)?.fleetPath;
   const message = event?.message;
   const stopReason = message?.stopReason;
   const errorMessage = message?.errorMessage || message?.error || "";
@@ -268,7 +401,6 @@ export function handleTurnEndForWorkshop(
   const isAuthError =
     (stopReason === "error" || Boolean(status)) &&
     (isProviderAuthError(errorMessage, status) ||
-      status === 400 ||
       status === 401 ||
       status === 403);
 
@@ -288,8 +420,17 @@ export function handleTurnEndForWorkshop(
   }
 
   if (!account) {
+    let existingAccounts: string[] | undefined;
+    try {
+      if (resolvedFleetPath && fs.existsSync(resolvedFleetPath)) {
+        const raw = JSON.parse(fs.readFileSync(resolvedFleetPath, "utf8"));
+        if (raw?.fleet) existingAccounts = Object.keys(raw.fleet);
+      }
+    } catch {
+      /* defensive */
+    }
     const sessionId = (ctx as any)?.sessionManager?.getSessionId?.() || `ambient-${Date.now()}`;
-    const fleetSummary = getFleetStatusSummary(fleetPath);
+    const fleetSummary = getFleetStatusSummary(resolvedFleetPath, existingAccounts);
     const myTaxi = fleetSummary.units.find(
       (u) => u.passenger && (u.passenger.sessionId === sessionId || u.passenger.pid === process.pid),
     );
@@ -301,7 +442,7 @@ export function handleTurnEndForWorkshop(
   if (account) {
     const rawReason = errorMessage || `HTTP ${status || 401}`;
     const reason = sanitizeWorkshopReason(rawReason);
-    sendTaxiToWorkshop(account, reason, fleetPath);
+    sendTaxiToWorkshop(account, reason, resolvedFleetPath);
     return { sent: true, account, reason };
   }
 
@@ -309,16 +450,308 @@ export function handleTurnEndForWorkshop(
 }
 
 /**
+ * Relevo automático por avería del orquestador en turn_end:
+ * Exclusivo para terminales interactivas TUI, con reserva transaccional y rollback
+ * completo si el modelo de destino no existe o setModel devuelve false/rechaza.
+ */
+async function restoreRuntimeModel(pi: ExtensionAPI, ctx: Partial<ExtensionContext>, model: any): Promise<boolean> {
+  try {
+    isInternalModelSwitch = true;
+    if (await pi.setModel(model) !== false) return true;
+  } catch {
+    // A failed compensation must remain visible to the caller and operator.
+  } finally {
+    isInternalModelSwitch = false;
+  }
+  appendTaxiLog("ERROR", "TAXI_ORCHESTRATOR_COMPENSATION_FAILED", { model: model?.id });
+  if (ctx.hasUI) {
+    dcNotifier.notify(ctx as ExtensionContext, "Desalineación de modelo", "No se pudo restaurar el modelo anterior. Revisa la reserva antes de continuar.", "error");
+  }
+  return false;
+}
+
+export async function handleTurnEndFailover(
+  failedAccount: string,
+  ctx: Partial<ExtensionContext> & { model?: any; sessionManager?: any; modelRegistry?: any; mode?: string; hasUI?: boolean; fleetPath?: string },
+  pi?: ExtensionAPI,
+  fleetPath?: string,
+): Promise<{ performed: boolean; candidateAccount?: string; compensationFailed?: boolean }> {
+  // 1. Guardián interactivo estricto: solo terminal interactiva TUI puede adquirir/relevar taxi de orquestador
+  const isInteractiveTerminal = Boolean(ctx.hasUI && ctx.mode === "tui" && !process.argv.includes("rpc"));
+  if (!isInteractiveTerminal) {
+    return { performed: false };
+  }
+
+  const entryGen = extensionLifecycleGeneration;
+
+  const resolvedFleetPath = fleetPath || (ctx as any)?.fleetPath || path.join(os.homedir(), ".pi", "agent", "dc-studio", "dc-taxis.json");
+  const sessionId = ctx.sessionManager?.getSessionId?.() || `ambient-${Date.now()}`;
+  const previousModel = ctx.model;
+  const currentModelId = ctx.model ? `${ctx.model.provider || "cpam"}/${ctx.model.id}` : undefined;
+
+  let existingAccounts: string[] | undefined;
+  try {
+    if (resolvedFleetPath && fs.existsSync(resolvedFleetPath)) {
+      const raw = JSON.parse(fs.readFileSync(resolvedFleetPath, "utf8"));
+      if (raw?.fleet) existingAccounts = Object.keys(raw.fleet);
+    }
+  } catch {
+    /* defensive */
+  }
+
+  // 2. Adquirir candidato libre excluyendo la cuenta averiada
+  const taxiResult = acquireOrchestratorTaxi(
+    sessionId,
+    currentModelId,
+    resolvedFleetPath,
+    process.pid,
+    existingAccounts,
+    "gemini-3.8-flash-high",
+    "cpam",
+    [failedAccount],
+  );
+
+  if (!taxiResult || taxiResult.account === failedAccount || !taxiResult.modelId) {
+    return { performed: false };
+  }
+
+  const candidateAccount = taxiResult.account;
+  let candidatePlate: string | undefined;
+  let candidateStartedAt: number | undefined;
+
+  // 3. Snapshot atómico bajo fleet lock para validación de titularidad en rollback (Risk: item 4)
+  withFleetLock(resolvedFleetPath, () => {
+    const state = loadFleetState(resolvedFleetPath, existingAccounts);
+    const cand = state.fleet[candidateAccount];
+    if (
+      cand &&
+      cand.status === "ocupado" &&
+      cand.passenger &&
+      cand.passenger.type === "orchestrator" &&
+      cand.passenger.sessionId === sessionId &&
+      cand.passenger.pid === process.pid
+    ) {
+      candidatePlate = cand.passenger.plate;
+      candidateStartedAt = cand.passenger.startedAt;
+    }
+  });
+
+  const isCandidateStillOwned = (): boolean => {
+    let owned = false;
+    withFleetLock(resolvedFleetPath, () => {
+      const state = loadFleetState(resolvedFleetPath, existingAccounts);
+      const cand = state.fleet[candidateAccount];
+      if (
+        cand &&
+        cand.status === "ocupado" &&
+        cand.passenger &&
+        cand.passenger.type === "orchestrator" &&
+        cand.passenger.sessionId === sessionId &&
+        cand.passenger.pid === process.pid &&
+        (!candidatePlate || cand.passenger.plate === candidatePlate) &&
+        (candidateStartedAt === undefined || cand.passenger.startedAt === candidateStartedAt)
+      ) {
+        owned = true;
+      }
+    });
+    return owned;
+  };
+
+  const rollbackCandidate = () => {
+    withFleetLock(resolvedFleetPath, () => {
+      const state = loadFleetState(resolvedFleetPath, existingAccounts);
+      const candUnit = state.fleet[candidateAccount];
+      if (
+        candUnit &&
+        candUnit.status === "ocupado" &&
+        candUnit.passenger &&
+        candUnit.passenger.type === "orchestrator" &&
+        candUnit.passenger.sessionId === sessionId &&
+        candUnit.passenger.pid === process.pid &&
+        (!candidatePlate || candUnit.passenger.plate === candidatePlate) &&
+        (candidateStartedAt === undefined || candUnit.passenger.startedAt === candidateStartedAt)
+      ) {
+        candUnit.passenger = null;
+        candUnit.status = "libre";
+        const quota = getCachedTaxiQuota(candidateAccount);
+        updateTaxiRechargingState(candUnit, quota);
+        saveFleetState(state, resolvedFleetPath);
+        appendTaxiLog("INFO", "TAXI_ORCHESTRATOR_FAILOVER_ROLLBACK", {
+          candidateAccount,
+          failedAccount,
+          sessionId,
+          pid: process.pid,
+          plate: candidatePlate,
+          startedAt: candidateStartedAt,
+        });
+      } else {
+        appendTaxiLog("WARN", "TAXI_ORCHESTRATOR_FAILOVER_ROLLBACK_SKIPPED_GENERATION_MISMATCH", {
+          candidateAccount,
+          expectedStartedAt: candidateStartedAt,
+          actualStartedAt: candUnit?.passenger?.startedAt,
+          expectedPlate: candidatePlate,
+          actualPlate: candUnit?.passenger?.plate,
+        });
+      }
+    });
+  };
+
+  // 4. Si no existe pi runtime o setModel, abortar y revertir candidato
+  if (!pi || typeof (pi as any).setModel !== "function") {
+    rollbackCandidate();
+    appendTaxiLog("WARN", "TAXI_ORCHESTRATOR_FAILOVER_UNSUPPORTED", {
+      reason: "no_pi_runtime_api",
+      candidateAccount,
+      failedAccount,
+    });
+    return { performed: false };
+  }
+
+  // 5. Resolver modelo destino en modelRegistry
+  const slashIdx = taxiResult.modelId.indexOf("/");
+  const targetProvider = slashIdx > 0 ? taxiResult.modelId.slice(0, slashIdx) : "cpam";
+  const targetId = slashIdx > 0 ? taxiResult.modelId.slice(slashIdx + 1) : taxiResult.modelId;
+
+  let foundModel: any = undefined;
+  try {
+    const available = await (ctx as any).modelRegistry?.getAvailable?.();
+    foundModel = ctx.modelRegistry?.find?.(targetProvider, targetId)
+      || (Array.isArray(available) ? available.find((m: any) => m.id === targetId || m.id === taxiResult.modelId) : undefined);
+
+    if (!foundModel) {
+      const fallbackId = `${taxiResult.account}/gemini-3.8-flash-high`;
+      foundModel = ctx.modelRegistry?.find?.(targetProvider, fallbackId)
+        || (Array.isArray(available) ? available.find((m: any) => m.id === fallbackId || m.id === `${targetProvider}/${fallbackId}`) : undefined);
+    }
+  } catch {
+    /* defensive */
+  }
+
+  // Validación de titularidad y ciclo de vida tras await getAvailable (sin locks cruzando await)
+  if (entryGen !== extensionLifecycleGeneration || !isCandidateStillOwned()) {
+    appendTaxiLog("WARN", "TAXI_ORCHESTRATOR_FAILOVER_ABORTED_OWNERSHIP_LOST", {
+      candidateAccount,
+      failedAccount,
+      sessionId,
+      pid: process.pid,
+    });
+    return { performed: false };
+  }
+
+  // 6. Si no se encuentra el modelo destino, rollback
+  if (!foundModel) {
+    rollbackCandidate();
+    appendTaxiLog("WARN", "TAXI_ORCHESTRATOR_FAILOVER_FAILED", {
+      reason: "missing_target_model",
+      candidateAccount,
+      targetModelId: taxiResult.modelId,
+    });
+    return { performed: false };
+  }
+
+  // 7. Intentar setModel: rollback si devuelve false o rechaza
+  let switchConfirmed = false;
+  try {
+    isInternalModelSwitch = true;
+    const switchRes = await (pi as any).setModel(foundModel);
+    if (switchRes !== false) {
+      switchConfirmed = true;
+      if (foundModel.id?.includes("gemini-3.8-flash-high")) {
+        try {
+          (pi as any).setThinkingLevel?.("medium");
+        } catch {
+          /* optional */
+        }
+      }
+    }
+  } catch (err: any) {
+    switchConfirmed = false;
+    appendTaxiLog("WARN", "TAXI_ORCHESTRATOR_FAILOVER_REJECTED", {
+      candidateAccount,
+      failedAccount,
+      error: err?.message || String(err),
+    });
+  } finally {
+    isInternalModelSwitch = false;
+  }
+
+  // Validación de titularidad y ciclo de vida tras await setModel (sin locks cruzando await)
+  // Si se confirmó setModel pero se perdió la titularidad o finalizó el ciclo de vida, compensar al modelo previo
+  if (entryGen !== extensionLifecycleGeneration || !isCandidateStillOwned()) {
+    if (switchConfirmed && previousModel && entryGen === extensionLifecycleGeneration && typeof (pi as any).setModel === "function") {
+      if (!await restoreRuntimeModel(pi!, ctx, previousModel)) {
+        return { performed: false, candidateAccount, compensationFailed: true };
+      }
+    }
+    appendTaxiLog("WARN", "TAXI_ORCHESTRATOR_FAILOVER_ABORTED_OWNERSHIP_LOST_POST_SETMODEL", {
+      candidateAccount,
+      failedAccount,
+      sessionId,
+      pid: process.pid,
+    });
+    return { performed: false };
+  }
+
+  if (!switchConfirmed) {
+    rollbackCandidate();
+    return { performed: false };
+  }
+
+  if (ctx.model) {
+    ctx.model = foundModel;
+  }
+
+  if (ctx.hasUI) {
+    dcNotifier.notify(
+      ctx as ExtensionContext,
+      "🚕 Supervisor de Taxis",
+      `Relevo automático por avería: ${failedAccount.toUpperCase()} → ${candidateAccount.toUpperCase()} (${foundModel.id})`,
+      "warning",
+    );
+  }
+
+  return { performed: true, candidateAccount };
+}
+
+/**
  * Supervisor de cuota para el orquestador: si la cuota cae < 10%, realiza relevo
  * automático a una nueva unidad libre de CPAM y manda la unidad anterior a 'recargando'.
  */
 export async function handleOrchestratorQuotaHandover(
-  ctx: Partial<ExtensionContext> & { model?: any },
+  ctx: Partial<ExtensionContext> & { model?: any; mode?: string; hasUI?: boolean },
   pi?: ExtensionAPI,
   fleetPath?: string,
   quotaGetter?: (account: string) => DcTaxiQuotaInfo | undefined,
-): Promise<{ performed: boolean; previousAccount?: string; newAccount?: string }> {
+): Promise<{ performed: boolean; previousAccount?: string; newAccount?: string; compensationFailed?: boolean }> {
+  // Guardián interactivo estricto: solo terminal interactiva TUI puede adquirir/relevar taxi de orquestador
+  const isInteractiveTerminal = Boolean(ctx.hasUI && ctx.mode === "tui" && !process.argv.includes("rpc"));
+  if (!isInteractiveTerminal) {
+    return { performed: false };
+  }
+
+  const sessionId = ctx.sessionManager?.getSessionId?.() || `ambient-${Date.now()}`;
+  if (activeHandoverSessions.has(sessionId)) {
+    return { performed: false };
+  }
+  activeHandoverSessions.add(sessionId);
+
+  try {
+    return await doHandleOrchestratorQuotaHandover(ctx, pi, fleetPath, quotaGetter, sessionId);
+  } finally {
+    activeHandoverSessions.delete(sessionId);
+  }
+}
+
+async function doHandleOrchestratorQuotaHandover(
+  ctx: Partial<ExtensionContext> & { model?: any; mode?: string; hasUI?: boolean },
+  pi?: ExtensionAPI,
+  fleetPath?: string,
+  quotaGetter?: (account: string) => DcTaxiQuotaInfo | undefined,
+  sessionId?: string,
+): Promise<{ performed: boolean; previousAccount?: string; newAccount?: string; compensationFailed?: boolean }> {
+  const entryGen = extensionLifecycleGeneration;
   const resolvedFleetPath = fleetPath || path.join(os.homedir(), ".pi", "agent", "dc-studio", "dc-taxis.json");
+  const previousModel = ctx.model;
 
   // Identificar la cuenta activa del orquestador
   const currentModelId = ctx.model ? `${ctx.model.provider || "cpam"}/${ctx.model.id}` : undefined;
@@ -331,12 +764,12 @@ export async function handleOrchestratorQuotaHandover(
     }
   }
 
-  const sessionId = ctx.sessionManager?.getSessionId?.() || `ambient-${Date.now()}`;
+  const resolvedSessionId = sessionId || ctx.sessionManager?.getSessionId?.() || `ambient-${Date.now()}`;
 
   if (!account) {
     const fleetSummary = getFleetStatusSummary(resolvedFleetPath);
     const myTaxi = fleetSummary.units.find(
-      (u) => u.passenger && u.passenger.sessionId === sessionId && u.passenger.pid === process.pid,
+      (u) => u.passenger && u.passenger.sessionId === resolvedSessionId && u.passenger.pid === process.pid,
     );
     if (myTaxi) {
       account = myTaxi.account;
@@ -352,10 +785,14 @@ export async function handleOrchestratorQuotaHandover(
     qInfo = quotaGetter(account);
   } else {
     try {
-      qInfo = await fetchTaxiQuota(account);
+      qInfo = await fetchTaxiQuota(account, { canCommit: () => entryGen === extensionLifecycleGeneration });
     } catch {
       qInfo = getCachedTaxiQuota(account);
     }
+  }
+
+  if (entryGen !== extensionLifecycleGeneration) {
+    return { performed: false };
   }
 
   // Evaluar cuota según la familia del modelo activo (Claude vs Gemini)
@@ -407,13 +844,17 @@ export async function handleOrchestratorQuotaHandover(
     ? currentModelId
     : `cpam/${previousAccount}/gemini-3.8-flash-high`;
 
+  if (entryGen !== extensionLifecycleGeneration) {
+    return { performed: false, previousAccount };
+  }
+
   const taxiResult = acquireOrchestratorTaxi(
-    sessionId,
+    resolvedSessionId,
     handoverModelId,
     resolvedFleetPath,
     process.pid,
     existingAccounts,
-    "gemini-3.8-flash-high",
+    /claude/i.test(handoverModelId) ? handoverModelId.split("/").pop()! : "gemini-3.8-flash-high",
     "cpam",
     [previousAccount],
   );
@@ -432,7 +873,7 @@ export async function handleOrchestratorQuotaHandover(
         cand.status === "ocupado" &&
         cand.passenger &&
         cand.passenger.type === "orchestrator" &&
-        cand.passenger.sessionId === sessionId &&
+        cand.passenger.sessionId === resolvedSessionId &&
         cand.passenger.pid === process.pid
       ) {
         candidatePlate = cand.passenger.plate;
@@ -450,7 +891,7 @@ export async function handleOrchestratorQuotaHandover(
           candUnit.status === "ocupado" &&
           candUnit.passenger &&
           candUnit.passenger.type === "orchestrator" &&
-          candUnit.passenger.sessionId === sessionId &&
+          candUnit.passenger.sessionId === resolvedSessionId &&
           candUnit.passenger.pid === process.pid &&
           (!candidatePlate || candUnit.passenger.plate === candidatePlate) &&
           (candidateStartedAt === undefined || candUnit.passenger.startedAt === candidateStartedAt)
@@ -463,7 +904,7 @@ export async function handleOrchestratorQuotaHandover(
           appendTaxiLog("INFO", "TAXI_ORCHESTRATOR_HANDOVER_ROLLBACK", {
             candidateAccount,
             previousAccount,
-            sessionId,
+            sessionId: resolvedSessionId,
             pid: process.pid,
             plate: candidatePlate,
             startedAt: candidateStartedAt,
@@ -481,10 +922,10 @@ export async function handleOrchestratorQuotaHandover(
     };
 
     // Si no existe API de Pi o setModel no es una función, abortar y revertir candidato
-    if (!pi || typeof (pi as any).setModel !== "function") {
+    if (!pi || typeof (pi as any).setModel !== "function" || entryGen !== extensionLifecycleGeneration) {
       rollbackCandidate();
       appendTaxiLog("WARN", "TAXI_ORCHESTRATOR_HANDOVER_UNSUPPORTED", {
-        reason: "no_pi_runtime_api",
+        reason: "no_pi_runtime_api_or_disposed",
         candidateAccount,
         previousAccount,
       });
@@ -511,10 +952,17 @@ export async function handleOrchestratorQuotaHandover(
       /* defensive */
     }
 
-    if (!foundModel) {
+    const candidateOwned = withFleetLock(resolvedFleetPath, () => {
+      const unit = loadFleetState(resolvedFleetPath, existingAccounts).fleet[candidateAccount];
+      return Boolean(candidatePlate && candidateStartedAt !== undefined && unit?.passenger &&
+        unit.status === "ocupado" && unit.passenger.type === "orchestrator" &&
+        unit.passenger.sessionId === resolvedSessionId && unit.passenger.pid === process.pid &&
+        unit.passenger.plate === candidatePlate && unit.passenger.startedAt === candidateStartedAt);
+    });
+    if (entryGen !== extensionLifecycleGeneration || !foundModel || !candidateOwned) {
       rollbackCandidate();
       appendTaxiLog("WARN", "TAXI_ORCHESTRATOR_HANDOVER_FAILED", {
-        reason: "missing_target_model",
+        reason: entryGen !== extensionLifecycleGeneration ? "lifecycle_ended" : "missing_target_model",
         candidateAccount,
         targetModelId: taxiResult.modelId,
       });
@@ -552,10 +1000,21 @@ export async function handleOrchestratorQuotaHandover(
       return { performed: false, previousAccount };
     }
 
-    // setModel confirmado con éxito: verificar que el candidato siga perteneciendo a nuestra generación
-    // y finalizar la unidad anterior solo si la propiedad aún coincide con el orquestador legítimo
+    // setModel confirmado con éxito: verificar que el ciclo de vida siga activo y el candidato siga perteneciendo a nuestra generación
+    if (entryGen !== extensionLifecycleGeneration) {
+      if (switchConfirmed && previousModel && typeof (pi as any).setModel === "function") {
+        if (!await restoreRuntimeModel(pi!, ctx, previousModel)) {
+          return { performed: false, previousAccount, compensationFailed: true };
+        }
+      }
+      return { performed: false, previousAccount };
+    }
+
     let alignmentGuaranteed = false;
     withFleetLock(resolvedFleetPath, () => {
+      if (entryGen !== extensionLifecycleGeneration) {
+        return;
+      }
       const state = loadFleetState(resolvedFleetPath, existingAccounts);
       const candUnit = state.fleet[candidateAccount];
       const prevUnit = state.fleet[previousAccount];
@@ -565,7 +1024,7 @@ export async function handleOrchestratorQuotaHandover(
         candUnit.status === "ocupado" &&
         candUnit.passenger &&
         candUnit.passenger.type === "orchestrator" &&
-        candUnit.passenger.sessionId === sessionId &&
+        candUnit.passenger.sessionId === resolvedSessionId &&
         candUnit.passenger.pid === process.pid &&
         (!candidatePlate || candUnit.passenger.plate === candidatePlate) &&
         (candidateStartedAt === undefined || candUnit.passenger.startedAt === candidateStartedAt),
@@ -575,7 +1034,7 @@ export async function handleOrchestratorQuotaHandover(
         appendTaxiLog("WARN", "TAXI_ORCHESTRATOR_HANDOVER_CANDIDATE_LOST", {
           candidateAccount,
           previousAccount,
-          sessionId,
+          sessionId: resolvedSessionId,
           pid: process.pid,
           expectedStartedAt: candidateStartedAt,
           actualStartedAt: candUnit?.passenger?.startedAt,
@@ -589,7 +1048,7 @@ export async function handleOrchestratorQuotaHandover(
         prevUnit &&
         prevUnit.passenger &&
         prevUnit.passenger.type === "orchestrator" &&
-        prevUnit.passenger.sessionId === sessionId &&
+        prevUnit.passenger.sessionId === resolvedSessionId &&
         prevUnit.passenger.pid === process.pid &&
         (!previousPlate || prevUnit.passenger.plate === previousPlate)
       ) {
@@ -599,14 +1058,14 @@ export async function handleOrchestratorQuotaHandover(
         appendTaxiLog("INFO", "TAXI_ORCHESTRATOR_HANDOVER_FINALIZED", {
           previousAccount,
           newAccount: candidateAccount,
-          sessionId,
+          sessionId: resolvedSessionId,
           pid: process.pid,
         });
       } else {
         appendTaxiLog("WARN", "TAXI_ORCHESTRATOR_HANDOVER_OLD_LEASE_MISMATCH", {
           previousAccount,
           newAccount: candidateAccount,
-          sessionId,
+          sessionId: resolvedSessionId,
           pid: process.pid,
           expectedPlate: previousPlate,
           actualPlate: prevUnit?.passenger?.plate,
@@ -615,6 +1074,11 @@ export async function handleOrchestratorQuotaHandover(
     });
 
     if (!alignmentGuaranteed) {
+      if (switchConfirmed && previousModel && typeof (pi as any).setModel === "function") {
+        if (!await restoreRuntimeModel(pi!, ctx, previousModel)) {
+          return { performed: false, previousAccount, compensationFailed: true };
+        }
+      }
       return { performed: false, previousAccount };
     }
 
@@ -634,17 +1098,28 @@ export async function handleOrchestratorQuotaHandover(
     };
   }
 
+  const stillOwnsPrevious = (): boolean => {
+    if (entryGen !== extensionLifecycleGeneration || !previousPlate) return false;
+    return withFleetLock(resolvedFleetPath, () => {
+      const unit = loadFleetState(resolvedFleetPath, existingAccounts).fleet[previousAccount];
+      return Boolean(unit?.passenger && unit.status === "ocupado" &&
+        unit.passenger.sessionId === resolvedSessionId && unit.passenger.pid === process.pid &&
+        unit.passenger.plate === previousPlate);
+    });
+  };
+
   // 4. Si no se pudo cambiar de cuenta (flota saturada): cambiar de modelo a gemini-3.8-flash-high con effort medium
   if (pi && typeof (pi as any).setModel === "function") {
     try {
       const available = await (ctx as any).modelRegistry?.getAvailable?.();
       const fallbackId = `${account}/gemini-3.8-flash-high`;
-      const fallbackModel = ctx.modelRegistry?.find?.("cpam", fallbackId)
-        || ctx.modelRegistry?.find?.("cpam", `${account}/gemini-3.8-flash-high`)
-        || (Array.isArray(available) ? available.find((m: any) => m.id === fallbackId || m.id === `cpam/${fallbackId}`) : undefined)
-        || (Array.isArray(available) ? available.find((m: any) => m.id?.includes("gemini-3.8-flash-high")) : undefined);
+      const matchesOwnedFallback = (model: any): boolean => model?.provider === "cpam" &&
+        (model.id === fallbackId || model.id === `cpam/${fallbackId}`);
+      const registeredFallback = ctx.modelRegistry?.find?.("cpam", fallbackId);
+      const fallbackModel = matchesOwnedFallback(registeredFallback) ? registeredFallback
+        : (Array.isArray(available) ? available.find(matchesOwnedFallback) : undefined);
 
-      if (fallbackModel) {
+      if (fallbackModel && stillOwnsPrevious()) {
         let fallbackRes: any = false;
         try {
           isInternalModelSwitch = true;
@@ -652,7 +1127,14 @@ export async function handleOrchestratorQuotaHandover(
         } finally {
           isInternalModelSwitch = false;
         }
-        if (fallbackRes !== false) {
+        if (fallbackRes !== false && !stillOwnsPrevious()) {
+          if (entryGen === extensionLifecycleGeneration && previousModel &&
+              !await restoreRuntimeModel(pi, ctx, previousModel)) {
+            return { performed: false, previousAccount: account, compensationFailed: true };
+          }
+          return { performed: false, previousAccount: account };
+        }
+        if (fallbackRes !== false && stillOwnsPrevious()) {
           try {
             (pi as any).setThinkingLevel?.("medium");
           } catch {
@@ -764,7 +1246,19 @@ export function openAgentsViewer(ctx: ExtensionContext): void {
  * - Ejecuta el sweeper de agentes efímeros huérfanos al arrancar sesión.
  * - Registra los comandos /agents, /dc-agents, /dc-taxis y el atajo Alt+Shift+T.
  */
-export default function dcAgentsExtension(pi: ExtensionAPI): void {
+export default function dcAgentsExtension(
+  pi: ExtensionAPI,
+  options?: { coordinator?: TaxiWorkshopCoordinator; fleetPath?: string },
+): void {
+  // Inicialización del coordinador persistente de taller de la flota
+  if (activeWorkshopCoordinator && !activeWorkshopCoordinator.isDisposed()) {
+    activeWorkshopCoordinator.dispose();
+  }
+  activeWorkshopCoordinator = options?.coordinator || new TaxiWorkshopCoordinator({
+    fleetPath: options?.fleetPath,
+    knownFatalAccounts: KNOWN_FATAL_AUTH_ACCOUNTS,
+  });
+
   // Instalar el interceptor de buzón pasivo para subagentes en background (evita secuestro por triggerTurn)
   installSubagentInboxInterceptor();
 
@@ -774,12 +1268,18 @@ export default function dcAgentsExtension(pi: ExtensionAPI): void {
 
   // Al arrancar sesión, verifica y restaura subagentes y skills si faltan, y purga huérfanos
   pi.on("session_start", async (_event, ctx) => {
+    const entryGen = extensionLifecycleGeneration;
     try {
+      const resolvedFleetPath = (ctx as any)?.fleetPath || options?.fleetPath;
+
+      // Reconciliación continua de unidades en taller
+      activeWorkshopCoordinator?.reconcileWorkshopUnits(resolvedFleetPath).catch(() => {});
+
       // 0. Diagnóstico inicial de cuotas y cuentas con fallos de autenticación (fatal_auth / 400/401/403)
       try {
-        const fleetState = loadFleetState();
+        const fleetState = loadFleetState(resolvedFleetPath);
         const accountsToAudit = Object.keys(fleetState.fleet);
-        const disabled = await auditFleetAccountsForWorkshop(accountsToAudit);
+        const disabled = await auditFleetAccountsForWorkshop(accountsToAudit, resolvedFleetPath);
         if (disabled.length > 0 && ctx.hasUI) {
           dcNotifier.notify(
             ctx,
@@ -791,6 +1291,8 @@ export default function dcAgentsExtension(pi: ExtensionAPI): void {
       } catch {
         /* best-effort diagnóstico inicial */
       }
+
+      if (entryGen !== extensionLifecycleGeneration) return;
 
       // 1. Sweeper de agentes efímeros huérfanos
       dcCleanOrphanedEphemeralAgents();
@@ -829,13 +1331,14 @@ export default function dcAgentsExtension(pi: ExtensionAPI): void {
                 || (Array.isArray(available) ? available.find((m: any) => m.id === fallbackId || m.id === `${targetProvider}/${fallbackId}`) : undefined);
             }
 
-            if (foundModel) {
+            if (foundModel && entryGen === extensionLifecycleGeneration) {
               try {
                 isInternalModelSwitch = true;
                 await (pi as any).setModel(foundModel);
               } finally {
                 isInternalModelSwitch = false;
               }
+              if (entryGen !== extensionLifecycleGeneration) return;
               if (foundModel.id?.includes("gemini-3.8-flash-high")) {
                 try {
                   (pi as any).setThinkingLevel?.("medium");
@@ -857,6 +1360,8 @@ export default function dcAgentsExtension(pi: ExtensionAPI): void {
           /* ignore fallback */
         }
       }
+
+      if (entryGen !== extensionLifecycleGeneration) return;
 
       // 3. Aislamiento de Herramientas Especializadas: aliviar el System Prompt del padre
       // dejando las 35 tools en el catálogo para ser usadas exclusivamente por subagentes efímeros
@@ -881,13 +1386,17 @@ export default function dcAgentsExtension(pi: ExtensionAPI): void {
     }
   });
 
-  // Al cerrar o apagar sesión, liberar el taxi del orquestador
+  // Al cerrar o apagar sesión, liberar el taxi del orquestador y disponer coordinador
   pi.on("session_shutdown", (_event, ctx) => {
     try {
+      extensionLifecycleGeneration++;
+      activeHandoverSessions.clear();
+      activeWorkshopCoordinator?.dispose();
       uninstallSubagentInboxInterceptor();
       if (!ctx.hasUI || ctx.mode !== "tui" || process.argv.includes("rpc")) return;
+      const resolvedFleetPath = (ctx as any)?.fleetPath || options?.fleetPath;
       const sessionId = ctx.sessionManager?.getSessionId?.() || `ambient-${Date.now()}`;
-      releaseOrchestratorTaxi(sessionId, process.pid);
+      releaseOrchestratorTaxi(sessionId, process.pid, resolvedFleetPath);
     } catch {
       /* noop */
     }
@@ -896,6 +1405,8 @@ export default function dcAgentsExtension(pi: ExtensionAPI): void {
   // Salida de proceso limpia (anti-zombi)
   process.on("exit", () => {
     try {
+      extensionLifecycleGeneration++;
+      activeWorkshopCoordinator?.dispose();
       if (!process.argv.includes("rpc")) {
         releaseOrchestratorTaxi(undefined, process.pid);
       }
@@ -909,20 +1420,24 @@ export default function dcAgentsExtension(pi: ExtensionAPI): void {
   // a una unidad con mayor cuota ANTES de iniciar el turno para evitar fallos a mitad de llamada.
   pi.on("before_agent_start", async (_event: any, ctx: ExtensionContext) => {
     try {
+      const resolvedFleetPath = (ctx as any)?.fleetPath || options?.fleetPath;
+      activeWorkshopCoordinator?.reconcileWorkshopUnits(resolvedFleetPath).catch(() => {});
       if (!ctx.hasUI || ctx.mode !== "tui" || process.argv.includes("rpc")) return;
-      await handleOrchestratorQuotaHandover(ctx, pi);
+      await handleOrchestratorQuotaHandover(ctx, pi, resolvedFleetPath);
     } catch {
       /* defensive */
     }
   });
 
   // En turn_end: si hubo error de autenticación con proveedor, enviar el taxi a taller.
-  // Sincronizar continuo de tokens y costo en pasajero.
-  // Supervisar cuota del orquestador (< 10%).
+  // Reconciliación de taller, relevo transaccional ante avería y sincronización continua.
   pi.on("turn_end", async (event: any, ctx: ExtensionContext) => {
     try {
+      const resolvedFleetPath = (ctx as any)?.fleetPath || options?.fleetPath || path.join(os.homedir(), ".pi", "agent", "dc-studio", "dc-taxis.json");
+      activeWorkshopCoordinator?.reconcileWorkshopUnits(resolvedFleetPath).catch(() => {});
+
       // 1. Auditoría de taller por fallos fatales de auth
-      const outcome = handleTurnEndForWorkshop(event, ctx);
+      const outcome = handleTurnEndForWorkshop(event, ctx, resolvedFleetPath);
       if (outcome.sent && outcome.account) {
         if (ctx.hasUI) {
           dcNotifier.notify(
@@ -934,61 +1449,9 @@ export default function dcAgentsExtension(pi: ExtensionAPI): void {
         }
 
         // Si la unidad que falló con error fatal de autenticación era la del orquestador activo,
-        // relevarla de inmediato a una nueva unidad libre operativa en lugar de dejar la terminal varada.
+        // relevarla de inmediato a una nueva unidad libre operativa mediante failover transaccional
         try {
-          const sessionId = ctx.sessionManager?.getSessionId?.() || `ambient-${Date.now()}`;
-          const currentModelId = ctx.model ? `${ctx.model.provider || "cpam"}/${ctx.model.id}` : undefined;
-          const taxiResult = acquireOrchestratorTaxi(
-            sessionId,
-            currentModelId,
-            undefined,
-            process.pid,
-            undefined,
-            "gemini-3.8-flash-high",
-            "cpam",
-            [outcome.account],
-          );
-
-          if (taxiResult && taxiResult.account !== outcome.account && pi && taxiResult.modelId) {
-            const slashIdx = taxiResult.modelId.indexOf("/");
-            const targetProvider = slashIdx > 0 ? taxiResult.modelId.slice(0, slashIdx) : "cpam";
-            const targetId = slashIdx > 0 ? taxiResult.modelId.slice(slashIdx + 1) : taxiResult.modelId;
-
-            const available = await (ctx as any).modelRegistry?.getAvailable?.();
-            let foundModel = ctx.modelRegistry?.find?.(targetProvider, targetId)
-              || (Array.isArray(available) ? available.find((m: any) => m.id === targetId || m.id === taxiResult.modelId) : undefined);
-
-            if (!foundModel) {
-              const fallbackId = `${taxiResult.account}/gemini-3.8-flash-high`;
-              foundModel = ctx.modelRegistry?.find?.(targetProvider, fallbackId)
-                || (Array.isArray(available) ? available.find((m: any) => m.id === fallbackId || m.id === `${targetProvider}/${fallbackId}`) : undefined);
-            }
-
-            if (foundModel) {
-              try {
-                isInternalModelSwitch = true;
-                await (pi as any).setModel(foundModel);
-              } finally {
-                isInternalModelSwitch = false;
-              }
-              if (foundModel.id?.includes("gemini-3.8-flash-high")) {
-                try {
-                  (pi as any).setThinkingLevel?.("medium");
-                } catch {
-                  /* optional thinking level */
-                }
-              }
-
-              if (ctx.hasUI) {
-                dcNotifier.notify(
-                  ctx,
-                  "🚕 Supervisor de Taxis",
-                  `Relevo automático por avería: ${outcome.account.toUpperCase()} → ${taxiResult.account.toUpperCase()} (${foundModel.id})`,
-                  "warning",
-                );
-              }
-            }
-          }
+          await handleTurnEndFailover(outcome.account, ctx, pi, resolvedFleetPath);
         } catch {
           /* best-effort auto-failover */
         }
@@ -1005,7 +1468,7 @@ export default function dcAgentsExtension(pi: ExtensionAPI): void {
         }
         if (!activeAccount) {
           const sessionId = ctx.sessionManager?.getSessionId?.() || `ambient-${Date.now()}`;
-          const fleetSummary = getFleetStatusSummary();
+          const fleetSummary = getFleetStatusSummary(resolvedFleetPath);
           const myTaxi = fleetSummary.units.find(
             (u) => u.passenger && (u.passenger.sessionId === sessionId || u.passenger.pid === process.pid),
           );
@@ -1021,10 +1484,12 @@ export default function dcAgentsExtension(pi: ExtensionAPI): void {
       }
 
       // 3. Supervisor de Cuota para el Orquestador (Orchestrator Shift Handover)
-      try {
-        await handleOrchestratorQuotaHandover(ctx, pi);
-      } catch {
-        /* best-effort handover */
+      if (ctx.hasUI && ctx.mode === "tui" && !process.argv.includes("rpc")) {
+        try {
+          await handleOrchestratorQuotaHandover(ctx, pi, resolvedFleetPath);
+        } catch {
+          /* best-effort handover */
+        }
       }
     } catch {
       /* defensive */

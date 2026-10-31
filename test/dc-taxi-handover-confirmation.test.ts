@@ -77,7 +77,7 @@ test("RULE 1: Orchestrator handover - setModel rejects -> rolls back candidate, 
     };
 
     const mockCtx = {
-      hasUI: false,
+      hasUI: true,
       mode: "tui",
       model: { provider: "cpam", id: "ac01/gemini-3.8-flash-high" },
       sessionManager: { getSessionId: () => "orch-sess-rej" },
@@ -139,7 +139,7 @@ test("RULE 2: Orchestrator handover - setModel returns false -> rolls back candi
     };
 
     const mockCtx = {
-      hasUI: false,
+      hasUI: true,
       mode: "tui",
       model: { provider: "cpam", id: "ac01/gemini-3.8-flash-high" },
       sessionManager: { getSessionId: () => "orch-sess-false" },
@@ -199,7 +199,7 @@ test("RULE 3: Orchestrator handover - target model missing in registry -> candid
     };
 
     const mockCtx = {
-      hasUI: false,
+      hasUI: true,
       mode: "tui",
       model: { provider: "cpam", id: "ac01/gemini-3.8-flash-high" },
       sessionManager: { getSessionId: () => "orch-sess-missing" },
@@ -251,7 +251,7 @@ test("RULE 4: Orchestrator handover - no pi/runtime API -> candidate rolled back
     saveFleetState(state, fleetPath);
 
     const mockCtx = {
-      hasUI: false,
+      hasUI: true,
       mode: "tui",
       model: { provider: "cpam", id: "ac01/gemini-3.8-flash-high" },
       sessionManager: { getSessionId: () => "orch-sess-no-pi" },
@@ -307,7 +307,7 @@ test("RULE 5: Orchestrator handover - success path confirms setModel and finaliz
     };
 
     const mockCtx = {
-      hasUI: false,
+      hasUI: true,
       mode: "tui",
       model: { provider: "cpam", id: "ac01/gemini-3.8-flash-high" },
       sessionManager: { getSessionId: () => "orch-sess-ok" },
@@ -383,7 +383,7 @@ test("RULE 6: Orchestrator handover - old lease ownership changed during await s
     };
 
     const mockCtx = {
-      hasUI: false,
+      hasUI: true,
       mode: "tui",
       model: { provider: "cpam", id: "ac01/gemini-3.8-flash-high" },
       sessionManager: { getSessionId: () => "orch-sess-orig" },
@@ -450,7 +450,7 @@ test("RULE 7: Orchestrator handover - does NOT hold fleet lock across await setM
     };
 
     const mockCtx = {
-      hasUI: false,
+      hasUI: true,
       mode: "tui",
       model: { provider: "cpam", id: "ac01/gemini-3.8-flash-high" },
       sessionManager: { getSessionId: () => "orch-sess-lock-test" },
@@ -685,7 +685,7 @@ test("RULE 10: Pending setModel + candidate reassigned -> aborts finalization, p
     };
 
     const mockCtx = {
-      hasUI: false,
+      hasUI: true,
       mode: "tui",
       model: { provider: "cpam", id: "ac01/gemini-3.8-flash-high" },
       sessionManager: { getSessionId: () => "orch-sess-clost" },
@@ -765,7 +765,7 @@ test("RULE 11: Late rollback with candidate reassigned -> skips rollback, preser
     };
 
     const mockCtx = {
-      hasUI: false,
+      hasUI: true,
       mode: "tui",
       model: { provider: "cpam", id: "ac01/gemini-3.8-flash-high" },
       sessionManager: { getSessionId: () => "orch-sess-late" },
@@ -957,7 +957,7 @@ test("RULE 14: Overlapping same-session handovers are rejected and do not interf
 
     let secondResult: any = null;
     const mockCtx = {
-      hasUI: false,
+      hasUI: true,
       mode: "tui",
       model: { provider: "cpam", id: "ac01/gemini-3.8-flash-high" },
       sessionManager: { getSessionId: () => "orch-sess-overlap" },
@@ -997,8 +997,13 @@ test("RULE 14: Overlapping same-session handovers are rejected and do not interf
 
     const stateAfter = loadFleetState(fleetPath, customAccounts);
     assert.equal(stateAfter.fleet["ac01"].status, "recargando", "Old lease finalized to recargando");
-    assert.equal(stateAfter.fleet["ac02"].status, "ocupado", "Candidate ac02 acquired");
-    assert.equal(stateAfter.fleet["ac03"].status, "libre", "ac03 must remain untouched");
+    const candidate = firstResult.newAccount;
+    assert.ok(candidate === "ac02" || candidate === "ac03", "A free standard candidate must be acquired");
+    const untouched = candidate === "ac02" ? "ac03" : "ac02";
+    assert.equal(stateAfter.fleet[candidate].status, "ocupado", "Selected candidate must remain acquired");
+    assert.equal(stateAfter.fleet[candidate].passenger?.sessionId, "orch-sess-overlap");
+    assert.equal(stateAfter.fleet[untouched].status, "libre", "Other candidate must remain untouched");
+    assert.equal(stateAfter.fleet[untouched].passenger, null);
   } finally {
     cleanupScratchDir(scratchDir);
   }

@@ -44,12 +44,14 @@ export interface FetchTaxiQuotaOptions {
   timeoutMs?: number;
   fetcher?: TaxiQuotaFetcher;
   baseUrl?: string;
+  canCommit?: boolean | (() => boolean);
 }
 
 export interface ProbeTaxiQuotaDiagnosticOptions {
   timeoutMs?: number;
   fetcher?: TaxiQuotaFetcher;
   baseUrl?: string;
+  canCommit?: boolean | (() => boolean);
 }
 
 export interface DcTaxiQuotaDiagnosticResult extends DcTaxiQuotaInfo {
@@ -273,7 +275,9 @@ export async function fetchTaxiQuota(
       lastChecked: now,
     };
 
-    quotaCache.set(account, info);
+    if (typeof options?.canCommit === "function" ? options.canCommit() : options?.canCommit !== false) {
+      quotaCache.set(account, info);
+    }
     return info;
   } catch {
     const fallback: DcTaxiQuotaInfo = {
@@ -282,7 +286,9 @@ export async function fetchTaxiQuota(
       geminiWeeklyPct: null,
       lastChecked: now,
     };
-    quotaCache.set(account, fallback);
+    if (typeof options?.canCommit === "function" ? options.canCommit() : options?.canCommit !== false) {
+      quotaCache.set(account, fallback);
+    }
     return fallback;
   }
 }
@@ -332,8 +338,13 @@ export async function probeTaxiQuotaDiagnostic(
     unitAmbiguityNote: UNIT_AMBIGUITY_NOTE,
   };
 
-  // Actualiza la caché únicamente tras validación estricta exitosa
-  quotaCache.set(account, info);
+  // Actualiza la caché únicamente tras validación estricta exitosa y si el guardián de commit lo autoriza
+  const canCommit = options?.canCommit !== undefined
+    ? (typeof options.canCommit === "function" ? Boolean(options.canCommit()) : Boolean(options.canCommit))
+    : true;
+  if (canCommit) {
+    quotaCache.set(account, info);
+  }
 
   return result;
 }
