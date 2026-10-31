@@ -265,14 +265,9 @@ export function validateBoundedWriterAdmission(
   seedContext?: string,
   tools?: string[],
 ): BoundedWriterValidationResult {
-  const hasMutationTools = tools?.some((t) => t === "write" || t === "edit");
+  const hasMutationTools = tools?.some((t) => t === "write" || t === "edit" || t === "bash");
   if (!hasMutationTools) {
     return { valid: true };
-  }
-
-  // Bypass explícito para testing o tareas sintéticas no vinculadas a código real
-  if (task.includes("[mock-unbounded]") || seedContext?.includes("[mock-unbounded]")) {
-    return { valid: true, surfaces: ["*"] };
   }
 
   const combined = `${task}\n\n${seedContext || ""}`;
@@ -305,6 +300,15 @@ export function validateBoundedWriterAdmission(
       reason:
         "Error de Admisión de Worker (DC Studio): La sección '## Allowed edit surfaces' está presente pero vacía. Debes listar al menos una ruta relativa o glob permitido.",
     };
+  }
+
+  for (const surface of surfaces) {
+    const segments = surface.split("/");
+    if (!/^[a-zA-Z0-9_-]/.test(surface) || surface.includes("\\") ||
+        segments.some((segment) => !segment || segment === "." || segment === "..") ||
+        /^[a-zA-Z]:/.test(surface)) {
+      return { valid: false, reason: "Allowed edit surfaces must be narrow repository-relative paths or globs without traversal." };
+    }
   }
 
   return { valid: true, surfaces };

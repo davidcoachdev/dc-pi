@@ -167,4 +167,23 @@ Para investigaciones técnicas profundas, en lugar de que un solo subagente cons
 4. **Fan-In (Síntesis):** El orquestador unifica las respuestas y genera de forma determinista dos artefactos:
    - `report.md`: Síntesis ejecutiva multicanal en prosa limpia.
    - `sources.md`: Matriz de fuentes consultadas, tiempos de ejecución y taxis utilizados.
-5. **Fresh Context Loop:** Todos los archivos temporales de los becarios (`dc-ephem-*.md`) se autodestruyen en el bloque `finally` y sus taxis vuelven al estado `libre`.
+5. **Fresh Context Loop:** Al terminar la espera del runner, `finally` limpia la definición temporal y registra el resultado real del canal. La cancelación se propaga al runner; solicitarla no demuestra por sí solo que el proceso haya terminado.
+
+### Garantías y límites de ejecución paralela
+
+| Área | Comportamiento |
+|------|----------------|
+| Resultados | Host ausente, respuesta vacía y `isError` exterior o anidado son fallos; no se fabrican resultados exitosos. |
+| Concurrencia de swarm | La API interna acepta `maxConcurrency`, entero positivo. Sin ese valor se conserva el paralelismo de todos los canales. No es un parámetro nuevo de la herramienta pública. |
+| Cancelación | Se propaga `AbortSignal`; los canales ya abortados no se lanzan. Se espera al runner antes de limpiar. No hay un plazo automático que garantice terminar procesos. |
+| Heartbeat | Los lotes síncronos y canales de swarm renuevan la reserva con identidad de sesión y matrícula mientras esperan. |
+| Lanzamiento background incierto | Una excepción de transporte conserva el plan bajo seguimiento. Sin ID de tarea o evidencia terminal no se libera automáticamente la reserva; requiere conciliación del operador. |
+| Inbox | Entregas repetidas del mismo `taskId` conservan diagnóstico y lectura y no repiten el aviso de finalización. |
+
+### Superficies de escritores en un lote
+
+Las herramientas `write`, `edit` y `bash` requieren una sección `## Allowed edit surfaces` con rutas relativas estrechas o globs. No se aceptan raíz, rutas absolutas, segmentos `..`, barras invertidas ni el marcador de bypass `[mock-unbounded]` como excepción. Un terminal con intención de solo lectura también necesita declarar superficies: la intención del prompt no restringe lo que puede ejecutar.
+
+Antes de reservar taxis, el lote valida todas las recetas y rechaza superficies solapadas entre escritores. La comparación de globs es conservadora: `src/auth/*.ts` entra en conflicto con `src/auth/token.ts`. Divide tareas en lotes separados si no puedes declarar superficies disjuntas.
+
+**Límite:** esto es admisión de un lote, no un sandbox de archivos ni una exclusión mutua entre sesiones o llamadas independientes. No garantiza que un proceso respete su prompt ni resuelve enlaces simbólicos.

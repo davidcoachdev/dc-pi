@@ -473,15 +473,13 @@ export function reapAbandonedTaxis(
     }
 
     const isPidDead = !isProcessAlive(passenger.pid);
-    // Un orquestador interactivo en una terminal viva NUNCA expira por TTL.
-    // Solo se libera si su proceso en el sistema operativo murió realmente (isPidDead).
-    // El TTL de inactividad solo aplica a subagentes o procesos efímeros desatendidos.
-    const isTtlExpired =
-      passenger.type !== "orchestrator" &&
-      now - (passenger.heartbeatAt || passenger.startedAt) > leaseTtlMs;
-
-    if (isPidDead || isTtlExpired) {
-      const reason = isPidDead ? `PID ${passenger.pid} no existe en OS` : `TTL expirado (${Math.round((now - (passenger.heartbeatAt || passenger.startedAt)) / 1000)}s)`;
+    if (!isPidDead && now - (passenger.heartbeatAt || passenger.startedAt) > leaseTtlMs) {
+      passenger.leaseHealth = "uncertain";
+    }
+    // A stale heartbeat is not termination evidence: the recorded PID may be
+    // the still-live parent of a worker whose dispatch outcome is unknown.
+    if (isPidDead) {
+      const reason = `PID ${passenger.pid} no existe en OS`;
       appendTaxiLog("WARN", "TAXI_ZOMBIE_REAPED", {
         account,
         reason,
@@ -673,7 +671,7 @@ export function acquireOrchestratorTaxi(
           pid,
           model: modelId!,
           taskLabel: "Sesión Principal (Orquestador)",
-          plate: `DC-HOST-${pid}`,
+          plate: `DC-HOST-${pid}-${randomUUID()}`,
           startedAt: Date.now(),
           heartbeatAt: Date.now(),
         };
@@ -718,7 +716,7 @@ export function acquireOrchestratorTaxi(
           pid,
           model: modelId!,
           taskLabel: "Sesión Principal (Orquestador)",
-          plate: `DC-HOST-${pid}`,
+          plate: `DC-HOST-${pid}-${randomUUID()}`,
           startedAt: Date.now(),
           heartbeatAt: Date.now(),
         };
@@ -786,7 +784,7 @@ export function acquireOrchestratorTaxi(
         pid,
         model: newModelId,
         taskLabel: "Sesión Principal (Orquestador)",
-        plate: `DC-HOST-${pid}`,
+        plate: `DC-HOST-${pid}-${randomUUID()}`,
         startedAt: Date.now(),
         heartbeatAt: Date.now(),
       };
@@ -1418,9 +1416,12 @@ export function getFleetStatusSummary(
 } {
   return withFleetLock(fleetPath, () => {
     const state = loadFleetState(fleetPath, allowedAccounts);
+    const previousHealth = Object.values(state.fleet).map((unit) => unit.passenger?.leaseHealth);
     const reaped = reapAbandonedTaxis(state);
 
-    let stateChanged = reaped > 0;
+    let stateChanged = reaped > 0 || Object.values(state.fleet).some(
+      (unit, index) => unit.passenger?.leaseHealth !== previousHealth[index],
+    );
     for (const unit of Object.values(state.fleet)) {
       if (unit.status === "recargando" || unit.status === "libre") {
         const prevStatus = unit.status;

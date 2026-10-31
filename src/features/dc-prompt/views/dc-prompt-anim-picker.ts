@@ -62,6 +62,17 @@ export class PromptAnimPickerPanel implements Component {
     }
   }
 
+  dispose(): void {
+    this.stop();
+    this.requestRenderCb = undefined;
+    this.onPick = undefined;
+    this.onCancel = undefined;
+  }
+
+  destroy(): void {
+    this.dispose();
+  }
+
   invalidate(): void {}
 
   render(width: number): string[] {
@@ -171,6 +182,9 @@ export async function openPromptAnimPicker(ctx: ExtensionContext): Promise<strin
         activePanel.stop();
         activePanel.onPick?.(chosen);
       }
+    },
+    onClose: () => {
+      activePanel = undefined;
     },
     content: (done, _theme, tui) => {
       const theme: PromptAnimTheme = {

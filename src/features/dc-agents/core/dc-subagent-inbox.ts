@@ -25,7 +25,18 @@ class SubagentInboxManager {
   private reports: Map<string, BackgroundTaskReport> = new Map();
   private listeners: Set<(report: BackgroundTaskReport) => void> = new Set();
 
-  deposit(report: BackgroundTaskReport): void {
+  deposit(report: BackgroundTaskReport): boolean {
+    const existing = this.reports.get(report.taskId);
+    if (existing) {
+      this.reports.set(report.taskId, {
+        ...existing,
+        label: existing.label || report.label,
+        outcomeText: report.outcomeText.length > existing.outcomeText.length
+          ? report.outcomeText : existing.outcomeText,
+        errorDetails: existing.errorDetails || report.errorDetails,
+      });
+      return false;
+    }
     this.reports.set(report.taskId, report);
     for (const listener of this.listeners) {
       try {
@@ -34,6 +45,7 @@ class SubagentInboxManager {
         /* best-effort notification */
       }
     }
+    return true;
   }
 
   get(taskId: string): BackgroundTaskReport | undefined {
@@ -123,15 +135,17 @@ export function installSubagentInboxInterceptor(): boolean {
         read: false,
       };
 
-      subagentInboxManager.deposit(report);
+      const firstDelivery = subagentInboxManager.deposit(report);
 
       // Notificación visual no invasiva en UI
       try {
+        if (firstDelivery) {
         const badge = status === "completed" ? "✅" : "⚠️";
         dcNotifier.notifyHerdr(
           `${badge} Subagente ${agent} finalizado`,
           label ? `Tarea: ${label} (ID: ${taskId})` : `ID: ${taskId}`,
         );
+        }
       } catch {
         /* best-effort */
       }

@@ -46,6 +46,7 @@ export interface TaxiWorkshopRecoveryOptions {
   fetcher?: TaxiQuotaFetcher;
   baseUrl?: string;
   now?: () => number;
+  knownFatalAccounts?: Set<string>;
 }
 
 export interface TaxiWorkshopReconcileResult {
@@ -86,7 +87,7 @@ export class TaxiWorkshopCoordinator {
     };
   }
 
-  public async reconcileWorkshopUnits(): Promise<TaxiWorkshopReconcileResult> {
+  public async reconcileWorkshopUnits(overrideFleetPath?: string): Promise<TaxiWorkshopReconcileResult> {
     const result: TaxiWorkshopReconcileResult = {
       inspectedCount: 0,
       attemptedAccounts: [],
@@ -99,7 +100,7 @@ export class TaxiWorkshopCoordinator {
       return result;
     }
 
-    const fleetPath = this.options.fleetPath || DEFAULT_FLEET_STATE_PATH;
+    const fleetPath = overrideFleetPath || this.options.fleetPath || DEFAULT_FLEET_STATE_PATH;
     const allowedAccounts = this.options.allowedAccounts;
     const cooldownMs = this.options.cooldownMs ?? 10_000;
     const nowFn = this.options.now ?? Date.now;
@@ -158,12 +159,14 @@ export class TaxiWorkshopCoordinator {
           if (this.options.probeDiagnostic) {
             diagnostic = await this.options.probeDiagnostic(account, {
               timeoutMs: this.options.probeTimeoutMs,
+              canCommit: () => !this.disposed,
             });
           } else {
             diagnostic = await probeTaxiQuotaDiagnostic(account, {
               timeoutMs: this.options.probeTimeoutMs,
               fetcher: this.createGuardedFetcher(),
               baseUrl: this.options.baseUrl,
+              canCommit: () => !this.disposed,
             });
           }
 
@@ -187,6 +190,9 @@ export class TaxiWorkshopCoordinator {
 
           if (repaired) {
             result.repairedAccounts.push(account);
+            if (this.options.knownFatalAccounts) {
+              this.options.knownFatalAccounts.delete(account.toLowerCase());
+            }
           } else {
             result.failedAccounts.push(account);
           }
