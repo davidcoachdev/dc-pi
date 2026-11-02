@@ -1,9 +1,13 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { DcSidebarTabs } from "../src/features/dc-sidebar/views/dc-sidebar-tabs.ts";
+import { DcSidebarTabs, SIDEBAR_TABS } from "../src/features/dc-sidebar/views/dc-sidebar-tabs.ts";
 import { DcSidebarPagedBody } from "../src/features/dc-sidebar/views/dc-sidebar-body.ts";
-import { framedRail } from "../src/features/dc-sidebar/views/dc-sidebar-frame.ts";
+import { framedRail, resetSidebarTabsCacheForTesting } from "../src/features/dc-sidebar/views/dc-sidebar-frame.ts";
 import { LAYOUT_NODE } from "../src/features/dc-sidebar/core/dc-sidebar-types.ts";
+import { findSidebarTab, switchSidebarTab } from "../src/features/dc-sidebar/dc-sidebar.ts";
+import dcSidebarExtension from "../src/features/dc-sidebar/dc-sidebar.ts";
+import { writeSidebarPrefs, readSidebarPrefs } from "../src/features/dc-sidebar/core/dc-sidebar-prefs.ts";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 test("DcSidebarTabs renders all 5 sentinel tabs and allows switching", () => {
   let switched = "";
@@ -93,4 +97,177 @@ test("framedRail incorporates fixed DcSidebarTabs at the top without displacing 
   assert.equal(innerStack.entries[0].basis, "auto"); // Tabs
   assert.equal(innerStack.entries[1].grow, 1);       // Body scrollable
   assert.equal(innerStack.entries[2].grow, 0);       // Footer fijo
+});
+
+test("findSidebarTab resolves tabs 1 to 5 and safely returns undefined for tabs 6 to 9", () => {
+  assert.equal(findSidebarTab(1)?.id, "main");
+  assert.equal(findSidebarTab(2)?.id, "fleet");
+  assert.equal(findSidebarTab(3)?.id, "tree");
+  assert.equal(findSidebarTab(4)?.id, "mem");
+  assert.equal(findSidebarTab(5)?.id, "sys");
+
+  // Tabs 6..9 aún no existen en el catálogo base de 5 tabs
+  assert.equal(findSidebarTab(6), undefined);
+  assert.equal(findSidebarTab(7), undefined);
+  assert.equal(findSidebarTab(8), undefined);
+  assert.equal(findSidebarTab(9), undefined);
+
+  // Búsqueda por id o label
+  assert.equal(findSidebarTab("FLEET")?.id, "fleet");
+  assert.equal(findSidebarTab("tree")?.id, "tree");
+});
+
+test("findSidebarTab dynamically supports adding tabs up to 9", () => {
+  const customTabs = new DcSidebarTabs();
+  customTabs.setTabs([
+    ...SIDEBAR_TABS,
+    { id: "logs", key: "6", label: "LOGS" },
+    { id: "network", key: "7", label: "NET" },
+  ]);
+
+  const tab6 = findSidebarTab(6, customTabs);
+  assert.ok(tab6);
+  assert.equal(tab6?.id, "logs");
+  assert.equal(tab6?.label, "LOGS");
+
+  const tab7 = findSidebarTab(7, customTabs);
+  assert.ok(tab7);
+  assert.equal(tab7?.id, "network");
+
+  // Tab 8 aún no existe
+  assert.equal(findSidebarTab(8, customTabs), undefined);
+});
+
+test("switchSidebarTab switches active tab, updates preferences and notifies", () => {
+  resetSidebarTabsCacheForTesting();
+  writeSidebarPrefs({ hidden: false, activeTab: "main" });
+
+  const notifications: string[] = [];
+  const mockCtx: any = {
+    ui: {
+      notify: (msg: string) => {
+        notifications.push(msg);
+      },
+    },
+  };
+
+  const mockTui: any = {
+    terminal: { columns: 160, rows: 50 },
+    requestRender() {},
+  };
+
+  const res = switchSidebarTab(2, mockCtx, mockTui);
+  assert.equal(res.success, true);
+  assert.equal(res.tab?.id, "fleet");
+  assert.equal(readSidebarPrefs().activeTab, "fleet");
+  assert.ok(notifications.some((n) => n.includes("FLEET")));
+});
+
+test("switchSidebarTab unhides sidebar when navigating directly if terminal width is sufficient", () => {
+  resetSidebarTabsCacheForTesting();
+  writeSidebarPrefs({ hidden: true, activeTab: "main" });
+
+  const notifications: string[] = [];
+  const mockCtx: any = {
+    ui: {
+      notify: (msg: string) => {
+        notifications.push(msg);
+      },
+    },
+  };
+
+  const mockTuiWide: any = {
+    terminal: { columns: 160, rows: 50 },
+    requestRender() {},
+  };
+
+  const res = switchSidebarTab(3, mockCtx, mockTuiWide);
+  assert.equal(res.success, true);
+  assert.equal(res.tab?.id, "tree");
+  assert.equal(readSidebarPrefs().hidden, false);
+  assert.equal(readSidebarPrefs().activeTab, "tree");
+  assert.ok(notifications.some((n) => n.includes("DC Sidebar visible: [3 TREE]")));
+});
+
+test("switchSidebarTab blocks unhiding if terminal width is insufficient", () => {
+  resetSidebarTabsCacheForTesting();
+  writeSidebarPrefs({ hidden: true, activeTab: "main" });
+
+  const notifications: string[] = [];
+  const mockCtx: any = {
+    ui: {
+      notify: (msg: string) => {
+        notifications.push(msg);
+      },
+    },
+  };
+
+  const mockTuiNarrow: any = {
+    terminal: { columns: 100, rows: 50 }, // < 140 breakpoint
+    requestRender() {},
+  };
+
+  const res = switchSidebarTab(1, mockCtx, mockTuiNarrow);
+  assert.equal(res.success, false);
+  assert.equal(res.reason, "insufficient_width");
+  assert.equal(readSidebarPrefs().hidden, true);
+  assert.ok(notifications.some((n) => n.includes("Ancho insuficiente")));
+});
+
+test("switchSidebarTab warns when target tab 1-9 is not available", () => {
+  resetSidebarTabsCacheForTesting();
+  const notifications: string[] = [];
+  const mockCtx: any = {
+    ui: {
+      notify: (msg: string) => {
+        notifications.push(msg);
+      },
+    },
+  };
+
+  const res = switchSidebarTab(6, mockCtx);
+  assert.equal(res.success, false);
+  assert.equal(res.reason, "tab_not_found");
+  assert.ok(notifications.some((n) => n.includes("pestaña [6] no disponible")));
+});
+
+test("dcSidebarExtension registers alt+1 to alt+9 shortcuts and /dc-sidebar command", () => {
+  const commands = new Map<string, any>();
+  const shortcuts = new Map<string, any>();
+  const events = new Map<string, any>();
+
+  const mockPi = {
+    registerCommand(name: string, def: any) {
+      commands.set(name, def);
+    },
+    registerShortcut(shortcut: string, def: any) {
+      shortcuts.set(shortcut.toLowerCase(), def);
+    },
+    on(event: string, fn: any) {
+      events.set(event, fn);
+    },
+  } as unknown as ExtensionAPI;
+
+  dcSidebarExtension(mockPi);
+
+  assert.ok(commands.has("dc-sidebar"));
+  assert.ok(shortcuts.has("alt+shift+b"));
+
+  // Verificar que todos los atajos del 1 al 9 están registrados
+  for (let i = 1; i <= 9; i++) {
+    assert.ok(shortcuts.has(`alt+${i}`), `Missing shortcut alt+${i}`);
+  }
+
+  // Ejecutar handler de alt+2
+  const alt2Handler = shortcuts.get("alt+2")!.handler;
+  const notifications: string[] = [];
+  const mockCtx: any = {
+    ui: {
+      notify: (msg: string) => {
+        notifications.push(msg);
+      },
+    },
+  };
+  alt2Handler(mockCtx);
+  assert.equal(readSidebarPrefs().activeTab, "fleet");
 });

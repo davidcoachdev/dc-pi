@@ -34,6 +34,15 @@ export class DcSidebarTabs implements Component {
     });
   }
 
+  getTabs(): readonly DcTabItem[] {
+    return this.tabsComponent.options.tabs;
+  }
+
+  setTabs(tabs: DcTabItem[]): void {
+    this.tabsComponent.options.tabs = [...tabs];
+    this.invalidate();
+  }
+
   getActiveTab(): string {
     return this.tabsComponent.getActiveId();
   }

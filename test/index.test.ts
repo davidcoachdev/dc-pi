@@ -171,4 +171,7 @@ test("dcStudioExtension registers all canonical commands and keybindings", () =>
   assert.ok(shortcuts.has("alt+u"), "Expected Alt+U shortcut for TTS monitor");
   assert.ok(shortcuts.has("alt+v"), "Expected Alt+V shortcut for voice dictation");
   assert.ok(shortcuts.has("alt+shift+b"), "Expected Alt+Shift+B shortcut for sidebar");
+  for (let i = 1; i <= 9; i++) {
+    assert.ok(shortcuts.has(`alt+${i}`), `Expected Alt+${i} shortcut for sidebar tabs`);
+  }
 });
