@@ -3,7 +3,7 @@
 **Módulo:** `src/features/dc-sentinel/`  
 **Subagente asociado:** `agents/dc-sentinel.md`  
 **Bóveda soberana en repo:** `dc-sentinela/` (o `docs/chronicle/`)  
-**Base de datos local:** `node:sqlite` WAL (`~/.pi/agent/dc-studio/sentinel-<proyecto>.db`)  
+**Base de datos local:** `node:sqlite` WAL (`~/.pi/agent/dc-studio/sentinel-<proyecto>-<sha256-raíz>.db`)
 **Versión:** 2.0.0 (Soberanía total sin vendor lock-in)  
 **Fecha de Actualización:** 2026-10-06  
 
@@ -49,6 +49,22 @@ El mayor riesgo en sistemas de memoria para agentes de desarrollo es la **depend
 
 ---
 
+## Captura local con evidencia (T4a)
+
+Las notas extraídas son `proposal`, con `proofCount=0`, salvo que el mismo turno registre una edición exitosa y después un verificador reconocido exitoso sobre la revisión actual. Otra edición invalida la prueba anterior; resultados ausentes, fallos, comandos ambiguos y afirmaciones del asistente no prueban éxito. El relato del asistente se etiqueta como propuesta, no como evidencia.
+
+La evidencia conserva comando real, llamada, turno, raíz cuando existe y resultado saneado. Pi entrega `tool_execution_end.result` e `isError`: se conserva ese estado explícito; no se inventa un exit code. Solo se reconocen comandos directos `npm test`, `npm run test|typecheck|build`, `node --test` y `tsc`/`npx tsc`, o cadenas compuestas exclusivamente por esos verificadores con `&&`. Wrappers, redirecciones, sustituciones y formas no reconocidas quedan sin verificar. Esto acredita ejecución reportada, no calidad semántica ni cobertura.
+
+Solo se genera una receta exitosa con esa misma evidencia; nunca se inventa un comando alternativo. Una revisión local no verificada reemplaza la prueba anterior del tema en SQLite, también al deduplicar. No se migran datos históricos ni se exportan automáticamente hechos privados.
+
+### Publicación compartida explícita
+
+En Metro, `[g]` solicita aplicabilidad y después muestra raíz, ID, revisión y huella de la nota. `[Enter]` solo pasa a revisión: publicar requiere `[y]`; `[n]` o `[Esc]` cancelan. La publicación vuelve a consultar la nota por ID y rechaza revisiones cambiadas, evidencia estructurada ausente/no vigente, notas inactivas/expiradas y contenido sensible, de seguridad o privado (también ya redactado). `proofCount` o texto de verificación histórico no bastan. Un fallo muestra «No publicada», nunca éxito; no cambia el scope local.
+
+El catálogo interno es `getDcStudioDir()/sentinel-shared.db`, con SQLite/FTS y sin servicios, escaneos de otras bases o exportación wildcard de Engram. Su identidad es raíz fuente + ID; repetir publicación actualiza un único snapshot. No hay transacción atómica entre dos bases. Los snapshots publicados **no se actualizan ni revocan automáticamente** al cambiar/eliminar la fuente; una nueva publicación válida los reemplaza. Su expiración publicada sí se respeta.
+
+Recall mezcla snapshots con resultados locales aunque ya haya coincidencias, dentro del límite existente de 800 caracteres. Conserva origen/proyecto/ID/revisión y aplicabilidad; si estos no caben no emite el fragmento compartido sin contexto. Los archivos de otra raíz no se consideran obsoletos por faltar en el destino. Un catálogo no disponible no bloquea el recall local. La evidencia acredita el resultado reportado por herramientas, no corrección semántica universal.
+
 ## 3. Flujo del Ciclo de Vida del Turno
 
 ```
@@ -84,6 +100,23 @@ El mayor riesgo en sistemas de memoria para agentes de desarrollo es la **depend
 ```
 
 ---
+
+## Controles de captura y privacidad
+
+- `/dc-sentinel off` pausa inmediatamente los hooks de captura y recall automático; `/dc-sentinel on` los reactiva sin reiniciar Pi. El comando permanece disponible si la preferencia inicial está desactivada. Un turno interrumpido no se vuelca al reactivar: la captura continúa con el siguiente prompt.
+- Si falla la escritura de preferencias, se informa el error. `off` pausa la sesión actual por seguridad, pero no garantiza la pausa tras reiniciar; `on` no anuncia ni aplica una activación que no pudo persistir.
+- Los prompts de usuario, textos del asistente y argumentos/tareas capturados por los hooks pasan por Memory Defense antes de llegar a frames, extracción o crónicas. La salida completa de herramientas se sanea **antes** de podar, evitando cortar un bloque privado y guardar sus extremos.
+- Las URLs con credenciales de Postgres/PostgreSQL, MySQL, MongoDB/MongoDB+SRV y Redis/Rediss conservan su estructura y sustituyen la contraseña por `[REDACTED_PASSWORD]`.
+- Es una defensa por patrones conocidos y bloques `<private>`/`<secret>` completos, no una garantía de detectar todo secreto. No modifica el transcript de Pi ni sanea retroactivamente memorias existentes. No introduce migraciones ni cambia el ranking de recall.
+
+## Identidad y procedencia (T3)
+
+- La identidad es la ruta absoluta normalizada léxicamente (`path.resolve`), sin `realpath`: dos raíces con el mismo basename tienen archivos distintos; los alias simbólicos no se fusionan.
+- SQLite es la persistencia indexada de frames, notas y procedimientos; Markdown mantiene la crónica legible existente. No se añade un espejo JSON ni llamadas a proveedores.
+- El destino es `dc-sentinela/.cache/sentinel-<proyecto>-<sha256-raíz>.db` si existe esa carpeta, o el directorio de runtime de DC Studio con el mismo nombre aislado. No se abre automáticamente `sentinel.db`, el archivo anterior por basename ni una base global histórica.
+- Las nuevas inserciones incluyen `project_path`; el esquema añade esa columna nullable de forma idempotente. Los registros históricos permanecen sin procedencia conocida: no se rellenan por el cwd ni por coincidencias de nombre. Las actualizaciones/deduplicaciones conservan la procedencia previa.
+- Captura y recall usan la misma raíz; settlement conserva la raíz del turno. Fallar al abrir SQLite no detiene grabadora/crónica; cambiar de raíz descarta el handle anterior y shutdown lo cierra.
+- **Pendiente:** inventario exacto autorizado, clasificación, importación y limpieza histórica. No se ha ejecutado migración de datos reales ni eliminación. Las memorias importantes desconocidas deben preservarse para clasificación explícita (`pendiente-de-clasificar` y motivo), nunca descartarse por este cambio. No cambia los predicados globales ni el ranking/reutilización entre proyectos (T4).
 
 ## 4. Inyección Efímera y Guardián de Tencent
 

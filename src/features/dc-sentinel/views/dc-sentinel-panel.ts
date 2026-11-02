@@ -29,6 +29,7 @@ import {
   type ChronicleFileItem,
   CHRONICLE_CONTENT_LIMIT_BYTES,
 } from "../core/dc-sentinel-recorder.ts";
+import { SentinelSharedCatalogue } from "../core/dc-sentinel-shared.ts";
 import { SentinelDatabase } from "../core/dc-sentinel-db.ts";
 import { resolveMetroLine } from "../core/dc-sentinel-deterministic-extractor.ts";
 import { getProjectObservations, type EngramObservation } from "../../dc-engram/dc-engram-db.ts";
@@ -127,6 +128,7 @@ export interface SentinelPanelOptions {
   maxRows?: number | (() => number);
   initialMode?: SentinelViewMode;
   db?: SentinelDatabase;
+  sharedCatalogueFactory?: () => SentinelSharedCatalogue;
 }
 
 export class SentinelPanel implements Component {
@@ -137,6 +139,10 @@ export class SentinelPanel implements Component {
   private requestRender: () => void;
   private maxRowsOption?: number | (() => number);
   private db: SentinelDatabase;
+
+  private sharedCatalogueFactory?: () => SentinelSharedCatalogue;
+  private publication?: { id: number; revision: number; fingerprint: string; title: string; applicability: string; confirming: boolean };
+  private publicationMessage = "";
 
   private mode: SentinelViewMode = "metro";
   private turns: SentinelTurnRecord[] = [];
@@ -155,6 +161,7 @@ export class SentinelPanel implements Component {
   private readonly headerRows = 2;
 
   constructor(options: SentinelPanelOptions) {
+    this.sharedCatalogueFactory = options.sharedCatalogueFactory;
     this.theme = options.theme;
     this.requestRender = options.requestRender;
     this.recorder = options.recorder || globalSentinelRecorder;
@@ -372,6 +379,14 @@ export class SentinelPanel implements Component {
   }
 
   render(width: number): string[] {
+    if (this.publication) {
+      const p = this.publication;
+      return ["Publicar snapshot compartido (no cambia el scope local)",
+        `${this.projectRoot} · #${p.id} r${p.revision} · ${p.title}`,
+        `Huella: ${p.fingerprint}`, `Aplicabilidad: ${p.applicability}`,
+        p.confirming ? "¿Autoriza publicar esta revisión y aplicabilidad? [y] Sí · [n/Esc] Cancelar" : "Escriba aplicabilidad; [Enter] revisar · [Esc] cancelar",
+      ].map(line => truncateToWidth(line, width, "…"));
+    }
     const t = this.theme;
     const safeW = Math.max(50, width);
 
@@ -432,7 +447,9 @@ export class SentinelPanel implements Component {
 
     const searchWidth = Math.min(36, Math.max(16, rightW - visibleWidth(" 🚇 Líneas") - 4));
     const searchRender = this.searchInput.render(searchWidth);
-    const headerRight = justifyRow(titleText, searchRender + " ", rightW);
+    const headerRight = this.publicationMessage
+      ? truncateToWidth(this.publicationMessage, rightW, "…")
+      : justifyRow(titleText, searchRender + " ", rightW);
 
     const lines: string[] = [];
     lines.push(`${pad(headerLeft, leftW)} ${t.fg("border", "│")} ${pad(headerRight, rightW)}`);
@@ -535,7 +552,7 @@ export class SentinelPanel implements Component {
       rightContent.push(
         t.fg(
           "dim",
-          " [Enter] Transbordo  ·  [d] Olvidar  ·  [p] Fijar  ·  [g] Global  ·  [c] Copiar",
+          " [Enter] Transbordo  ·  [d] Olvidar  ·  [p] Fijar  ·  [g] Publicar  ·  [c] Copiar",
         ),
       );
     } else if (this.mode === "procedures") {
@@ -724,6 +741,30 @@ export class SentinelPanel implements Component {
   }
 
   handleInput(data: string): boolean {
+    if (this.publication) {
+      const p = this.publication;
+      if (matchesKey(data, Key.escape) || (p.confirming && data.toLowerCase() === "n")) {
+        this.publication = undefined;
+        this.publicationMessage = "Publicación cancelada";
+      } else if (p.confirming && data.toLowerCase() === "y") {
+        let catalogue: SentinelSharedCatalogue | undefined;
+        try {
+          catalogue = this.sharedCatalogueFactory?.() ?? new SentinelSharedCatalogue();
+          catalogue.publish(this.db, p.id, { approved: true, revision: p.revision,
+            fingerprint: p.fingerprint, applicability: p.applicability });
+          this.publicationMessage = "Publicada: snapshot compartido";
+        } catch {
+          this.publicationMessage = "No publicada: revisión/evidencia inválida o fallo de almacenamiento";
+        } finally { if (!this.sharedCatalogueFactory) catalogue?.close(); }
+        this.publication = undefined;
+      } else if (!p.confirming) {
+        if (matchesKey(data, Key.enter) && p.applicability.trim()) p.confirming = true;
+        else if (matchesKey(data, Key.backspace)) p.applicability = p.applicability.slice(0, -1);
+        else if (data.length === 1 && data >= " " && p.applicability.length < 240) p.applicability += data;
+      }
+      this.requestRender();
+      return true;
+    }
     const filtered = this.getFilteredItems();
 
     // Tab: Alternar modos principales
@@ -811,9 +852,12 @@ export class SentinelPanel implements Component {
       if (this.mode === "metro" && (data === "g" || data === "G")) {
         const current = filtered[this.selectedIndex];
         if (current && current.raw?.id) {
-          const note = current.raw as SentinelNote;
-          this.db.saveNote({ ...note, scope: "global" });
-          this.reload();
+          const note = this.db.getNoteById(current.raw.id);
+          this.publicationMessage = "";
+          if (note?.verification && note.project_path === path.resolve(this.projectRoot)) {
+            this.publication = { id: note.id!, revision: note.revisionCount!, fingerprint: note.verification.fingerprint,
+              title: note.title, applicability: "", confirming: false };
+          } else this.publicationMessage = "No publicada: falta evidencia actual";
           this.requestRender();
           return true;
         }
@@ -959,6 +1003,7 @@ export class SentinelPanel implements Component {
   }
 
   handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
+    if (this.publication) return { handled: true };
     const filtered = this.getFilteredItems();
 
     if (event.type === "wheel") {

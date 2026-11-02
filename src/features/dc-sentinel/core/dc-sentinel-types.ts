@@ -1,4 +1,8 @@
 export interface SentinelRecallItem {
+  sourceRoot?: string;
+  sourceProject?: string;
+  sourceRevision?: number;
+  applicability?: string;
   id: number;
   type: string;
   title: string;
@@ -16,6 +20,8 @@ export interface SentinelRecallResult {
 }
 
 export interface SentinelToolExecution {
+  turnId?: string;
+  project_path?: string;
   callId: string;
   toolName: string;
   args: Record<string, unknown>;
@@ -36,6 +42,7 @@ export interface SentinelSubagentLaunch {
 }
 
 export interface SentinelTurnRecord {
+  project_path?: string;
   turnId: string;
   timestamp: string;
   userPrompt: string;
@@ -88,6 +95,7 @@ export const SENTINEL_TYPE_GLYPHS: Record<SentinelNoteType, string> = {
 };
 
 export interface SmartFrame {
+  project_path?: string;
   id?: number;
   frameSeq?: number;
   sessionId: string;
@@ -108,7 +116,22 @@ export interface SentinelBlastRadius {
   summary?: string;
 }
 
+export interface SentinelVerification {
+  projectPath: string;
+  turnId: string;
+  callId: string;
+  command: string;
+  startedAt: number;
+  endedAt: number;
+  isError: false;
+  output?: string;
+  fingerprint: string;
+  revision: number;
+}
+
 export interface SentinelNote {
+  verification?: SentinelVerification;
+  project_path?: string;
   id?: number;
   project: string;
   scope?: "project" | "global" | string;
@@ -134,6 +157,7 @@ export interface SentinelNote {
 }
 
 export interface SentinelProcedure {
+  project_path?: string;
   id?: number;
   project: string;
   name: string;

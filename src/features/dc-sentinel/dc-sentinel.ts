@@ -34,6 +34,9 @@ export interface DcSentinelExtensionOptions {
   recorder?: SentinelRecorder;
   enableRecall?: boolean;
   enableJournal?: boolean;
+  gitStatsExtractor?: typeof extractSessionGitStats;
+  databaseFactory?: (projectName: string, root: string) => Pick<SentinelDatabase,
+    "getDbPath" | "close" | "recordFrame" | "saveNote" | "saveProcedure" | "getStats">;
 }
 
 /**
@@ -52,30 +55,59 @@ export default function dcSentinelExtension(
   }
 
   const prefs = readSentinelPrefs();
-  if (prefs.enabled === false) {
-    return;
-  }
+  let enabled = prefs.enabled;
 
   const recorder = options.recorder || globalSentinelRecorder;
   const enableRecall = options.enableRecall ?? prefs.enableRecall;
   const enableJournal = options.enableJournal ?? prefs.enableJournal;
 
-  let activeDb: SentinelDatabase | null = null;
+  let activeDb: ReturnType<NonNullable<DcSentinelExtensionOptions["databaseFactory"]>> | null = null;
+  let activeDbRoot: string | undefined;
+  let dbGeneration = 0;
+  let turnRoot: string | undefined;
   let lastAssistantSnippet: string | undefined;
+  let capturingTurn = false;
+  let captureEpoch = 0;
+  const liveCalls = new Set<string>();
 
-  function getOrInitDb(cwd?: string): SentinelDatabase {
-    const root = cwd || process.cwd();
-    const projName = path.basename(root) || "default";
-    if (!activeDb || activeDb.getDbPath().indexOf(projName) === -1) {
-      if (activeDb) activeDb.close();
-      activeDb = new SentinelDatabase(projName, root);
-    }
+  function sanitizeArgs(args: Record<string, unknown>): Record<string, unknown> {
+    const clean = (value: unknown): unknown => {
+      if (typeof value === "string") return sanitizeMemoryDefense(value).text;
+      if (Array.isArray(value)) return value.map(clean);
+      if (value && typeof value === "object") {
+        return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, clean(item)]));
+      }
+      return value;
+    };
+    return clean(args) as Record<string, unknown>;
+  }
+
+  function closeDb(): void {
+    dbGeneration++;
+    const previous = activeDb;
+    activeDb = null;
+    activeDbRoot = undefined;
+    try { previous?.close(); } catch { /* best-effort disposal */ }
+  }
+
+  function getOrInitDb(cwd?: string): typeof activeDb {
+    const root = path.resolve(cwd || process.cwd());
+    if (activeDb && activeDbRoot === root) return activeDb;
+    closeDb();
+    try {
+      const projName = path.basename(root) || "default";
+      activeDb = options.databaseFactory ? options.databaseFactory(projName, root) : new SentinelDatabase(projName, root);
+      activeDbRoot = root;
+    } catch { /* Recording and chronicle remain available without SQLite. */ }
     return activeDb;
   }
 
+  pi.on("session_shutdown", () => { closeDb(); });
+
   // Ciclo de vida de la sesión
   pi.on("session_start", (_event: unknown, ctx: ExtensionContext) => {
-    const root = ctx.cwd || process.cwd();
+    if (!enabled) return;
+    const root = path.resolve(ctx.cwd || process.cwd());
     recorder.setProjectRoot(root);
     const sessId = (ctx as any)?.session?.id || `sess-${Date.now()}`;
     recorder.setSessionId(sessId);
@@ -84,9 +116,14 @@ export default function dcSentinelExtension(
 
   // Pre-Flight Recall: Antes de que el modelo empiece a pensar
   pi.on("before_agent_start", async (event: any, ctx: ExtensionContext) => {
+    if (!enabled) return;
+    capturingTurn = true;
     lastAssistantSnippet = undefined;
     const promptText = event?.prompt || "";
-    const root = ctx.cwd || process.cwd();
+    const capturedPrompt = sanitizeMemoryDefense(promptText).text;
+    const root = path.resolve(ctx.cwd || process.cwd());
+    turnRoot = root;
+    recorder.setProjectRoot(root);
     const db = getOrInitDb(root);
     const sessId = recorder.getSessionId();
 
@@ -97,7 +134,7 @@ export default function dcSentinelExtension(
         const recall = performPreFlightRecall(promptText, { cwd: root });
         if (recall.formattedBlock && event.systemPromptOptions) {
           appendRecallToPromptOptions(event.systemPromptOptions, recall.formattedBlock);
-          recalledTitles = recall.items.map((i) => i.title);
+          recalledTitles = recall.items.map((i) => sanitizeMemoryDefense(i.title).text);
         }
       } catch {
         /* best-effort, no interrumpir el agente */
@@ -106,26 +143,29 @@ export default function dcSentinelExtension(
 
     // Registrar Smart Frame inmutable del Prompt (Memvid Pattern)
     try {
-      db.recordFrame({
+      db?.recordFrame({
+        project_path: root,
         sessionId: sessId,
         turnId: `turn-${Date.now()}`,
         actor: "[USER]",
         eventType: "user_prompt",
         title: "Prompt del Usuario",
-        content: promptText,
+        content: capturedPrompt,
       });
     } catch {
       /* best-effort */
     }
 
-    recorder.startTurn(promptText, recalledTitles);
+    recorder.startTurn(capturedPrompt, recalledTitles);
   });
 
   // Grabadora en vuelo: Inicios de herramientas y subagentes
   pi.on("tool_execution_start", (event: any) => {
+    if (!enabled || !capturingTurn) return;
     const callId = event.toolCallId || `call-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
     const toolName = event.toolName || "unknown_tool";
-    const args = event.args || {};
+    const args = sanitizeArgs(event.args || {});
+    liveCalls.add(callId);
     recorder.recordToolStart(callId, toolName, args);
 
     if (toolName === "subagent_run") {
@@ -137,23 +177,24 @@ export default function dcSentinelExtension(
 
   // Grabadora en vuelo: Fin de herramientas y subagentes con saneamiento
   pi.on("tool_execution_end", (event: any) => {
+    if (!enabled || !capturingTurn) return;
     const callId = event.toolCallId || "";
+    if (!liveCalls.delete(callId)) return;
     const toolName = event.toolName || "unknown";
     const args = event.args || {};
-    const isError = Boolean(event.isError);
+    // The host supplies result + an explicit isError status (not an exit-code field).
+    // Missing status must remain unknown, never coerced into success.
+    const isError = typeof event.isError === "boolean" ? event.isError : undefined;
+    const output = event.result ?? event.output;
+    let rawOutput = typeof output === "string" ? output : JSON.stringify(output ?? "");
 
-    let rawOutput = typeof event.output === "string" ? event.output : JSON.stringify(event.output || "");
-
-    // 1. Mastra Pattern: Redactar archivos de skill cargados para no quemar tokens
+    // Sanitize the complete output before any transformation can cut a secret/private block.
+    rawOutput = sanitizeMemoryDefense(rawOutput).text;
     rawOutput = redactSkillResult(toolName, args, rawOutput);
-
-    // 2. Cavemem Pattern: Podar volcados gigantescos (>2000 chars)
+    // Skill summaries can introduce text from raw paths; defend that boundary before pruning.
+    rawOutput = sanitizeMemoryDefense(rawOutput).text;
     rawOutput = pruneToolOutput(rawOutput, 2000);
-
-    // 3. Hindsight Memory Defense: Censurar 45 patrones de secrets y bloques <private>
-    const defense = sanitizeMemoryDefense(rawOutput);
-
-    recorder.recordToolEnd(callId, defense.text, isError);
+    recorder.recordToolEnd(callId, rawOutput, isError);
 
     if (toolName === "subagent_run") {
       const activeLeases = (globalLeaseManager as any).leases;
@@ -166,25 +207,34 @@ export default function dcSentinelExtension(
 
   // Captura de texto del asistente
   pi.on("message_update", (event: any) => {
+    if (!enabled || !capturingTurn) return;
     const text = event?.content?.[0]?.text;
     if (typeof text === "string" && text.length > 0) {
-      lastAssistantSnippet = text;
+      lastAssistantSnippet = sanitizeMemoryDefense(text).text;
     }
   });
 
   // Post-Flight Settlement: Cuando la respuesta se asienta y la terminal se libera
   pi.on("agent_settled", async () => {
+    if (!enabled || !capturingTurn) return;
+    capturingTurn = false;
+    const epoch = captureEpoch;
     const completedTurn = recorder.endTurn(lastAssistantSnippet);
     if (!completedTurn || !enableJournal) return;
 
-    const root = process.cwd();
+    const root = turnRoot || path.resolve(process.cwd());
+    turnRoot = undefined;
+    recorder.setProjectRoot(root);
     const db = getOrInitDb(root);
+    const generation = dbGeneration;
+    const ownsSettlement = () => enabled && epoch === captureEpoch && generation === dbGeneration;
     const sessId = recorder.getSessionId();
     const projName = path.basename(root) || "default";
 
     // 1. Registrar Smart Frame de la respuesta del Asistente
     try {
-      db.recordFrame({
+      db?.recordFrame({
+        project_path: root,
         sessionId: sessId,
         turnId: completedTurn.turnId,
         actor: "[ORCHESTRATOR]",
@@ -198,20 +248,24 @@ export default function dcSentinelExtension(
 
     // 2. Extraer verdad empírica de Git + Notas Atómicas + Recetas Ejecutables (Procedures)
     try {
-      const gitStats = await extractSessionGitStats(root);
+      const gitStats = await (options.gitStatsExtractor || extractSessionGitStats)(root);
+      if (!ownsSettlement()) return;
 
       const notes = extractDeterministicNotes([completedTurn], projName, gitStats);
       for (const n of notes) {
-        db.saveNote(n);
+        db?.saveNote({ ...n, project_path: root });
       }
 
       const procedures = extractDeterministicProcedures([completedTurn], projName, gitStats);
       for (const proc of procedures) {
-        db.saveProcedure(proc);
+        db?.saveProcedure({ ...proc, project_path: root });
       }
     } catch {
       /* best-effort */
     }
+
+    // Extraction may reject after a switch/shutdown too; never flush under a new owner.
+    if (!ownsSettlement()) return;
 
     // 3. Vuelco continuo a docs/chronicle/
     try {
@@ -229,15 +283,28 @@ export default function dcSentinelExtension(
       const action = parts[0]?.toLowerCase() || "";
       const query = parts.slice(1).join(" ");
 
-      if (action === "on" || action === "enable") {
-        writeSentinelPrefs({ enabled: true });
-        dcNotifier.notify(ctx, "⛩️ DC Sentinel: Activado");
+      if (["on", "enable", "off", "disable"].includes(action)) {
+        const next = action === "on" || action === "enable";
+        if (!next) {
+          enabled = false;
+          capturingTurn = false;
+          captureEpoch++;
+          liveCalls.clear();
+          lastAssistantSnippet = undefined;
+        }
+        if (!writeSentinelPrefs({ enabled: next })) {
+          dcNotifier.notify(ctx, next
+            ? "DC Sentinel: Error al guardar preferencias; no se activó."
+            : "DC Sentinel: Error al guardar preferencias; captura pausada solo en esta sesión.", "error");
+          return;
+        }
+        enabled = next;
+        dcNotifier.notify(ctx, `⛩️ DC Sentinel: ${enabled ? "Activado" : "Desactivado"}`);
         return;
       }
 
-      if (action === "off" || action === "disable") {
-        writeSentinelPrefs({ enabled: false });
-        dcNotifier.notify(ctx, "⛩️ DC Sentinel: Desactivado");
+      if (!enabled) {
+        dcNotifier.notify(ctx, "⛩️ DC Sentinel: Desactivado. Usá /dc-sentinel on para activar.");
         return;
       }
 
@@ -304,6 +371,10 @@ export default function dcSentinelExtension(
       const sessId = recorder.getSessionId();
       const root = ctx.cwd || process.cwd();
       const db = getOrInitDb(root);
+      if (!db) {
+        dcNotifier.notify(ctx, "DC Sentinel: SQLite no disponible; grabadora y crónica continúan.", "error");
+        return;
+      }
       const stats = db.getStats();
 
       const totalTools = turns.reduce((acc, t) => acc + t.toolsExecuted.length, 0);
@@ -332,6 +403,7 @@ export default function dcSentinelExtension(
     pi.registerShortcut("alt+shift+s" as never, {
       description: "Abre el visualizador de bitácora y registros de vuelo de DC Sentinel",
       handler: async (ctx: ExtensionContext) => {
+        if (!enabled) return;
         if (ctx.hasUI && ctx.mode === "tui") {
           await openSentinelViewer(ctx);
         }

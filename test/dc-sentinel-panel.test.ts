@@ -252,7 +252,12 @@ test("dc-sentinel-panel: mouse interactions for tab click, item click and wheel"
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
-test("dcSentinelExtension registers alt+shift+s shortcut and command /dc-sentinel", () => {
+test("dcSentinelExtension registers alt+shift+s shortcut and command /dc-sentinel", (t) => {
+  const previousChild = process.env.GENTLE_PI_AGENTS_CHILD;
+  t.after(() => {
+    if (previousChild === undefined) delete process.env.GENTLE_PI_AGENTS_CHILD;
+    else process.env.GENTLE_PI_AGENTS_CHILD = previousChild;
+  });
   const registeredShortcuts = new Map<string, any>();
   const registeredCommands = new Map<string, any>();
 
@@ -266,6 +271,12 @@ test("dcSentinelExtension registers alt+shift+s shortcut and command /dc-sentine
     },
   } as unknown as ExtensionAPI;
 
+  process.env.GENTLE_PI_AGENTS_CHILD = "1";
+  dcSentinelExtension(mockPi);
+  assert.equal(registeredCommands.size, 0, "Child sessions must not register commands");
+  assert.equal(registeredShortcuts.size, 0, "Child sessions must not register shortcuts");
+
+  process.env.GENTLE_PI_AGENTS_CHILD = "0";
   dcSentinelExtension(mockPi);
 
   assert.ok(registeredCommands.has("dc-sentinel"));

@@ -50,13 +50,15 @@ export function readSentinelPrefs(): DcSentinelPrefs {
 /**
  * Persiste las preferencias en ~/.pi/agent/dc-studio/sentinel.json.
  */
-export function writeSentinelPrefs(p: Partial<DcSentinelPrefs>): void {
+export function writeSentinelPrefs(p: Partial<DcSentinelPrefs>): boolean {
   try {
     const current = readSentinelPrefs();
-    cachedPrefs = { ...current, ...p };
+    const next = { ...current, ...p };
     fs.mkdirSync(path.dirname(SENTINEL_CONFIG_FILE), { recursive: true });
-    fs.writeFileSync(SENTINEL_CONFIG_FILE, JSON.stringify(cachedPrefs, null, 2), "utf8");
+    fs.writeFileSync(SENTINEL_CONFIG_FILE, JSON.stringify(next, null, 2), "utf8");
+    cachedPrefs = next;
+    return true;
   } catch {
-    /* best-effort */
+    return false;
   }
 }

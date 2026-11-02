@@ -2,6 +2,8 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { getProjectObservations, type EngramObservation } from "../../dc-engram/dc-engram-db.ts";
 import type { SentinelRecallItem, SentinelRecallResult } from "./dc-sentinel-types.ts";
+import { SentinelSharedCatalogue } from "./dc-sentinel-shared.ts";
+import { sanitizeMemoryDefense } from "./dc-sentinel-defense.ts";
 import { SentinelDatabase } from "./dc-sentinel-db.ts";
 
 /**
@@ -166,13 +168,43 @@ export interface PerformRecallOptions {
   projectName?: string;
   cwd?: string;
   observationsLoader?: () => EngramObservation[];
+  sharedCatalogueFactory?: () => SentinelSharedCatalogue;
 }
 
 /**
  * Ejecuta el Pre-Flight Recall buscando en la memoria de Engram observaciones
  * relevantes al prompt actual del usuario.
  */
-export function performPreFlightRecall(
+export function performPreFlightRecall(prompt: string, options: PerformRecallOptions = {}): SentinelRecallResult {
+  const local = performLocalRecall(prompt, options);
+  if (!local.keywords.length) return local;
+  let catalogue: SentinelSharedCatalogue | undefined;
+  let shared: SentinelRecallItem[] = [];
+  const limit = Math.max(1, Math.min(20, options.limit ?? 3));
+  try {
+    catalogue = options.sharedCatalogueFactory?.() ?? new SentinelSharedCatalogue();
+    shared = catalogue.search(prompt, limit).map(n => ({
+      id: n.sourceId, type: n.type, title: n.title, content: n.content, scope: "global", score: 5,
+      sourceRoot: n.sourceRoot, sourceProject: n.sourceProject, sourceRevision: n.sourceRevision,
+      applicability: n.applicability,
+    })); // Snapshots belong to their source; never test foreign files against cwd.
+  } catch { /* Shared storage unavailable: retain local recall. */ }
+  finally { if (!options.sharedCatalogueFactory) catalogue?.close(); }
+  // Reserve a shared slot even when local results fill the limit.
+  const items = shared.length ? [shared[0]!, ...local.items, ...shared.slice(1)].slice(0, limit) : local.items;
+  return { ...local, items, formattedBlock: formatRecallPromptSection(items) };
+}
+
+function recallSafe(item: { type?: string; title?: string; content?: string; status?: string; expiresAt?: string }): boolean {
+  const text = `${item.title ?? ""} ${item.content ?? ""}`;
+  const clean = sanitizeMemoryDefense(text);
+  return !["sensitive", "security_note", "security_alert"].includes(item.type ?? "") &&
+    (!item.status || item.status === "active") &&
+    (!item.expiresAt || Date.parse(item.expiresAt) > Date.now()) &&
+    !clean.redactedCount && !clean.privateBlocksStripped && !/REDACTED|<(?:private|secret)>/i.test(text);
+}
+
+function performLocalRecall(
   prompt: string,
   options: PerformRecallOptions = {},
 ): SentinelRecallResult {
@@ -186,9 +218,14 @@ export function performPreFlightRecall(
   // 1. Motor Soberano Local: Buscar primero en SentinelDatabase (SQLite FTS5 trigrams)
   if (!options.observationsLoader) {
     try {
-      const db = new SentinelDatabase(options.projectName, options.cwd);
-      const dbResults = db.searchNotes(prompt, { limit: maxItems * 2 });
-      db.close();
+      const root = path.resolve(options.cwd || process.cwd());
+      const db = new SentinelDatabase(options.projectName || path.basename(root) || "default", root);
+      let dbResults;
+      try {
+        dbResults = db.searchNotes(prompt, { limit: maxItems * 2 }).filter(recallSafe);
+      } finally {
+        db.close();
+      }
 
       if (dbResults.length > 0) {
         // Grounding Gate: evaluar frescura de los ítems de base de datos
@@ -236,6 +273,7 @@ export function performPreFlightRecall(
   const scoredItems: SentinelRecallItem[] = [];
 
   for (const obs of observations) {
+    if (!recallSafe(obs)) continue;
     const score = scoreObservation(obs, keywords);
     if (score >= minScore) {
       // Grounding Gate: evaluar frescura contra el filesystem
@@ -279,34 +317,38 @@ export function formatRecallPromptSection(
   items: SentinelRecallItem[],
   maxChars: number = DEFAULT_MAX_RECALL_CHARS,
 ): string {
-  if (!items || items.length === 0) return "";
+  if (!items || items.length === 0 || maxChars <= 0) return "";
 
   const header = [
     "<!-- dc:sentinel:recall:start -->",
     "## ⛩️ Memoria Histórica del Proyecto (DC Sentinel Pre-Flight Recall)",
-    "> Lecciones, decisiones y arquitectura relevantes recuperadas de Engram para guiar esta respuesta y evitar alucinaciones:",
+    "> Memoria local y snapshots compartidos; comprobar aplicabilidad antes de reutilizar.",
   ].join("\n");
 
   const footer = "\n<!-- dc:sentinel:recall:end -->";
   const overhead = header.length + footer.length + 1; // +1 por \n
 
   if (overhead >= maxChars) {
-    return `<!-- dc:sentinel:recall:start -->\n## ⛩️ Memoria (Recall)${footer}`;
+    return "";
   }
 
   const availableForItems = maxChars - overhead;
   let currentItemsText = "";
 
-  for (const item of items) {
+  for (const [index, item] of items.entries()) {
     const cleanContent = (item.content || "")
       .replace(/\r?\n+/g, " ")
       .trim();
 
-    const titlePrefix = `- **[${item.type.toUpperCase()}] ${item.title}**: `;
-    const remaining = availableForItems - currentItemsText.length - (currentItemsText ? 1 : 0);
+    const provenance = item.sourceRoot
+      ? ` [origen: ${item.sourceProject} ${item.sourceRoot} #${item.id} r${item.sourceRevision}; aplicar: ${item.applicability}]`
+      : "";
+    const titlePrefix = `- **[${item.type.toUpperCase()}] ${item.title}**${provenance}: `;
+    const reserve = item.sourceRoot ? Math.min(100, Math.floor(availableForItems / items.length)) * (items.length - index - 1) : 0;
+    const remaining = availableForItems - currentItemsText.length - (currentItemsText ? 1 : 0) - reserve;
 
     if (remaining <= titlePrefix.length + 10) {
-      break;
+      continue; // Never emit a shared snippet without its complete provenance/applicability.
     }
 
     const maxSnippetLen = remaining - titlePrefix.length;

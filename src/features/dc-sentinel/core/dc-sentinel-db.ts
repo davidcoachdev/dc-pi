@@ -31,25 +31,35 @@ export function normalizeTextForHash(text: string): string {
   return crypto.createHash("sha256").update(cleaned).digest("hex").slice(0, 32);
 }
 
+export function sentinelNoteFingerprint(note: Pick<SentinelNote, "project" | "project_path" | "type" | "title" | "content" | "filesAffected" | "topicKey">): string {
+  return crypto.createHash("sha256").update(JSON.stringify([
+    note.project, note.project_path, note.type, note.title, note.content,
+    note.filesAffected ?? [], note.topicKey ?? null,
+  ])).digest("hex");
+}
+
 /**
  * Resuelve la ruta canónica del archivo SQLite de Sentinel.
- * Si el proyecto actual tiene una carpeta `dc-sentinela/`, usa `dc-sentinela/.cache/sentinel.db`.
- * De lo contrario, usa `~/.pi/agent/dc-studio/sentinel-<proyecto>.db` (Blast Radius Cero).
+ * Aísla por hash de raíz absoluta léxica, incluso bajo `dc-sentinela/.cache/`.
+ * Nunca abre automáticamente los nombres históricos sin hash.
  */
-export function resolveSentinelDbPath(project: string = "default", projectRoot?: string): string {
-  const safeProjectName = project.replace(/[^a-zA-Z0-9_-]/g, "_").toLowerCase() || "default";
+export function resolveSentinelDbPath(project?: string, projectRoot?: string): string {
+  const root = path.resolve(projectRoot || process.cwd());
+  const safeProjectName = (project || path.basename(root) || "default").replace(/[^a-zA-Z0-9_-]/g, "_").toLowerCase();
+  const identity = crypto.createHash("sha256").update(root).digest("hex");
+  const filename = `sentinel-${safeProjectName}-${identity}.db`;
 
-  if (projectRoot) {
-    const projectSentinelDir = path.join(projectRoot, "dc-sentinela");
+  {
+    const projectSentinelDir = path.join(root, "dc-sentinela");
     if (fs.existsSync(projectSentinelDir)) {
       const cacheDir = path.join(projectSentinelDir, ".cache");
       fs.mkdirSync(cacheDir, { recursive: true });
-      return path.join(cacheDir, "sentinel.db");
+      return path.join(cacheDir, filename);
     }
   }
 
   const dcStudioDir = getDcStudioDir();
-  return path.join(dcStudioDir, `sentinel-${safeProjectName}.db`);
+  return path.join(dcStudioDir, filename);
 }
 
 /**
@@ -61,13 +71,16 @@ export class SentinelDatabase {
   private dbPath: string;
   private currentProject: string;
 
-  constructor(project: string = "default", projectRoot?: string, inMemory: boolean = false) {
-    this.currentProject = project;
+  private projectRoot: string;
+
+  constructor(project?: string, projectRoot?: string, inMemory: boolean = false) {
+    this.projectRoot = path.resolve(projectRoot || process.cwd());
+    this.currentProject = project || path.basename(this.projectRoot) || "default";
     if (inMemory) {
       this.dbPath = ":memory:";
       this.db = new DatabaseSync(":memory:");
     } else {
-      this.dbPath = resolveSentinelDbPath(project, projectRoot);
+      this.dbPath = resolveSentinelDbPath(this.currentProject, this.projectRoot);
       const parentDir = path.dirname(this.dbPath);
       if (!fs.existsSync(parentDir)) {
         fs.mkdirSync(parentDir, { recursive: true });
@@ -75,7 +88,12 @@ export class SentinelDatabase {
       this.db = new DatabaseSync(this.dbPath);
     }
 
-    this.initializeSchema();
+    try {
+      this.initializeSchema();
+    } catch (error) {
+      this.close();
+      throw error;
+    }
   }
 
   getDbPath(): string {
@@ -185,6 +203,17 @@ export class SentinelDatabase {
       CREATE INDEX IF NOT EXISTS idx_links_target ON links(target_id);
     `);
 
+    // Unknown historical provenance remains NULL; no attribution by current root.
+    for (const table of ["frames", "notes", "procedures"]) {
+      const columns = this.db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[];
+      if (!columns.some((column) => column.name === "project_path")) {
+        this.db.exec(`ALTER TABLE ${table} ADD COLUMN project_path TEXT`);
+      }
+    }
+
+    const noteColumns = this.db.prepare("PRAGMA table_info(notes)").all() as { name: string }[];
+    if (!noteColumns.some(c => c.name === "verification_json")) this.db.exec("ALTER TABLE notes ADD COLUMN verification_json TEXT");
+
     // Inicializar tabla virtual FTS5 trigram con triggers automáticos
     this.db.exec(`
       CREATE VIRTUAL TABLE IF NOT EXISTS notes_fts USING fts5(
@@ -232,8 +261,8 @@ export class SentinelDatabase {
 
     const stmt = this.db.prepare(`
       INSERT INTO frames (
-        frame_seq, session_id, turn_id, actor, event_type, title, content, metadata_json, checksum, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+        frame_seq, session_id, turn_id, actor, event_type, title, content, metadata_json, checksum, project_path, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
     `);
 
     const result = stmt.run(
@@ -246,10 +275,12 @@ export class SentinelDatabase {
       frame.content,
       metadataStr,
       checksum,
+      frame.project_path ? path.resolve(frame.project_path) : this.projectRoot,
     );
 
     return {
       ...frame,
+      project_path: frame.project_path ? path.resolve(frame.project_path) : this.projectRoot,
       id: Number(result.lastInsertRowid),
       frameSeq: nextSeq,
       checksum,
@@ -283,6 +314,7 @@ export class SentinelDatabase {
 
     return rows.map((r) => ({
       id: r.id,
+      project_path: r.project_path ?? undefined,
       frameSeq: r.frame_seq,
       sessionId: r.session_id,
       turnId: r.turn_id,
@@ -304,6 +336,14 @@ export class SentinelDatabase {
     const project = note.project || this.currentProject;
     const normHash = note.normalizedHash || normalizeTextForHash(`${note.title} ${note.content}`);
 
+    const verificationFor = (revision: number) => {
+      const evidence = note.verification;
+      if (!evidence || (evidence.revision !== 0 && evidence.revision !== revision) ||
+          evidence.projectPath !== this.projectRoot || note.project_path !== this.projectRoot ||
+          evidence.fingerprint !== sentinelNoteFingerprint(note)) return null;
+      return JSON.stringify({ ...evidence, revision });
+    };
+
     // 1. Detección de duplicado exacto por normalized_hash
     const dupStmt = this.db.prepare(`
       SELECT * FROM notes
@@ -317,14 +357,17 @@ export class SentinelDatabase {
       this.db
         .prepare(`
           UPDATE notes
-          SET duplicate_count = ?, last_seen_at = datetime('now')
+          SET duplicate_count = ?, proof_count = ?, status = ?, verification_json = ?, last_seen_at = datetime('now')
           WHERE id = ?
         `)
-        .run(updatedCount, existingDup.id);
+        .run(updatedCount, note.proofCount ?? 0, note.status || "proposal", verificationFor(existingDup.revision_count), existingDup.id);
 
       return this.mapNoteRow({
         ...existingDup,
         duplicate_count: updatedCount,
+        verification_json: verificationFor(existingDup.revision_count),
+        proof_count: note.proofCount ?? 0,
+        status: note.status || "proposal",
         last_seen_at: new Date().toISOString(),
       });
     }
@@ -349,7 +392,7 @@ export class SentinelDatabase {
             UPDATE notes
             SET title = ?, content = ?, type = ?, glyph = ?,
                 revision_count = ?, normalized_hash = ?,
-                concepts_json = ?, files_json = ?, blast_radius_json = ?,
+                concepts_json = ?, files_json = ?, blast_radius_json = ?, proof_count = ?, status = ?, verification_json = ?,
                 updated_at = datetime('now'), last_seen_at = datetime('now')
             WHERE id = ?
           `)
@@ -363,6 +406,9 @@ export class SentinelDatabase {
             conceptsJson,
             filesJson,
             blastRadiusJson,
+            note.proofCount ?? 0,
+            note.status || "proposal",
+            verificationFor(nextRev),
             existingTopic.id,
           );
 
@@ -373,10 +419,13 @@ export class SentinelDatabase {
           type: note.type,
           glyph: note.glyph,
           revision_count: nextRev,
+          verification_json: verificationFor(nextRev),
           normalized_hash: normHash,
           concepts_json: conceptsJson,
           files_json: filesJson,
           blast_radius_json: blastRadiusJson,
+          proof_count: note.proofCount ?? 0,
+          status: note.status || "proposal",
           updated_at: new Date().toISOString(),
           last_seen_at: new Date().toISOString(),
         });
@@ -390,14 +439,15 @@ export class SentinelDatabase {
 
     const stmt = this.db.prepare(`
       INSERT INTO notes (
-        project, scope, type, glyph, title, content, topic_key, normalized_hash,
+        project, project_path, scope, type, glyph, title, content, topic_key, normalized_hash,
         revision_count, duplicate_count, last_seen_at, concepts_json, files_json,
         blast_radius_json, proof_count, status, pinned, expires_at, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, 1, datetime('now'), ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 1, datetime('now'), ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
     `);
 
     const result = stmt.run(
       project,
+      note.project_path ? path.resolve(note.project_path) : this.projectRoot,
       note.scope || "project",
       note.type,
       note.glyph,
@@ -415,8 +465,11 @@ export class SentinelDatabase {
     );
 
     const insertedId = Number(result.lastInsertRowid);
+    this.db.prepare("UPDATE notes SET verification_json = ? WHERE id = ?").run(verificationFor(1), insertedId);
     return this.getNoteById(insertedId)!;
   }
+
+  getProjectRoot(): string { return this.projectRoot; }
 
   getNoteById(id: number): SentinelNote | null {
     const row = this.db.prepare("SELECT * FROM notes WHERE id = ?").get(id) as any;
@@ -456,7 +509,8 @@ export class SentinelDatabase {
         sql += " AND n.deleted_at IS NULL";
       }
 
-      if (options.scope !== "global") {
+      if (options.scope === "global") sql += " AND n.scope = 'global'";
+      else {
         sql += " AND (n.project = ? OR n.scope = 'global')";
         params.push(project);
       }
@@ -489,7 +543,8 @@ export class SentinelDatabase {
       fallbackSql += " AND deleted_at IS NULL";
     }
 
-    if (options.scope !== "global") {
+    if (options.scope === "global") fallbackSql += " AND scope = 'global'";
+    else {
       fallbackSql += " AND (project = ? OR scope = 'global')";
       fallbackParams.push(project);
     }
@@ -527,7 +582,8 @@ export class SentinelDatabase {
       sql += " AND deleted_at IS NULL";
     }
 
-    if (options.scope !== "global") {
+    if (options.scope === "global") sql += " AND scope = 'global'";
+    else {
       sql += " AND (project = ? OR scope = 'global')";
       params.push(project);
     }
@@ -598,6 +654,7 @@ export class SentinelDatabase {
 
       return {
         ...proc,
+        project_path: existing.project_path ?? undefined,
         id: existing.id,
         updatedAt: new Date().toISOString(),
       };
@@ -605,13 +662,14 @@ export class SentinelDatabase {
 
     const stmt = this.db.prepare(`
       INSERT INTO procedures (
-        project, name, title, trigger_pattern, symptoms, preconditions,
+        project, project_path, name, title, trigger_pattern, symptoms, preconditions,
         steps_json, verification_cmd, success_rate, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
     `);
 
     const result = stmt.run(
       project,
+      proc.project_path ? path.resolve(proc.project_path) : this.projectRoot,
       proc.name,
       proc.title,
       proc.triggerPattern,
@@ -624,6 +682,7 @@ export class SentinelDatabase {
 
     return {
       ...proc,
+      project_path: proc.project_path ? path.resolve(proc.project_path) : this.projectRoot,
       id: Number(result.lastInsertRowid),
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
@@ -639,6 +698,7 @@ export class SentinelDatabase {
     return rows.map((r) => ({
       id: r.id,
       project: r.project,
+      project_path: r.project_path ?? undefined,
       name: r.name,
       title: r.title,
       triggerPattern: r.trigger_pattern,
@@ -729,8 +789,10 @@ export class SentinelDatabase {
 
   private mapNoteRow(r: any): SentinelNote {
     return {
+      verification: r.verification_json ? JSON.parse(r.verification_json) : undefined,
       id: r.id,
       project: r.project,
+      project_path: r.project_path ?? undefined,
       scope: r.scope,
       type: r.type as SentinelNoteType,
       glyph: r.glyph,
