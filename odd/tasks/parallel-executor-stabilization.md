@@ -1,0 +1,24 @@
+# Parallel Executor Stabilization
+Second authorized work unit after item4 corrections and bounded independent review.
+Read-only audit findings are inputs, not runtime proofs or sandbox guarantees.
+
+## Specs
+S1. User scope: "hazlo porfa y tambiern revisa lam celulas y los subagnete sen parlelo"
+S2. User authorized ordered correction: "SI DALE"
+
+## Tasks
+P1 | S1-S2 | parent: inspect and pin executor failure contracts | done | no commit
+P2 | S1-S2 | parent: scoped batch/swarm/inbox fixes | done | no commit
+P3 | S1-S2 | parent: deterministic checks and report | done: job43 157/157; named final fallback invariant independently approved statically | no commit
+
+## Log
+L10. mvtmp6ov-e-2qbl APPROVED the named final fallback invariant by targeted static read, without re-auditing prior surfaces or claiming runtime execution. Parent job43 provides current runtime proof, including persisted leaseHealth public regression. All three scoped tasks complete with documented limits. No commit, merge or push authorized/performed for this unit. Broader repository safety, cross-call writer exclusion, automatic uncertain-launch reconciliation and absence of leaked handles are not established by this work.
+L9. job43 exit0 typecheck/build/quality-ratchet/diffcheck and157/157 focused tests across eight suites, no skipped/cancelled. HOME/TMP isolated before Node; force-exit means this does not prove handle cleanup. Foreign-account fallback RED42 then corrected exact-account/provider predicate, including registry.find validation. Live stale lease health now persists with reapcount0. Last static-only follow-up mvtmp6ov-e-2qbl pending; no full repository suite/live providers/crosssession sandbox proof or gitdelivery claimed.
+L1. Original request verbatim: "hazlo porfa y tambiern revisa lam celulas y los subagnete sen parlelo"
+L2. Approval verbatim: "SI DALE" to correcting item4 before parallel executor.
+L3. Deliverable: src/features/dc-agents/core/dc-subagent-inbox.ts, dc-research-swarm.ts, dc-ephemeral-manager.ts; tools/dc-ephemeral-tools.ts; corresponding inbox/swarm/admission/ephemeral tests and docs/03-agents-taxis-and-lego-system.md. No config/dependency/global writes, no git delivery. Preserve runtime default contracts unless correction explicitly demands observable failure. No claim of OS sandbox or confirmed termination from an abort alone.
+L4. Acceptance: launcher-isolated deterministic focused tests with mocked runner, typecheck, ratchet, build, diffcheck exit0. Public behavior must distinguish returned errors, absent host, duplicates, heartbeat and writer conflicts. Ambiguous post-launch exceptions must not cause unsafe reservation release. Cancellation/timeout termination guarantees depend on real subagent runner; do not invent them. A missing consequential runner contract becomes a focused decision rather than speculative release logic.
+L8. Broader job36 failed 6/91; corrected live-PID TTL reclaim, stale UUID/TUI/ownership fixtures, injected diagnostic live fallthrough/transient knownfatal fallback, and current Claude handover default. Job38 154/156 then job40 155/156; remaining leaseHealth persistence fixed, not yet GREEN. Review found empty batch response false success, reproduced RED39 then fixed before cleanup. Follow-up statically supports batch/swarm/inbox/diagnostic but BLOCKED foreign-account saturated fallback. Regression job41 failed compilation (missing quota field, not behavioral RED); fixture corrected and job42 behavioral RED pending. No final approval, no integration. Native assess unassessable due untracked files; returned high-risk self-check plus independent verifier plan, RDD remains off.
+L7. Swarm signal RED25/GREEN26 7/7; maxConcurrency RED27/GREEN28 8/8. Await runner settlement before cleanup; no invented termination on abort. Background ambiguous exception RED29 (tracked0 vs1), catch now quarantines reservation in activeBackgroundPlans and logs uncertainty rather than unsafe release. Heartbeat public mock-timer test added; job30 runs batch tests (background GREEN expected, heartbeat RED expected), no result claimed yet. Admission untouched.
+L6. Inbox duplicate regression RED job19/GREEN job20 4/4; merges preserve rich text, diagnostics and read state, first-delivery-only notification. Batch false-success RED job21/GREEN job22 2/2 including previous parallel behavior. Swarm false-success RED job23/GREEN job24 6/6 existing suite. Cancellation test added; job25 RED pending. All launches isolate HOME/TMP before Node; force-exit does not prove no handle leaks. Remaining: cancellation, heartbeat, background ambiguous exceptions, concurrency bound, cleanup status, writer admission, docs and independent verification.
+L5. Item4 latest independent followup approved named startup guard statically; previous corrections supported statically; parent14race+44regression pass. No full suite or live runner verification.

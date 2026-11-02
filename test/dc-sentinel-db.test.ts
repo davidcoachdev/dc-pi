@@ -1,6 +1,89 @@
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+import { DatabaseSync } from "node:sqlite";
+import { performPreFlightRecall } from "../src/features/dc-sentinel/core/dc-sentinel-recall.ts";
+import { resolveSentinelDbPath } from "../src/features/dc-sentinel/core/dc-sentinel-db.ts";
 import { describe, it } from "node:test";
 import * as assert from "node:assert/strict";
 import { SentinelDatabase, normalizeTextForHash } from "../src/features/dc-sentinel/core/dc-sentinel-db.ts";
+
+it("T3: lexical root identity isolates equal basenames and leaves legacy destinations untouched", () => {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), "identity-"));
+  const a = path.join(base, "a", "same");
+  const b = path.join(base, "b", "same");
+  const first = resolveSentinelDbPath("same", a);
+  assert.notEqual(first, resolveSentinelDbPath("same", b));
+  assert.equal(first, resolveSentinelDbPath("same", path.join(a, "child", "..")));
+  assert.equal(first, resolveSentinelDbPath("same", path.relative(process.cwd(), a)));
+  const legacyFallback = path.join(path.dirname(first), "sentinel-same.db");
+  fs.mkdirSync(path.dirname(first), { recursive: true });
+  fs.writeFileSync(legacyFallback, "fallback-important-unknown");
+  const isolated = new SentinelDatabase("same", a);
+  isolated.close();
+  assert.equal(fs.readFileSync(legacyFallback, "utf8"), "fallback-important-unknown");
+  fs.mkdirSync(a, { recursive: true });
+  const alias = path.join(base, "alias");
+  fs.symlinkSync(a, alias, "dir");
+  assert.notEqual(resolveSentinelDbPath("same", alias), first, "identity is lexical, not realpath");
+  fs.mkdirSync(path.join(a, "dc-sentinela", ".cache"), { recursive: true });
+  const legacy = path.join(a, "dc-sentinela", ".cache", "sentinel.db");
+  fs.writeFileSync(legacy, "legacy-important-unknown");
+  const db = new SentinelDatabase("same", a);
+  assert.notEqual(db.getDbPath(), legacy);
+  db.saveNote({ project: "same", type: "decision", glyph: "!", title: "rootidentity", content: "rootidentity" });
+  db.close();
+  assert.equal(fs.readFileSync(legacy, "utf8"), "legacy-important-unknown");
+  assert.equal(performPreFlightRecall("rootidentity", { cwd: a }).items.length, 1);
+  assert.equal(performPreFlightRecall("rootidentity", { cwd: b }).items.length, 0);
+});
+
+it("T3: new writes map provenance and nullable schema upgrades are idempotent without backfill", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "provenance-"));
+  let db = new SentinelDatabase("fixture", root);
+  const file = db.getDbPath();
+  const note = { project: "fixture", type: "decision" as const, glyph: "!", title: "old", content: "unknown" };
+  db.saveNote(note);
+  db.recordFrame({ sessionId: "s", turnId: "t", actor: "[USER]", eventType: "prompt", title: "old", content: "unknown" });
+  db.saveProcedure({ project: "fixture", name: "old", title: "old", triggerPattern: "old", symptoms: "", preconditions: "", steps: [] });
+  db.close();
+  const raw = new DatabaseSync(file);
+  for (const table of ["notes", "frames", "procedures"]) {
+    const columns = raw.prepare(`PRAGMA table_info(${table})`).all() as any[];
+    if (columns.some((c) => c.name === "project_path")) raw.exec(`ALTER TABLE ${table} DROP COLUMN project_path`);
+  }
+  raw.close();
+  for (let i = 0; i < 2; i++) { db = new SentinelDatabase("fixture", root); db.close(); }
+  db = new SentinelDatabase("fixture", root);
+  assert.equal(db.listNotes()[0].project_path, undefined);
+  assert.equal(db.saveNote(note).project_path, undefined, "duplicate writes must not invent historical provenance");
+  assert.equal(db.listFrames()[0].project_path, undefined);
+  assert.equal(db.listProcedures()[0].project_path, undefined);
+  assert.equal(db.saveNote({ ...note, title: "new", content: "attributed" }).project_path, root);
+  assert.equal(db.recordFrame({ sessionId: "s", turnId: "t", actor: "[USER]", eventType: "prompt", title: "new", content: "attributed" }).project_path, root);
+  assert.equal(db.saveProcedure({ project: "fixture", name: "new", title: "new", triggerPattern: "new", symptoms: "", preconditions: "", steps: [] }).project_path, root);
+  assert.equal(db.listNotes().find((n) => n.title === "new")?.project_path, root);
+  assert.equal(db.listFrames()[1].project_path, root);
+  assert.equal(db.listProcedures().find((p) => p.name === "new")?.project_path, root);
+  db.close();
+});
+
+it("T4a: unverified topic replacement clears current-revision proof", () => {
+  const db = new SentinelDatabase("fixture", undefined, true);
+  const base = { project: "fixture", type: "bugfix" as const, glyph: "!", topicKey: "auth", title: "fix" };
+  const first = db.saveNote({ ...base, content: "verified revision", proofCount: 1, status: "active" });
+  const next = db.saveNote({ ...base, content: "unverified revision", proofCount: 0, status: "proposal" });
+  assert.equal(next.id, first.id);
+  assert.equal(next.proofCount, 0);
+  assert.equal(next.status, "proposal");
+  assert.equal(db.getNoteById(first.id!)?.proofCount, 0);
+  const verified = db.saveNote({ ...base, content: "third revision", proofCount: 1, status: "active" });
+  assert.equal(verified.proofCount, 1);
+  const duplicate = db.saveNote({ ...base, content: "third revision", proofCount: 0, status: "proposal" });
+  assert.equal(duplicate.proofCount, 0, "dedup must not preserve stale proof either");
+  assert.equal(db.getNoteById(first.id!)?.status, "proposal");
+  db.close();
+});
 
 describe("dc-sentinel-db: Motor Local Soberano con node:sqlite", () => {
   it("normaliza texto para hash de forma determinista", () => {

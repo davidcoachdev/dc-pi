@@ -33,6 +33,16 @@ describe("dc-sentinel-defense: Memory Defense, Privacidad y Redactor de Ruido", 
     assert.equal(res.redactedCount, 5);
   });
 
+  it("preserves credential URL families without leaking passwords", () => {
+    for (const scheme of ["postgres", "postgresql", "mysql", "mongodb", "mongodb+srv", "redis", "rediss"]) {
+      const raw = `${scheme}://alice:fixturePassword@db.local:1234/database?ssl=true`;
+      const res = sanitizeMemoryDefense(raw);
+      assert.equal(res.text, `${scheme}://alice:[REDACTED_PASSWORD]@db.local:1234/database?ssl=true`);
+      assert.equal(res.redactedCount, 1);
+      assert.equal(sanitizeMemoryDefense(raw).text, res.text);
+    }
+  });
+
   it("censura marcadores y veredictos de evaluación para evitar fuga de datos (Harness² Tripwire)", () => {
     const raw = `
       Resultado de la ejecución de pruebas:

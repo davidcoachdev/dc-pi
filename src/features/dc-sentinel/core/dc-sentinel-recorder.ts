@@ -15,6 +15,7 @@ export class SentinelRecorder {
   private projectRoot: string;
   private activeTurn: SentinelTurnRecord | null = null;
   private turns: SentinelTurnRecord[] = [];
+  private turnSequence = 0;
   private toolsInFlight = new Map<string, SentinelToolExecution>();
 
   constructor(sessionId: string = `session-${Date.now()}`, projectRoot: string = process.cwd()) {
@@ -53,9 +54,10 @@ export class SentinelRecorder {
    * Registra el inicio de un nuevo turno con el prompt del usuario.
    */
   startTurn(prompt: string, recalledTitles?: string[]): SentinelTurnRecord {
-    const turnId = `turn-${this.turns.length + 1}-${Date.now()}`;
+    const turnId = `turn-${++this.turnSequence}-${Date.now()}`;
     const record: SentinelTurnRecord = {
       turnId,
+      project_path: this.projectRoot,
       timestamp: new Date().toISOString(),
       userPrompt: (prompt || "").trim(),
       recallInjected: (recalledTitles && recalledTitles.length > 0) || false,
@@ -75,6 +77,8 @@ export class SentinelRecorder {
   recordToolStart(callId: string, toolName: string, args: Record<string, unknown>): void {
     const exec: SentinelToolExecution = {
       callId,
+      turnId: this.activeTurn?.turnId,
+      project_path: this.activeTurn?.project_path,
       toolName,
       args: args || {},
       startedAt: Date.now(),
@@ -105,7 +109,7 @@ export class SentinelRecorder {
     if (!exec) return;
 
     exec.endedAt = Date.now();
-    exec.isError = isError || false;
+    exec.isError = typeof isError === "boolean" ? isError : undefined;
     if (output) {
       const clean = String(output).trim();
       exec.outputSnippet = clean.length > 300 ? `${clean.slice(0, 297)}...` : clean;
@@ -113,7 +117,7 @@ export class SentinelRecorder {
 
     this.toolsInFlight.delete(callId);
 
-    if (this.activeTurn) {
+    if (this.activeTurn && exec.turnId === this.activeTurn.turnId) {
       this.activeTurn.toolsExecuted.push(exec);
 
       if (isError && exec.outputSnippet) {
@@ -141,6 +145,16 @@ export class SentinelRecorder {
     if (assistantSummary) {
       const clean = assistantSummary.trim();
       this.activeTurn.assistantSummary = clean.length > 500 ? `${clean.slice(0, 497)}...` : clean;
+    }
+
+    // Preserve all unfinished calls as unknown evidence, including a newer verifier
+    // whose outcome must not be replaced by an earlier success. Snapshot and detach
+    // them so a late completion cannot rewrite this finalized turn.
+    for (const [callId, exec] of this.toolsInFlight) {
+      if (exec.turnId === this.activeTurn.turnId) {
+        this.activeTurn.toolsExecuted.push({ ...exec });
+        this.toolsInFlight.delete(callId);
+      }
     }
 
     // Aplica Scrub Edge: filtra avisos efímeros antes de incorporar el turno al historial

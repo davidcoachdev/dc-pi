@@ -8,7 +8,7 @@ import type {
   SentinelProcedure,
 } from "./dc-sentinel-types.ts";
 import { SENTINEL_TYPE_GLYPHS } from "./dc-sentinel-types.ts";
-import { normalizeTextForHash } from "./dc-sentinel-db.ts";
+import { normalizeTextForHash, sentinelNoteFingerprint } from "./dc-sentinel-db.ts";
 
 export interface SessionGitStats {
   filesChanged: string[];
@@ -268,7 +268,7 @@ export async function extractSessionGitStats(projectRoot: string): Promise<Sessi
 export function extractFilesFromTurnTools(turn: SentinelTurnRecord): string[] {
   const files = new Set<string>();
   for (const t of turn.toolsExecuted) {
-    if (t.toolName === "edit" || t.toolName === "write") {
+    if ((t.toolName === "edit" || t.toolName === "write") && t.isError === false && t.endedAt !== undefined) {
       const p = t.args?.path;
       if (typeof p === "string" && p.trim().length > 0) {
         files.add(p.trim());
@@ -276,6 +276,36 @@ export function extractFilesFromTurnTools(turn: SentinelTurnRecord): string[] {
     }
   }
   return Array.from(files);
+}
+
+/** Deliberately narrow shell grammar: only known verifiers joined by &&.
+ * Shell wrappers, substitutions, redirection and failure masking are not proof.
+ */
+function isVerifier(command: string): boolean {
+  return command.split("&&").every((part) => {
+    const cmd = part.trim();
+    if (!/^[a-zA-Z0-9_./* =:-]+$/.test(cmd)) return false;
+    return /^(?:npm test|npm run (?:test|typecheck|build)|node --test(?: [a-zA-Z0-9_./*:-]+)*|(?:npx )?tsc(?: --noEmit)?)$/.test(cmd) &&
+      !/ --(?:help|version|watch|test-only|test-skip)\b/.test(cmd);
+  });
+}
+
+/** Proof belongs to this turn's last edit revision, never to assistant prose or Git dirt. */
+function currentRevisionProof(turn: SentinelTurnRecord) {
+  const edits = turn.toolsExecuted.filter((t) => t.toolName === "edit" || t.toolName === "write");
+  if (!edits.length) return undefined;
+  const belongs = (t: SentinelTurnRecord["toolsExecuted"][number]) =>
+    (!t.turnId || t.turnId === turn.turnId) &&
+    (!t.project_path || !turn.project_path || t.project_path === turn.project_path) &&
+    (!t.args.cwd || t.args.cwd === turn.project_path);
+  if (edits.some((t) => !belongs(t) || t.endedAt === undefined || t.isError !== false)) return undefined;
+  const lastEditEnd = Math.max(...edits.map((t) => t.endedAt!));
+  const verifiers = turn.toolsExecuted.filter((t) =>
+    t.toolName === "bash" && typeof t.args.command === "string" && isVerifier(t.args.command) &&
+    t.startedAt >= lastEditEnd);
+  // The latest verifier must itself have an explicit successful result.
+  const proof = verifiers.sort((a, b) => b.startedAt - a.startedAt)[0];
+  return proof && belongs(proof) && proof.isError === false && proof.endedAt !== undefined ? proof : undefined;
 }
 
 /**
@@ -358,6 +388,7 @@ export function extractDeterministicNotes(
     const combinedText = `${promptLower} ${assistantLower}`;
 
     const digest = extractAssistantTechnicalDigest(turn.assistantSummary);
+    const proof = currentRevisionProof(turn);
     const hasEdits = toolFiles.length > 0;
 
     // Clasificación multi-señal (Prompt + Respuesta del Asistente + Herramientas)
@@ -443,10 +474,14 @@ export function extractDeterministicNotes(
     const contentParts: string[] = [];
     contentParts.push(`**Contexto / Solicitud:** "${compressCavememProse(turn.userPrompt)}"`);
     if (digest.summary) {
-      contentParts.push(`**Resolución Técnica:** ${digest.summary}`);
+      contentParts.push(`**Propuesta / relato del asistente (no prueba):** ${digest.summary}`);
     }
     if (filesList.length > 0) {
       contentParts.push(`**Superficies Afectadas:** ${filesList.map((f) => `\`${f}\``).join(", ")}`);
+    }
+
+    if (proof) {
+      contentParts.push(`**Verificación observada:** turno ${turn.turnId}; raíz ${turn.project_path || "no registrada"}; llamada ${proof.callId}; comando: ${String(proof.args.command)}; isError=false; resultado: ${proof.outputSnippet ?? "(sin texto)"}`);
     }
 
     // Derivar topicKey estable basado en el primer archivo o módulo afectado para que evolucione (Engram Pattern #24)
@@ -458,8 +493,9 @@ export function extractDeterministicNotes(
     const risk: "low" | "medium" | "high" =
       filesList.length > 5 || turn.errorsDetected.length > 2 ? "high" : filesList.length > 2 ? "medium" : "low";
 
-    notes.push({
+    const note: SentinelNote = {
       project,
+      project_path: turn.project_path,
       type: noteType,
       glyph: SENTINEL_TYPE_GLYPHS[noteType] || "•",
       title,
@@ -473,9 +509,16 @@ export function extractDeterministicNotes(
         risk,
         summary: `${filesList.length} archivo(s) tocado(s), ${turn.toolsExecuted.length} tool(s) ejecutadas.`,
       },
-      proofCount: 1,
-      status: "active",
-    });
+      proofCount: proof ? 1 : 0,
+      status: proof ? "active" : "proposal",
+    };
+    if (proof && turn.project_path) note.verification = {
+      projectPath: turn.project_path, turnId: turn.turnId, callId: proof.callId,
+      command: String(proof.args.command), startedAt: proof.startedAt, endedAt: proof.endedAt!,
+      isError: false, output: proof.outputSnippet, revision: 0,
+      fingerprint: sentinelNoteFingerprint(note),
+    };
+    notes.push(note);
   }
 
   return notes;
@@ -495,25 +538,8 @@ export function extractDeterministicProcedures(
 
   for (const turn of turns) {
     const editedFiles = extractFilesFromTurnTools(turn);
-    const bashTools = turn.toolsExecuted.filter((t) => t.toolName === "bash");
-
-    // Comandos de verificación o compilación ejecutados en el turno
-    const verifyCommands = bashTools
-      .map((t) => String(t.args?.command || "").trim())
-      .filter((cmd) =>
-        cmd.includes("npm test") ||
-        cmd.includes("npm run typecheck") ||
-        cmd.includes("node --test") ||
-        cmd.includes("tsc"),
-      );
-
-    const hadError = turn.errorsDetected.length > 0 || bashTools.some((t) => t.isError);
-    const endedWithSuccess = bashTools.length > 0 && !bashTools[bashTools.length - 1]?.isError;
-
-    // Generar receta cuando:
-    // A) Se editaron archivos y se validó con un comando de verificación exitoso, o
-    // B) Ocurrió un error en el turno y luego se superó con éxito en el mismo turno
-    if ((editedFiles.length > 0 && verifyCommands.length > 0 && endedWithSuccess) || (hadError && endedWithSuccess && editedFiles.length > 0)) {
+    const proof = currentRevisionProof(turn);
+    if (editedFiles.length > 0 && proof) {
       const digest = extractAssistantTechnicalDigest(turn.assistantSummary);
       const rawTitle = digest.heading || deriveSessionTitle(turn.userPrompt);
       const primaryModule = editedFiles[0]
@@ -532,7 +558,8 @@ export function extractDeterministicProcedures(
       if (digest.summary) {
         steps.push(`Criterio técnico aplicado: ${digest.summary.slice(0, 220)}`);
       }
-      const lastVerifyCmd = verifyCommands[verifyCommands.length - 1] || "npm run typecheck && npm test";
+      const lastVerifyCmd = String(proof.args.command);
+      steps.push(`Evidencia observada en turno ${turn.turnId}, llamada ${proof.callId}: isError=false; ${proof.outputSnippet ?? "(sin texto)"}`);
       steps.push(`Ejecutar verificación determinista: \`${lastVerifyCmd}\`.`);
 
       procedures.push({

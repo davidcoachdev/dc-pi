@@ -133,12 +133,11 @@ export function sanitizeMemoryDefense(text: string): DefenseSanitizeResult {
   for (const { type, regex } of DEFENSE_PATTERNS) {
     if (type.startsWith("db_url_")) {
       // Reemplazo especial para URLs de BD: conservar usuario y host, censurar contraseña
-      sanitized = sanitized.replace(regex, (match, p1, user, _pass, host, port, db) => {
+      sanitized = sanitized.replace(regex, (match: string) => {
         redactedTypesSet.add(type);
         redactedCount++;
-        const pStr = port ? port : "";
-        const dbStr = db ? `/${db}` : "";
-        return `${p1}://${user}:[REDACTED_PASSWORD]@${host}${pStr}${dbStr}`;
+        // Capture layouts differ by family; replace credentials within the full match.
+        return match.replace(/(:\/\/[^:\s]*:)[^@\s]+@/, "$1[REDACTED_PASSWORD]@");
       });
     } else {
       sanitized = sanitized.replace(regex, () => {

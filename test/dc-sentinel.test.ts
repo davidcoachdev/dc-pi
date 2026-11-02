@@ -1,4 +1,7 @@
 import test from "node:test";
+import defaultFs from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
+import { dcNotifier } from "../src/integrations/dc-notify/dc-notifier.ts";
 import assert from "node:assert/strict";
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -273,6 +276,11 @@ test("dc-sentinel: SentinelRecorder tracks turns, tools, and subagents", () => {
 
 test("dc-sentinel: readSentinelPrefs and writeSentinelPrefs persist to dc-studio/sentinel.json", () => {
   const prefs = readSentinelPrefs();
+  const original = { ...prefs };
+  assert.equal(writeSentinelPrefs({ recallMinScore: 7, initialMode: "chronicle" }), true);
+  assert.equal(readSentinelPrefs().recallMinScore, 7);
+  assert.equal(readSentinelPrefs().initialMode, "chronicle");
+  assert.equal(writeSentinelPrefs(original), true);
   assert.equal(typeof prefs.enabled, "boolean");
   assert.equal(typeof prefs.recallMinScore, "number");
   assert.ok(SENTINEL_CONFIG_FILE.includes("sentinel.json"));
@@ -325,6 +333,257 @@ test("dc-sentinel: dcSentinelExtension hooks lifecycle and ignores child session
       delete process.env.GENTLE_PI_AGENTS_CHILD;
     }
   }
+});
+
+test("dc-sentinel: public hooks redact durable capture and live controls gate every hook", async (t) => {
+  const childEnv = process.env.GENTLE_PI_AGENTS_CHILD;
+  process.env.GENTLE_PI_AGENTS_CHILD = "0";
+  t.after(() => { if (childEnv === undefined) delete process.env.GENTLE_PI_AGENTS_CHILD; else process.env.GENTLE_PI_AGENTS_CHILD = childEnv; });
+  const frames: any[] = [];
+  const chronicles: any[] = [];
+  const notices: string[] = [];
+  let opens = 0;
+  const recorder = new SentinelRecorder("privacy-fixture");
+  t.mock.method(recorder, "flushTurnChronicle", (turn: unknown) => { chronicles.push(turn); return null; });
+  t.mock.method(dcNotifier, "notify", (_ctx: unknown, msg: string) => { notices.push(msg); return true; });
+  const hooks = new Map<string, (...args: any[]) => any>();
+  let command: any;
+  const pi = {
+    on: (name: string, hook: any) => hooks.set(name, hook),
+    registerCommand: (_name: string, spec: any) => { command = spec.handler; },
+    registerShortcut() {},
+  } as unknown as ExtensionAPI;
+  const ctx = { cwd: process.env.TMPDIR, hasUI: false } as ExtensionContext;
+  writeSentinelPrefs({ enabled: true });
+  dcSentinelExtension(pi, {
+    recorder, enableRecall: false,
+    databaseFactory: () => {
+      opens++;
+      return { getDbPath: () => ctx.cwd, close() {}, recordFrame: (frame: any) => frames.push(frame),
+        saveNote() {}, saveProcedure() {}, getStats: () => ({}) };
+    },
+  } as any);
+  const emit = async (name: string, event: any = {}) => hooks.get(name)?.(event, ctx);
+  await emit("session_start");
+  const secret = "sk-proj-" + "a".repeat(32);
+  await emit("before_agent_start", { prompt: `fix ${secret} <private>user-only</private>` });
+  await emit("tool_execution_start", { toolCallId: "task", toolName: "subagent_run",
+    args: { agent: "fixture", task: `fix ${secret} <secret>task-only</secret>` } });
+  await emit("tool_execution_end", { toolCallId: "task", toolName: "subagent_run",
+    output: "<private>" + "hidden-output ".repeat(400) + "</private> visible" });
+  const skillToken = "ghp_" + "a".repeat(36);
+  const skillArgs = { path: `/skills/${skillToken}/SKILL.md` };
+  await emit("tool_execution_start", { toolCallId: "skill", toolName: "read", args: skillArgs });
+  await emit("tool_execution_end", { toolCallId: "skill", toolName: "read", args: skillArgs,
+    output: "skill instructions", isError: true });
+  await emit("message_update", { content: [{ text: `fixed ${secret} <private>assistant-only</private>` }] });
+  await emit("agent_settled");
+  const capture = JSON.stringify({ frames, chronicles, turns: recorder.getTurns() });
+  const skillSummary = recorder.getTurns()[0]!.toolsExecuted.find((tool) => tool.callId === "skill")!.outputSnippet!;
+  assert.ok(skillSummary.startsWith("[Skill loaded:"));
+  assert.ok(skillSummary.includes("18 bytes omitidos de memoria"));
+  assert.ok(!skillSummary.includes(skillToken), "skill summary reintroduced the path token");
+  const chronicleMarkdown = recorder.formatTurnMarkdown(chronicles[0]);
+  assert.ok(!chronicleMarkdown.includes(skillToken), "durable chronicle leaked the skill path token");
+  for (const forbidden of [secret, skillToken, "user-only", "task-only", "assistant-only", "hidden-output"]) {
+    assert.ok(!capture.includes(forbidden), `durable capture leaked ${forbidden}`);
+  }
+  assert.equal(frames.length, 2);
+  assert.equal(chronicles.length, 1);
+
+  await emit("before_agent_start", { prompt: "interrupted turn" });
+  await command("off", ctx);
+  const before = JSON.stringify({ frames, chronicles, turns: recorder.getTurns() });
+  const opensBefore = opens;
+  for (const name of hooks.keys()) await emit(name, { prompt: "must not capture", content: [{ text: "must not capture" }] });
+  assert.equal(JSON.stringify({ frames, chronicles, turns: recorder.getTurns() }), before);
+  assert.equal(opens, opensBefore);
+  await command("status", ctx);
+  assert.match(notices.at(-1)!, /Desactivado/);
+  await command("on", ctx);
+  await emit("agent_settled");
+  assert.equal(chronicles.length, 1, "off/on must not settle a stale turn");
+  await emit("before_agent_start", { prompt: "new enabled turn" });
+  await emit("agent_settled");
+  assert.equal(chronicles.length, 2);
+
+  writeSentinelPrefs({ enabled: false });
+  const disabledHooks = new Map<string, any>();
+  command = undefined;
+  dcSentinelExtension({ ...pi, on: (name: string, hook: any) => disabledHooks.set(name, hook) } as any);
+  assert.ok(command, "command remains available when initially disabled");
+  assert.ok(disabledHooks.has("before_agent_start"));
+  await command("on", ctx);
+});
+
+test("dc-sentinel: preference write failure preserves cache and reports command failure", async (t) => {
+  const childEnv = process.env.GENTLE_PI_AGENTS_CHILD;
+  process.env.GENTLE_PI_AGENTS_CHILD = "0";
+  t.after(() => { if (childEnv === undefined) delete process.env.GENTLE_PI_AGENTS_CHILD; else process.env.GENTLE_PI_AGENTS_CHILD = childEnv; });
+  writeSentinelPrefs({ enabled: true });
+  const before = { ...readSentinelPrefs() };
+  let command: any;
+  const notices: string[] = [];
+  t.mock.method(dcNotifier, "notify", (_ctx: unknown, msg: string) => { notices.push(msg); return true; });
+  dcSentinelExtension({ on() {}, registerShortcut() {}, registerCommand(_name: string, spec: any) {
+    command = spec.handler;
+  } } as any);
+  const failingWrite = t.mock.method(defaultFs, "writeFileSync", () => { throw new Error("fixture write failure"); });
+  syncBuiltinESMExports();
+  try {
+    assert.equal(writeSentinelPrefs({ enabled: false }), false);
+    assert.deepEqual(readSentinelPrefs(), before);
+    await command("off", {});
+    assert.match(notices.at(-1)!, /[Ee]rror/);
+    assert.ok(!notices.at(-1)!.includes("Desactivado"));
+    assert.match(notices.at(-1)!, /solo en esta sesión/);
+    await command("on", {});
+    assert.match(notices.at(-1)!, /no se activó/);
+  } finally {
+    failingWrite.mock.restore();
+    syncBuiltinESMExports();
+  }
+});
+
+test("T3: public hooks survive failed switches, use turn root, and close on shutdown", async (t) => {
+  const previous = process.env.GENTLE_PI_AGENTS_CHILD;
+  process.env.GENTLE_PI_AGENTS_CHILD = "0";
+  t.after(() => { if (previous === undefined) delete process.env.GENTLE_PI_AGENTS_CHILD; else process.env.GENTLE_PI_AGENTS_CHILD = previous; });
+  writeSentinelPrefs({ enabled: true });
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), "hooks-root-"));
+  const roots = [path.join(base, "a", "same"), path.join(base, "b", "same")];
+  const hooks = new Map<string, any>();
+  const opened: string[] = [], closed: string[] = [], frames: any[] = [], chronicles: any[] = [];
+  const recorder = new SentinelRecorder("roots", roots[0]);
+  t.mock.method(recorder, "flushTurnChronicle", (turn: any) => { chronicles.push(turn); return null; });
+  let fail = false;
+  dcSentinelExtension({ on: (name: string, hook: any) => hooks.set(name, hook), registerCommand() {}, registerShortcut() {} } as any, {
+    recorder, enableRecall: false,
+    databaseFactory: (_name, root) => {
+      opened.push(root);
+      if (fail) throw new Error("fixture unavailable");
+      let isClosed = false;
+      return { getDbPath: () => `sentinel-same.db`, close: () => { isClosed = true; closed.push(root); },
+        recordFrame: (f: any) => { assert.equal(isClosed, false); frames.push({ root, ...f }); },
+        saveNote() {}, saveProcedure() {}, getStats: () => ({}) } as any;
+    },
+  });
+  const emit = (name: string, root: string) => hooks.get(name)?.({ prompt: "context root capture" }, { cwd: root });
+  await emit("session_start", roots[0]);
+  await emit("before_agent_start", path.join(roots[0], "child", ".."));
+  await emit("agent_settled", roots[1]);
+  assert.equal(frames[1].root, roots[0], "settlement must retain the captured turn root");
+  assert.equal(frames[1].project_path, roots[0]);
+  assert.equal(opened.length, 1, "lexical aliases reuse the handle");
+  fail = true;
+  await emit("session_start", roots[1]);
+  await emit("before_agent_start", roots[1]);
+  await emit("agent_settled", roots[1]);
+  assert.equal(chronicles.length, 2, "DB failure must not suppress chronicle");
+  assert.equal(closed.length, 1);
+  fail = false;
+  await emit("before_agent_start", roots[0]);
+  await emit("agent_settled", roots[0]);
+  assert.equal(frames.length, 4, "failed switch must not reuse the closed handle");
+  await emit("session_shutdown", roots[0]);
+  assert.equal(closed.length, 2);
+});
+
+test("T3: deferred settlement never writes disposed handles after switch or shutdown", async (t) => {
+  const child = process.env.GENTLE_PI_AGENTS_CHILD;
+  process.env.GENTLE_PI_AGENTS_CHILD = "0";
+  t.after(() => { if (child === undefined) delete process.env.GENTLE_PI_AGENTS_CHILD; else process.env.GENTLE_PI_AGENTS_CHILD = child; });
+  for (const transition of ["none", "switch", "shutdown", "off-on"]) {
+    await t.test(transition, async () => {
+    writeSentinelPrefs({ enabled: true });
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "deferred-settlement-"));
+    const hooks = new Map<string, any>();
+    let command: any, release!: (value: any) => void;
+    const pending = new Promise<any>((resolve) => { release = resolve; });
+    const writes: string[] = [], staleWrites: string[] = [], chronicles: any[] = [];
+    const recorder = new SentinelRecorder("deferred", root);
+    t.mock.method(recorder, "flushTurnChronicle", (turn: any) => { chronicles.push(turn); return null; });
+    t.mock.method(dcNotifier, "notify", () => true);
+    dcSentinelExtension({ on: (name: string, hook: any) => hooks.set(name, hook), registerShortcut() {},
+      registerCommand: (_name: string, spec: any) => { command = spec.handler; } } as any, {
+      recorder, enableRecall: false, gitStatsExtractor: () => pending,
+      databaseFactory: (_name, dbRoot) => {
+        let closed = false;
+        const save = (kind: string) => {
+          if (closed) { staleWrites.push(kind); throw new Error("disposed fixture handle"); }
+          writes.push(`${dbRoot}:${kind}`);
+        };
+        return { close: () => { closed = true; }, getDbPath: () => dbRoot, recordFrame() {},
+          saveNote: () => save("note"), saveProcedure: () => save("procedure"), getStats: () => ({}) } as any;
+      },
+    });
+    const emit = (name: string, event: any = {}, cwd = root) => hooks.get(name)?.(event, { cwd });
+    await emit("session_start");
+    await emit("before_agent_start", { prompt: "fix deferred persistence" });
+    await emit("tool_execution_start", { toolCallId: "edit", toolName: "edit", args: { path: "src/fix.ts" } });
+    await emit("tool_execution_end", { toolCallId: "edit", toolName: "edit", output: "updated", isError: false });
+    await emit("tool_execution_start", { toolCallId: "check", toolName: "bash", args: { command: "npm run typecheck" } });
+    await emit("tool_execution_end", { toolCallId: "check", toolName: "bash", output: "passed", isError: false });
+    await emit("message_update", { content: [{ text: "### Fix deferred persistence\nCorrected lifecycle ownership." }] });
+    const settling = emit("agent_settled");
+    assert.equal(writes.length, 0, "extraction is deferred");
+    if (transition === "switch") await emit("session_start", {}, path.join(root, "other"));
+    if (transition === "shutdown") await emit("session_shutdown");
+    if (transition === "off-on") { await command("off", { cwd: root }); await command("on", { cwd: root }); }
+    release(undefined);
+    await settling;
+    assert.deepEqual(staleWrites, [], `${transition}: attempted to write a disposed handle`);
+    assert.equal(writes.length, transition === "none" ? 2 : 0, `${transition}: only the owning lifecycle may persist`);
+    assert.equal(chronicles.length, transition === "none" ? 1 : 0, `${transition}: stale settlement must not flush under a new lifecycle`);
+    await emit("session_shutdown");
+    });
+  }
+});
+
+test("T4a: public capture retains explicit host status/result and rejects stale turn completions", async (t) => {
+  const child = process.env.GENTLE_PI_AGENTS_CHILD;
+  process.env.GENTLE_PI_AGENTS_CHILD = "0";
+  t.after(() => { if (child === undefined) delete process.env.GENTLE_PI_AGENTS_CHILD; else process.env.GENTLE_PI_AGENTS_CHILD = child; });
+  const hooks = new Map<string, (...args: any[]) => any>();
+  const recorder = new SentinelRecorder("evidence");
+  const notes: any[] = [], procedures: any[] = [];
+  t.mock.method(recorder, "flushTurnChronicle", () => null);
+  const ctx = { cwd: process.env.TMPDIR, hasUI: false } as ExtensionContext;
+  writeSentinelPrefs({ enabled: true });
+  dcSentinelExtension({ on: (name: string, hook: any) => hooks.set(name, hook),
+    registerCommand() {}, registerShortcut() {} } as unknown as ExtensionAPI, {
+    recorder, enableRecall: false, enableJournal: true,
+    gitStatsExtractor: async () => ({ filesChanged: [], insertions: 0, deletions: 0, statSummary: "", isClean: true }),
+    databaseFactory: () => ({ getDbPath: () => ctx.cwd, close() {}, recordFrame() {},
+      saveNote: (n: any) => notes.push(n), saveProcedure: (p: any) => procedures.push(p) }),
+  } as any);
+  const emit = async (name: string, event: any = {}) => hooks.get(name)?.(event, ctx);
+  const run = async (id: string, toolName: string, args: any, status?: boolean) => {
+    await emit("tool_execution_start", { toolCallId: id, toolName, args });
+    await emit("tool_execution_end", { toolCallId: id, toolName,
+      result: { content: [{ type: "text", text: "host actual result" }] },
+      ...(status === undefined ? {} : { isError: status }) });
+  };
+  await emit("before_agent_start", { prompt: "fix auth bug" });
+  await run("e", "edit", { path: "src/auth.ts" }, false);
+  await run("v", "bash", { command: "npm test" }, false);
+  await emit("agent_settled");
+  assert.equal(notes.at(-1).proofCount, 1);
+  assert.equal(procedures.length, 1);
+  assert.match(notes.at(-1).content, /host actual result/);
+  assert.equal(recorder.getTurns()[0].project_path, ctx.cwd);
+  await emit("before_agent_start", { prompt: "fix auth bug" });
+  await run("e2", "edit", { path: "src/auth.ts" }, false);
+  await run("v2", "bash", { command: "npm test" });
+  await emit("agent_settled");
+  assert.equal(notes.at(-1).proofCount, 0);
+  assert.equal(procedures.length, 1);
+  recorder.startTurn("old");
+  recorder.recordToolStart("late", "edit", { path: "src/auth.ts" });
+  recorder.startTurn("new");
+  recorder.recordToolEnd("late", "ok", false);
+  assert.equal(recorder.getActiveTurn()?.toolsExecuted.length, 0);
+  await emit("session_shutdown");
 });
 
 test("dc-sentinel: scientific extraction captures assistant experience facts, edited files, procedures and skips noise", async () => {

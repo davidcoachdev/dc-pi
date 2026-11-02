@@ -6,6 +6,10 @@ Este directorio documenta la síntesis definitiva de los 18 repositorios, papers
 
 ---
 
+## Contrato implementado: aislamiento y reutilización
+
+La memoria local no se publica automáticamente. En Metro, `[g]` recoge aplicabilidad y exige confirmación `[y]` de ID/revisión/huella; cancelar o fallar no modifica el scope local. Solo notas activas con evidencia estructurada vigente y no sensibles son elegibles. El catálogo fijo `getDcStudioDir()/sentinel-shared.db` conserva snapshots por raíz + ID y permite recall entre proyectos incluso con resultados locales, con procedencia/aplicabilidad dentro de 800 caracteres. No escanea bases ni exporta historia privada de Engram. Cambiar o borrar la fuente no revoca el snapshot publicado; republicar explícitamente lo reemplaza. No se ha ejecutado migración histórica. Véase [comportamiento y fallos](../08-dc-sentinel-autonomous-guardian.md#publicación-compartida-explícita).
+
 ## Índice de Documentos de Referencia
 
 1. [Mastra: Observational Memory y Prompt Caching](./01-mastra-observational-memory.md)
@@ -89,5 +93,5 @@ Este directorio documenta la síntesis definitiva de los 18 repositorios, papers
 ## Política de Soberanía y Blast Radius (Directivas 2 y 5 de DC Studio)
 
 1. **Cero Dependencias Externas:** No dependemos de daemons en Go, servidores en la nube ni paquetes de terceros privativos. El motor corre en TypeScript nativo embebido en `dc-pi` con `node:sqlite`.
-2. **Persistencia Aislada:** Los datos de runtime se almacenan en `~/.pi/agent/dc-studio/sentinel-<proyecto>.db`.
+2. **Persistencia Aislada:** SQLite indexa frames, notas y procedimientos en `~/.pi/agent/dc-studio/sentinel-<proyecto>-<sha256-raíz>.db`, o con ese nombre bajo `dc-sentinela/.cache/` si existe la carpeta. La raíz es absoluta y normalizada léxicamente, no `realpath`. Las nuevas inserciones incluyen `project_path`; el upgrade nullable idempotente no atribuye registros históricos. No se abren/importan/eliminan automáticamente archivos anteriores. Inventario, clasificación y migración de datos reales siguen pendientes; las memorias importantes sin origen requieren preservación y clasificación explícita. Los predicados globales y el ranking no cambian en T3.
 3. **Soberanía en Git:** La documentación viva y la bitácora residen en `docs/chronicle/` y `docs/live/` del repositorio, legibles por humanos y sincronizables sin herramientas propietarias.
