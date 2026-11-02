@@ -66,10 +66,10 @@ export function isDcModalActive(tui?: any): boolean {
  * DcWindow wrapping, keyboard/mouse event dispatch and title bar drag movement.
  */
 export async function openDcModal<T = void>(
-  ctx: ExtensionContext,
+  ctx: ExtensionContext | undefined,
   options: DcModalOptions<T>,
 ): Promise<T | undefined> {
-  if (!ctx.hasUI || ctx.mode !== "tui") {
+  if (!ctx || !ctx.hasUI || ctx.mode !== "tui") {
     if (options.onNonTui) {
       return options.onNonTui();
     }

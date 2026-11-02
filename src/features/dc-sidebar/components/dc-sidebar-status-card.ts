@@ -78,18 +78,12 @@ export function createTaxiUnitRows(unit: DcTaxiUnit): DcJustifiedRow[] {
       taximeterText = elapsed;
     }
 
-    // Truncar el taxímetro para que nunca desborde
-    const taximeterClean = taximeterText.length > 18 ? `${taximeterText.slice(0, 16)}..` : taximeterText;
-
-    const roleShort = role.length > 16 ? `${role.slice(0, 14)}..` : role;
-    const modelShort = modelClean.length > 16 ? `${modelClean.slice(0, 14)}..` : modelClean;
-
     return [
-      new DcJustifiedRow(`      ${bloodSoft("Pasajero:")}`, `${bloodWhite(roleShort)} `),
+      new DcJustifiedRow(`      ${bloodSoft("Pasajero:")}`, `${bloodWhite(role)} `),
       new DcJustifiedRow(`      ${bloodSoft("Circuito:")}`, `${bloodWhite(taskShort)} `),
-      new DcJustifiedRow(`      ${bloodSoft("Conductor:")}`, `${bloodSoft(modelShort)} `),
+      new DcJustifiedRow(`      ${bloodSoft("Conductor:")}`, `${bloodSoft(modelClean)} `),
       new DcJustifiedRow(`      ${bloodSoft("Placa:")}`, `${bloodWhite(plate)} `),
-      new DcJustifiedRow(`      ${bloodSoft("Taxímetro:")}`, `${dim(taximeterClean)} `),
+      new DcJustifiedRow(`      ${bloodSoft("Taxímetro:")}`, `${dim(taximeterText)} `),
       new DcJustifiedRow(
         `      ${dim("Telemetría en vivo")}`,
         `${bloodBright("[Alt+Shift+T ↗]")} `,
@@ -129,6 +123,212 @@ export function createTaxiUnitRows(unit: DcTaxiUnit): DcJustifiedRow[] {
     new DcJustifiedRow(`      ${bloodSoft("Estado:")}`, `${bloodWhite("disponible")} `),
     new DcJustifiedRow(`      ${bloodSoft("Asignación:")}`, `${dim("sin pasajero activo")} `),
   ];
+}
+
+// --- Clases Reutilizables de Quota y Taxis para StatusCard y Pestaña FLEET ---
+
+const bold = (s: string) => `\x1b[1m${s}\x1b[22m`;
+const grayLight = (s: string) => `\x1b[38;2;150;150;150m${s}\x1b[0m`;
+type QuotaAccount = ReturnType<typeof getCachedAccountQuotas>[number];
+
+function createQuotaRowsHelper(initial: QuotaAccount, collapsed: boolean) {
+  let account = initial;
+  return {
+    setAccount(next: QuotaAccount) {
+      account = next;
+    },
+    render(width: number) {
+      if (collapsed) {
+        const available = account.entries
+          .filter((entry) => typeof entry?.pctLeft === "number")
+          .map((entry) => `${entry.pctLeft}%`);
+        const summaryText = available.length > 0 ? available.join("/") : "100%";
+        const collapsedRestante = `${bloodBright("▰▰▱▱▱▱▱▱")} ${bloodWhite(summaryText)} `;
+        return new DcVStack([
+          new DcJustifiedRow(`      ${bloodSoft("Restante")}`, collapsedRestante),
+        ]).render(width);
+      }
+
+      return new DcVStack(account.entries.map((entry) => {
+        const isFallback = entry.pctLeft === 100 && entry.pctUsed === 0 && !entry.resetStr;
+        const barColor = isFallback ? "\x1b[38;2;100;100;100m" : bloodBrightAnsi;
+        const bar = renderProgressBar(entry.pctLeft, 8, "▰", "▱", barColor);
+        const valueStr = `${entry.pctLeft}%`;
+        return new DcJustifiedRow(
+          `      ${bloodSoft(entry.label + ":")}`,
+          `${bar} ${bloodWhite(valueStr)} `
+        );
+      })).render(width);
+    },
+    invalidate() {},
+  };
+}
+
+class QuotaProviderList implements Component {
+  public children: DcCollapsible[] = [];
+  private stack = new DcVStack([]);
+  private reqRender: () => void;
+  private providers = new Map<string, {
+    collapsible: DcCollapsible;
+    rows: ReturnType<typeof createQuotaRowsHelper>;
+    summary: ReturnType<typeof createQuotaRowsHelper>;
+  }>();
+
+  constructor(reqRender: () => void) {
+    this.reqRender = reqRender;
+  }
+
+  update(accounts: QuotaAccount[]) {
+    this.children = accounts.map((account, idx) => {
+      let provider = this.providers.get(account.prefix);
+      if (!provider) {
+        const rows = createQuotaRowsHelper(account, false);
+        const summary = createQuotaRowsHelper(account, true);
+        provider = {
+          rows,
+          summary,
+          collapsible: new DcCollapsible({
+            title: `   🎚️ ${bloodWhite(bold(account.prefix))} ${bloodSoft("(" + account.family + ")")}`,
+            titleRight: "5h / semanal",
+            expanded: idx === 0,
+            children: [rows],
+            collapsedChildren: [summary],
+            requestRender: this.reqRender,
+          }),
+        };
+        this.providers.set(account.prefix, provider);
+      }
+      provider.rows.setAccount(account);
+      provider.summary.setAccount(account);
+      provider.collapsible.options.title = `   🎚️ ${bloodWhite(bold(account.prefix))} ${bloodSoft("(" + account.family + ")")}`;
+      return provider.collapsible;
+    });
+    this.stack.children = this.children;
+  }
+
+  render(width: number) {
+    return this.stack.render(width);
+  }
+
+  handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
+    return this.stack.handleMouse(event);
+  }
+
+  invalidate() {
+    this.stack.invalidate();
+  }
+}
+
+class TaxiUnitList implements Component {
+  public children: DcCollapsible[] = [];
+  private stack = new DcVStack([]);
+  private activeTab: "ac" | "vip" = "ac";
+  private allUnits: DcTaxiUnit[] = [];
+  private tabsComponent: DcTabs;
+  private reqRender: () => void;
+  private unitsMap = new Map<string, {
+    collapsible: DcCollapsible;
+    rowsStack: DcVStack;
+  }>();
+
+  constructor(reqRender: () => void) {
+    this.reqRender = reqRender;
+    this.tabsComponent = new DcTabs({
+      tabs: [
+        { id: "ac", label: "Taxis AC" },
+        { id: "vip", label: "VIP (CC)" },
+      ],
+      activeId: "ac",
+      paddingX: 2,
+      separator: " │ ",
+      onSelect: (id) => {
+        this.activeTab = id as "ac" | "vip";
+        this.rebuildDisplayList();
+        this.reqRender();
+      },
+    });
+  }
+
+  update(units: DcTaxiUnit[]) {
+    this.allUnits = units;
+
+    let acCount = 0;
+    let vipCount = 0;
+    for (const u of units) {
+      const isVip = u.tier === "vip" || (u.account && u.account.startsWith("cc"));
+      if (isVip) vipCount++;
+      else acCount++;
+    }
+
+    this.tabsComponent.options.tabs = [
+      { id: "ac", label: `Taxis AC (${acCount})` },
+      { id: "vip", label: `VIP CC (${vipCount})` },
+    ];
+
+    this.rebuildDisplayList();
+  }
+
+  private rebuildDisplayList() {
+    const filtered = this.allUnits.filter((unit) => {
+      const isVip = unit.tier === "vip" || (unit.account && unit.account.startsWith("cc"));
+      return this.activeTab === "vip" ? isVip : !isVip;
+    });
+
+    this.children = filtered.map((unit) => {
+      let entry = this.unitsMap.get(unit.account);
+      const rows = createTaxiUnitRows(unit);
+      
+      const isVip = unit.tier === "vip" || (unit.account && unit.account.startsWith("cc"));
+      let titleBadge = isVip ? bloodBright("👑 VIP") : bloodSoft("○ libre");
+      let titleExtra = isVip ? bloodBright("[VIP]") : dim("(libre)");
+      if (unit.status === "ocupado") {
+        const role = unit.passenger ? formatPassengerRole(unit.passenger) : "ocupado";
+        titleBadge = isVip ? bloodBright("👑 VIP ●") : bloodBright("● ocupado");
+        titleExtra = bloodSoft(`[${role}]`);
+      } else if (unit.status === "recargando") {
+        titleBadge = bloodBright("◐ recarga");
+        titleExtra = dim("(<5%)");
+      } else if (unit.status === "en_taller") {
+        titleBadge = bloodBright("🛠️ EN TALLER");
+        titleExtra = bloodBright("[avería]");
+      }
+
+      const titleText = `   🚕 ${bloodWhite(bold(unit.account))} ${titleExtra}`;
+
+      if (!entry) {
+        const rowsStack = new DcVStack(rows);
+        const collapsible = new DcCollapsible({
+          title: titleText,
+          titleRight: titleBadge,
+          expanded: unit.status === "ocupado",
+          children: [rowsStack],
+          requestRender: this.reqRender,
+        });
+        entry = { collapsible, rowsStack };
+        this.unitsMap.set(unit.account, entry);
+      } else {
+        entry.rowsStack.children = rows;
+        entry.collapsible.options.title = titleText;
+        entry.collapsible.options.titleRight = titleBadge;
+      }
+
+      return entry.collapsible;
+    });
+
+    this.stack.children = [this.tabsComponent, ...this.children];
+  }
+
+  render(width: number) {
+    return this.stack.render(width);
+  }
+
+  handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
+    return this.stack.handleMouse(event);
+  }
+
+  invalidate() {
+    this.stack.invalidate();
+  }
 }
 
 export function createStatusCard(reqRender: () => void): Component {
@@ -488,92 +688,9 @@ export function createStatusCard(reqRender: () => void): Component {
   });
 
   // --- Bloque 3: Quota (Conectado al bridge :8325) ---
-  type QuotaAccount = ReturnType<typeof getCachedAccountQuotas>[number];
-  const createQuotaRows = (initial: QuotaAccount, collapsed: boolean) => {
-    let account = initial;
-    return {
-      setAccount(next: QuotaAccount) {
-        account = next;
-      },
-      render(width: number) {
-        if (collapsed) {
-          const available = account.entries
-            .filter((entry) => typeof entry?.pctLeft === "number")
-            .map((entry) => `${entry.pctLeft}%`);
-          const summaryText = available.length > 0 ? available.join("/") : "100%";
-          const collapsedRestante = `${bloodBright("▰▰▱▱▱▱▱▱")} ${bloodWhite(summaryText)} `;
-          return new DcVStack([
-            new DcJustifiedRow(`      ${bloodSoft("Restante")}`, collapsedRestante),
-          ]).render(width);
-        }
-
-        return new DcVStack(account.entries.map((entry) => {
-          const isFallback = entry.pctLeft === 100 && entry.pctUsed === 0 && !entry.resetStr;
-          const barColor = isFallback ? "\x1b[38;2;100;100;100m" : bloodBrightAnsi;
-          const bar = renderProgressBar(entry.pctLeft, 8, "▰", "▱", barColor);
-          const valueStr = `${entry.pctLeft}%`;
-          return new DcJustifiedRow(
-            `      ${bloodSoft(entry.label + ":")}`,
-            `${bar} ${bloodWhite(valueStr)} `
-          );
-        })).render(width);
-      },
-      invalidate() {},
-    };
-  };
-
-  class QuotaProviderList implements Component {
-    public children: DcCollapsible[] = [];
-    private stack = new DcVStack([]);
-    private providers = new Map<string, {
-      collapsible: DcCollapsible;
-      rows: ReturnType<typeof createQuotaRows>;
-      summary: ReturnType<typeof createQuotaRows>;
-    }>();
-
-    update(accounts: QuotaAccount[]) {
-      this.children = accounts.map((account, idx) => {
-        let provider = this.providers.get(account.prefix);
-        if (!provider) {
-          const rows = createQuotaRows(account, false);
-          const summary = createQuotaRows(account, true);
-          provider = {
-            rows,
-            summary,
-            collapsible: new DcCollapsible({
-              title: `   🎚️ ${bloodWhite(bold(account.prefix))} ${bloodSoft("(" + account.family + ")")}`,
-              titleRight: "5h / semanal",
-              expanded: idx === 0,
-              children: [rows],
-              collapsedChildren: [summary],
-              requestRender: reqRender,
-            }),
-          };
-          this.providers.set(account.prefix, provider);
-        }
-        provider.rows.setAccount(account);
-        provider.summary.setAccount(account);
-        provider.collapsible.options.title = `   🎚️ ${bloodWhite(bold(account.prefix))} ${bloodSoft("(" + account.family + ")")}`;
-        return provider.collapsible;
-      });
-      this.stack.children = this.children;
-    }
-
-    render(width: number) {
-      return this.stack.render(width);
-    }
-
-    handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
-      return this.stack.handleMouse(event);
-    }
-
-    invalidate() {
-      this.stack.invalidate();
-    }
-  }
 
   const quotaAccounts = getCachedAccountQuotas(reqRender);
-  const providerList = new QuotaProviderList();
+  const providerList = new QuotaProviderList(reqRender);
   providerList.update(quotaAccounts);
 
   class LiveQuotaCollapsible extends DcCollapsible {
@@ -615,119 +732,8 @@ export function createStatusCard(reqRender: () => void): Component {
 
   // --- Bloque 4: Taxis (Flota de subagentes y orquestador) ---
 
-  class TaxiUnitList implements Component {
-    public children: DcCollapsible[] = [];
-    private stack = new DcVStack([]);
-    private activeTab: "ac" | "vip" = "ac";
-    private allUnits: DcTaxiUnit[] = [];
-    private tabsComponent: DcTabs;
-    private unitsMap = new Map<string, {
-      collapsible: DcCollapsible;
-      rowsStack: DcVStack;
-    }>();
-
-    constructor() {
-      this.tabsComponent = new DcTabs({
-        tabs: [
-          { id: "ac", label: "Taxis AC" },
-          { id: "vip", label: "VIP (CC)" },
-        ],
-        activeId: "ac",
-        paddingX: 2,
-        separator: " │ ",
-        onSelect: (id) => {
-          this.activeTab = id as "ac" | "vip";
-          this.rebuildDisplayList();
-          reqRender();
-        },
-      });
-    }
-
-    update(units: DcTaxiUnit[]) {
-      this.allUnits = units;
-
-      // Calcular conteos para badges dinámicos
-      let acCount = 0;
-      let vipCount = 0;
-      for (const u of units) {
-        const isVip = u.tier === "vip" || (u.account && u.account.startsWith("cc"));
-        if (isVip) vipCount++;
-        else acCount++;
-      }
-
-      this.tabsComponent.options.tabs = [
-        { id: "ac", label: `Taxis AC (${acCount})` },
-        { id: "vip", label: `VIP CC (${vipCount})` },
-      ];
-
-      this.rebuildDisplayList();
-    }
-
-    private rebuildDisplayList() {
-      const filtered = this.allUnits.filter((unit) => {
-        const isVip = unit.tier === "vip" || (unit.account && unit.account.startsWith("cc"));
-        return this.activeTab === "vip" ? isVip : !isVip;
-      });
-
-      this.children = filtered.map((unit) => {
-        let entry = this.unitsMap.get(unit.account);
-        const rows = createTaxiUnitRows(unit);
-        
-        const isVip = unit.tier === "vip" || (unit.account && unit.account.startsWith("cc"));
-        let titleBadge = isVip ? bloodBright("👑 VIP") : bloodSoft("○ libre");
-        let titleExtra = isVip ? bloodBright("[VIP]") : dim("(libre)");
-        if (unit.status === "ocupado") {
-          const role = unit.passenger ? formatPassengerRole(unit.passenger) : "ocupado";
-          titleBadge = isVip ? bloodBright("👑 VIP ●") : bloodBright("● ocupado");
-          titleExtra = bloodSoft(`[${role}]`);
-        } else if (unit.status === "recargando") {
-          titleBadge = bloodBright("◐ recarga");
-          titleExtra = dim("(<5%)");
-        } else if (unit.status === "en_taller") {
-          titleBadge = bloodBright("🛠️ EN TALLER");
-          titleExtra = bloodBright("[avería]");
-        }
-
-        const titleText = `   🚕 ${bloodWhite(bold(unit.account))} ${titleExtra}`;
-
-        if (!entry) {
-          const rowsStack = new DcVStack(rows);
-          const collapsible = new DcCollapsible({
-            title: titleText,
-            titleRight: titleBadge,
-            expanded: unit.status === "ocupado",
-            children: [rowsStack],
-            requestRender: reqRender,
-          });
-          entry = { collapsible, rowsStack };
-          this.unitsMap.set(unit.account, entry);
-        } else {
-          entry.rowsStack.children = rows;
-          entry.collapsible.options.title = titleText;
-          entry.collapsible.options.titleRight = titleBadge;
-        }
-
-        return entry.collapsible;
-      });
-
-      this.stack.children = [this.tabsComponent, ...this.children];
-    }
-
-    render(width: number) {
-      return this.stack.render(width);
-    }
-
-    handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
-      return this.stack.handleMouse(event);
-    }
-
-    invalidate() {
-      this.stack.invalidate();
-    }
-  }
-
   const initialFleet = getSidebarTaxiFleet();
-  const taxiUnitList = new TaxiUnitList();
+  const taxiUnitList = new TaxiUnitList(reqRender);
   taxiUnitList.update(initialFleet.units);
 
   class LiveTaxisCollapsible extends DcCollapsible {
@@ -875,6 +881,398 @@ export function createStatusCard(reqRender: () => void): Component {
     glyph: "🗃 ",
     title: "Status",
     content: statusContent,
+    paddingX: 1,
+  });
+}
+
+/**
+ * Tarjeta dedicada de Proyecto y Entorno Base para la pestaña MAIN
+ */
+export function createProjectStatusCard(requestRender?: () => void): DcSidebarCard {
+  const reqRender = requestRender || (() => {});
+  const bold = (s: string) => `\x1b[1m${s}\x1b[22m`;
+  const project = getProjectInfo();
+  const branchText = project.branch ? `${project.branch}` : "sin git";
+  const changesCount = project.changesCount ?? 0;
+  const changesDisplay = changesCount > 0 ? bloodBright(bold(project.changesText)) : dim("sin cambios");
+
+  const projectRows: Component[] = [
+    new DcJustifiedRow(
+      `  📂 ${bloodBright(bold("Path:"))}`,
+      `${bloodWhite(project.displayCwd)} `,
+      () => {
+        const ctx = getSidebarContext();
+        if (ctx) {
+          void openPreviewDirectionMenu(ctx, "yazi", project.cwd);
+        }
+      }
+    ),
+    new DcJustifiedRow(
+      `  🌱 ${bloodBright(bold("Branch:"))}`,
+      `${dim(branchText)} `,
+      () => {
+        const ctx = getSidebarContext();
+        if (ctx) {
+          void openGitGraphViewer(ctx, project.cwd);
+        }
+      }
+    ),
+    new DcJustifiedRow(
+      `  📊 ${bloodBright(bold("Changes:"))}`,
+      `${changesDisplay} `,
+      () => {
+        const ctx = getSidebarContext();
+        if (ctx) {
+          void openChangesViewer(ctx);
+        }
+      }
+    )
+  ];
+
+  return new DcSidebarCard({
+    glyph: "📂 ",
+    title: "Proyecto",
+    content: new DcVStack(projectRows),
+    paddingX: 1,
+  });
+}
+
+/**
+ * Tarjeta dedicada de Flota de Taxis y Quotas de Proveedores para la pestaña FLEET
+ */
+export function createFleetQuotaCard(requestRender?: () => void): DcSidebarCard {
+  const reqRender = requestRender || (() => {});
+  const bold = (s: string) => `\x1b[1m${s}\x1b[22m`;
+
+  const quotaAccounts = getCachedAccountQuotas(reqRender);
+  const providerList = new QuotaProviderList(reqRender);
+  providerList.update(quotaAccounts);
+
+  class LiveQuotaCollapsible extends DcCollapsible {
+    render(width: number) {
+      const latestAccounts = getCachedAccountQuotas(reqRender);
+      providerList.update(latestAccounts);
+      const primaryCollapsed = latestAccounts[0]?.collapsedSummary ?? "ac06-100%-100%";
+      this.options.collapsedInfo = bloodWhite(bold(primaryCollapsed));
+      return super.render(width);
+    }
+  }
+
+  const quotaCollapsible = new LiveQuotaCollapsible({
+    title: `🧮 ${bloodBright(bold("Quota:"))}`,
+    collapsedInfo: bloodWhite(bold(quotaAccounts[0]?.collapsedSummary ?? "ac06-100%-100%")),
+    titleRight: dim("[↗]"),
+    onTitleRightClick: () => {
+      const ctx = getSidebarContext();
+      if (ctx) {
+        void openQuotaViewer(ctx);
+      }
+    },
+    expanded: true,
+    children: [
+      providerList,
+      new DcJustifiedRow(
+        `    ⚙️ ${dim("Gestor /quota")}`, 
+        `${dim("[abrir ↗]")} `,
+        () => {
+          const ctx = getSidebarContext();
+          if (ctx) {
+            void openQuotaViewer(ctx);
+          }
+        }
+      )
+    ],
+    requestRender: reqRender
+  });
+
+  const initialFleet = getSidebarTaxiFleet();
+  const taxiUnitList = new TaxiUnitList(reqRender);
+  taxiUnitList.update(initialFleet.units);
+
+  class LiveTaxisCollapsible extends DcCollapsible {
+    render(width: number) {
+      const latestFleet = getSidebarTaxiFleet();
+      taxiUnitList.update(latestFleet.units);
+      this.options.collapsedInfo = bloodWhite(bold(latestFleet.summaryText));
+      return super.render(width);
+    }
+  }
+
+  const taxisCollapsible = new LiveTaxisCollapsible({
+    title: `🚕 ${bloodBright(bold("Taxis:"))}`,
+    collapsedInfo: bloodWhite(bold(initialFleet.summaryText)),
+    titleRight: dim("[↗]"),
+    onTitleRightClick: () => {
+      const ctx = getSidebarContext();
+      if (ctx) {
+        void openTaxisViewer(ctx);
+      }
+    },
+    expanded: true,
+    children: [
+      taxiUnitList,
+      new DcJustifiedRow(
+        `    ⚙️ ${dim("Gestor /taxis")}`, 
+        `${dim("[abrir ↗]")} `,
+        () => {
+          const ctx = getSidebarContext();
+          if (ctx) {
+            void openTaxisViewer(ctx);
+          }
+        }
+      )
+    ],
+    requestRender: reqRender
+  });
+
+  return new DcSidebarCard({
+    glyph: "🚖 ",
+    title: "Flota & Cuotas",
+    content: new DcVStack([
+      quotaCollapsible,
+      new DcText("─"),
+      taxisCollapsible
+    ]),
+    paddingX: 1,
+  });
+}
+
+/**
+ * Tarjeta dedicada de Memoria (Engram Daemon + Centinela Soberano) para la pestaña MEM
+ */
+export function createMemoryVaultCard(requestRender?: () => void): DcSidebarCard {
+  const reqRender = requestRender || (() => {});
+  const engramProjectName = resolveEngramProjectName();
+  const engramObservations = getProjectObservations(50, engramProjectName);
+  const enrolled = isProjectEnrolled();
+  const engramStatus = enrolled ? bloodWhite("online") : bloodWhite("cloud sync");
+
+  const engramRows: Component[] = [
+    new DcJustifiedRow(
+      `    ${bloodSoft("●")} ${bloodBright("Daemon:")}`,
+      `${bloodWhite("localhost:7437")} `,
+      () => {
+        const ctx = getSidebarContext();
+        if (ctx) void openEngramExplorer(ctx, engramProjectName);
+      }
+    ),
+    new DcJustifiedRow(
+      `    📁 ${bloodBright("Project:")}`,
+      `${bloodWhite(engramProjectName)} `,
+      () => {
+        const ctx = getSidebarContext();
+        if (ctx) void openEngramExplorer(ctx, engramProjectName);
+      }
+    ),
+    new DcJustifiedRow(
+      `    🧠 ${bloodBright("Memories:")}`,
+      `${bloodWhite(String(engramObservations.length))} `,
+      () => {
+        const ctx = getSidebarContext();
+        if (ctx) void openEngramExplorer(ctx, engramProjectName);
+      }
+    ),
+    new DcJustifiedRow(
+      `    ⚙️ ${dim("Dashboard")}`,
+      `${dim("[abrir ↗]")} `,
+      () => {
+        void openProjectDashboard(engramProjectName);
+      }
+    ),
+  ];
+
+  if (!enrolled) {
+    engramRows.push(
+      new DcJustifiedRow(
+        `    ☁️ ${bloodSoft("Vincular Nube")}`,
+        `${bloodBright("[enrolar]")} `,
+        () => {
+          const ctx = getSidebarContext();
+          if (ctx) void openEngramEnrollModal(ctx);
+        }
+      )
+    );
+  }
+
+  const engramCollapsible = new DcCollapsible({
+    title: `🧠 ${bloodBright(bold("Engram:"))}`,
+    collapsedInfo: bloodSoft(engramStatus),
+    titleRight: dim("[↗]"),
+    onTitleRightClick: () => {
+      const ctx = getSidebarContext();
+      if (ctx) void openEngramExplorer(ctx, engramProjectName);
+    },
+    expanded: true,
+    children: engramRows,
+    requestRender: reqRender
+  });
+
+  const sentinelDb = new SentinelDatabase();
+  const sentinelStats: SentinelStats = sentinelDb.getStats();
+  const recentSentinelNotes: SentinelNote[] = sentinelDb.listNotes({ limit: 3 });
+
+  const sentinelRows: Component[] = [
+    new DcJustifiedRow(
+      `    🚇 ${bloodBright("Metro Lines:")}`,
+      `${bloodWhite(String(sentinelStats.framesCount))} `,
+      () => {
+        const ctx = getSidebarContext();
+        if (ctx) void openSentinelViewer(ctx, "metro");
+      }
+    ),
+    new DcJustifiedRow(
+      `    📜 ${bloodBright("Chronicles:")}`,
+      `${bloodWhite(String(sentinelStats.notesCount))} `,
+      () => {
+        const ctx = getSidebarContext();
+        if (ctx) void openSentinelViewer(ctx, "chronicle");
+      }
+    ),
+    new DcJustifiedRow(
+      `    ⚙️ ${dim("Bitácora /dc-sentinel")}`,
+      `${dim("[abrir ↗]")} `,
+      () => {
+        const ctx = getSidebarContext();
+        if (ctx) void openSentinelViewer(ctx, "session");
+      }
+    )
+  ];
+
+  if (recentSentinelNotes.length > 0) {
+    for (const note of recentSentinelNotes) {
+      const cleanTitle = note.title.length > 20 ? note.title.substring(0, 18) + ".." : note.title;
+      sentinelRows.push(
+        new DcJustifiedRow(
+          `    📌 ${dim(cleanTitle)}`,
+          `${bloodSoft(note.type)} `
+        )
+      );
+    }
+  }
+
+  const sentinelSummary = `${sentinelStats.notesCount} notas · ${sentinelStats.framesCount} frames`;
+  const sentinelCollapsible = new DcCollapsible({
+    title: `⛩️ ${bloodBright(bold("Centinela:"))}`,
+    collapsedInfo: bloodSoft(sentinelSummary),
+    titleRight: dim("[↗]"),
+    onTitleRightClick: () => {
+      const ctx = getSidebarContext();
+      if (ctx) void openSentinelViewer(ctx, "session");
+    },
+    expanded: true,
+    children: sentinelRows,
+    requestRender: reqRender
+  });
+
+  return new DcSidebarCard({
+    glyph: "🧠 ",
+    title: "Memoria & Bitácora",
+    content: new DcVStack([
+      engramCollapsible,
+      new DcText("─"),
+      sentinelCollapsible
+    ]),
+    paddingX: 1,
+  });
+}
+
+/**
+ * Tarjeta dedicada de Sistema (Perfiles de Modelo + MCP) para la pestaña SYS
+ */
+export function createSystemCard(requestRender?: () => void): DcSidebarCard {
+  const reqRender = requestRender || (() => {});
+  const profilesInfo = readProfilesInfo();
+  const profileRows = profilesInfo.profiles.map((p) => {
+    const isCurrent = p.name === profilesInfo.activeProfile;
+    const bullet = isCurrent ? bloodSoft("●") : grayLight("○");
+    const nameColor = isCurrent ? bloodWhite(bold(p.name)) : grayLight(p.name);
+    return new DcJustifiedRow(
+      `    ${bullet} ${nameColor}`,
+      `${dim("[cambiar]")} `,
+      () => {
+        const success = switchActiveProfile(p.name);
+        if (success) {
+          reqRender();
+        }
+      }
+    );
+  });
+
+  const profileCollapsible = new DcCollapsible({
+    title: `🎛️ ${bloodBright(bold("Profile:"))}`,
+    collapsedInfo: bloodWhite(profilesInfo.activeProfile || "default"),
+    titleRight: dim("[↗]"),
+    onTitleRightClick: () => {
+      const ctx = getSidebarContext();
+      void executeSlashCommand(ctx, "/gentle:profiles", "Perfiles");
+    },
+    expanded: true,
+    children: [
+      ...profileRows,
+      new DcJustifiedRow(
+        `    ⚙️ ${dim("Gestor /gentle:profiles")}`, 
+        `${dim("[abrir ↗]")} `,
+        () => {
+          const ctx = getSidebarContext();
+          void executeSlashCommand(ctx, "/gentle:profiles", "Perfiles");
+        }
+      )
+    ],
+    requestRender: reqRender
+  });
+
+  const mcpInfo = getMcpServersInfo();
+  const mcpRows = mcpInfo.servers.map((s) => {
+    if (s.disabled) {
+      return new DcJustifiedRow(
+        `    ${grayLight("○")} ${grayLight(s.name)}`,
+        `${grayLight("disabled")} `
+      );
+    }
+    const toolsStr = typeof s.toolsCount === "number"
+      ? `${s.toolsCount} tool${s.toolsCount === 1 ? "" : "s"}`
+      : "ready";
+    return new DcJustifiedRow(
+      `    ${bloodSoft("●")} ${bloodWhite(s.name)}`,
+      `${dim(toolsStr)} `
+    );
+  });
+
+  const mcpCollapsedSummary = mcpInfo.disabledCount > 0
+    ? `${mcpInfo.enabledCount} enabled · ${mcpInfo.disabledCount} disabled`
+    : `${mcpInfo.enabledCount} servers enabled`;
+
+  const mcpCollapsible = new DcCollapsible({
+    title: `🔌 ${bloodBright(bold("MCP:"))}`,
+    collapsedInfo: bloodSoft(mcpCollapsedSummary),
+    titleRight: dim("[↗]"),
+    onTitleRightClick: () => {
+      const ctx = getSidebarContext();
+      void executeSlashCommand(ctx, "/mcp", "MCP");
+    },
+    expanded: true,
+    children: [
+      ...mcpRows,
+      new DcJustifiedRow(
+        `    ⚙️ ${dim("Gestor /mcp")}`, 
+        `${dim("[abrir ↗]")} `,
+        () => {
+          const ctx = getSidebarContext();
+          void executeSlashCommand(ctx, "/mcp", "MCP");
+        }
+      )
+    ],
+    requestRender: reqRender
+  });
+
+  return new DcSidebarCard({
+    glyph: "🔌 ",
+    title: "Sistema & Entorno",
+    content: new DcVStack([
+      profileCollapsible,
+      new DcText("─"),
+      mcpCollapsible
+    ]),
     paddingX: 1,
   });
 }

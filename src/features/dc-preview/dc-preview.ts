@@ -61,17 +61,19 @@ export async function showTaskManagerSetup(cwd: string, ctx: ExtensionContext): 
 }
 
 export async function openPreviewDirectionMenu(
-  ctx: ExtensionContext,
-  mode: "nvim" | "fzf" | "yazi" | "dc-studio" | "engram",
+  ctx?: ExtensionContext,
+  mode: "nvim" | "fzf" | "yazi" | "dc-studio" | "engram" = "yazi",
   cwd?: string,
   options?: DcPreviewLauncherOptions,
 ): Promise<void> {
-  if (!ctx.hasUI) {
-    dcNotifier.notify(ctx, "DC Preview", "dc-preview necesita modo TUI.", "error");
+  if (!ctx || !ctx.hasUI) {
+    if (ctx) {
+      dcNotifier.notify(ctx, "DC Preview", "dc-preview necesita modo TUI.", "error");
+    }
     return;
   }
   const targetCwd = cwd || ctx.cwd || process.cwd();
-  const label = DC_PREVIEW_TOOL_LABELS[mode];
+  const label = DC_PREVIEW_TOOL_LABELS[mode] || mode;
 
   const picked = await openPreviewModal<DcPreviewOrientation>(
     ctx,
