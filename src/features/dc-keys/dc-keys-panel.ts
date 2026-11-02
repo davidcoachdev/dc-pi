@@ -31,6 +31,12 @@ export function getDefaultCategories(): ShortcutCategory[] {
         { key: "Alt+M", action: "selector de modelos y reasoning (Models)" },
         { key: "Alt+Shift+Q", action: "monitor de cuotas de modelos (Quota)" },
         { key: "Alt+Shift+B", action: "alternar visibilidad del sidebar DC Studio" },
+        { key: "Alt+1", action: "ir a pestaña [1 MAIN] del sidebar (Proyecto / Contexto / Todos)" },
+        { key: "Alt+2", action: "ir a pestaña [2 FLEET] del sidebar (Cuotas / Taxis / Subagentes)" },
+        { key: "Alt+3", action: "ir a pestaña [3 TREE] del sidebar (Explorador de Archivos)" },
+        { key: "Alt+4", action: "ir a pestaña [4 MEM] del sidebar (Engram / Centinela)" },
+        { key: "Alt+5", action: "ir a pestaña [5 SYS] del sidebar (Perfiles de Modelos / MCP)" },
+        { key: "Alt+6..9", action: "ir a pestañas adicionales 6 al 9 del sidebar (dinámicas)" },
         { key: "Alt+Shift+V", action: "lanzador de herramientas split en terminal (Preview)" },
         { key: "Alt+C", action: "duelo de perfiles (dcdev vs cubis)" },
         { key: "Alt+U", action: "control de voz TTS y Asistente (TTS Monitor)" },
@@ -100,16 +106,25 @@ export class DcKeysPanel implements Component {
   private categories: ShortcutCategory[];
   private activeCategoryIndex = 0;
   private selectedRowIndex = 0;
+  private scrollOffset = 0;
+  private lastRowCount = 0;
   private filter = "";
   private tabClickBounds: Array<{ start: number; end: number }> = [];
   private lastWidth = 0;
+  private readonly theme: Pick<Theme, "fg" | "bg" | "bold">;
+  private readonly requestRender: () => void;
+  private readonly maxRowsOption?: number | (() => number);
 
   constructor(
-    private readonly theme: Pick<Theme, "fg" | "bg" | "bold">,
-    private readonly requestRender: () => void,
+    theme: Pick<Theme, "fg" | "bg" | "bold">,
+    requestRender: () => void,
     categories: ShortcutCategory[] = getDefaultCategories(),
+    maxRows?: number | (() => number),
   ) {
+    this.theme = theme;
+    this.requestRender = requestRender;
     this.categories = categories;
+    this.maxRowsOption = maxRows;
   }
 
   invalidate(): void {}
@@ -122,9 +137,42 @@ export class DcKeysPanel implements Component {
     return this.selectedRowIndex;
   }
 
+  getScrollOffset(): number {
+    return this.scrollOffset;
+  }
+
+  public getMaxRows(): number {
+    if (typeof this.maxRowsOption === "function") {
+      return Math.max(6, this.maxRowsOption());
+    }
+    if (typeof this.maxRowsOption === "number") {
+      return Math.max(6, this.maxRowsOption);
+    }
+    const termRows = process.stdout?.rows ?? 40;
+    return Math.max(10, Math.min(26, Math.floor(termRows * 0.85) - 8));
+  }
+
+  private ensureCursorVisible(rowCount: number): void {
+    const rows = this.getFilteredRows();
+    if (rows.length === 0) {
+      this.selectedRowIndex = 0;
+      this.scrollOffset = 0;
+      return;
+    }
+    this.selectedRowIndex = Math.max(0, Math.min(rows.length - 1, this.selectedRowIndex));
+    const maxScroll = Math.max(0, rows.length - rowCount);
+    if (this.selectedRowIndex < this.scrollOffset) {
+      this.scrollOffset = this.selectedRowIndex;
+    } else if (this.selectedRowIndex >= this.scrollOffset + rowCount) {
+      this.scrollOffset = this.selectedRowIndex - rowCount + 1;
+    }
+    this.scrollOffset = Math.max(0, Math.min(maxScroll, this.scrollOffset));
+  }
+
   setFilter(filter: string): void {
     this.filter = filter.trim().toLowerCase();
     this.selectedRowIndex = 0;
+    this.scrollOffset = 0;
     this.requestRender();
   }
 
@@ -135,6 +183,7 @@ export class DcKeysPanel implements Component {
   nextCategory(): void {
     this.activeCategoryIndex = (this.activeCategoryIndex + 1) % this.categories.length;
     this.selectedRowIndex = 0;
+    this.scrollOffset = 0;
     this.requestRender();
   }
 
@@ -142,6 +191,7 @@ export class DcKeysPanel implements Component {
     this.activeCategoryIndex =
       (this.activeCategoryIndex - 1 + this.categories.length) % this.categories.length;
     this.selectedRowIndex = 0;
+    this.scrollOffset = 0;
     this.requestRender();
   }
 
@@ -208,7 +258,7 @@ export class DcKeysPanel implements Component {
       "",
     ];
 
-    // 3. Render shortcut rows with selectable highlighting (like caritas)
+    // 3. Render shortcut rows with selectable highlighting (like caritas) and autoscroll viewport
     const rowsToRender = this.getFilteredRows();
 
     if (rowsToRender.length === 0) {
@@ -216,16 +266,26 @@ export class DcKeysPanel implements Component {
       return lines.map((l) => truncateToWidth(l, safeW, ""));
     }
 
-    // Clamp selectedRowIndex
-    this.selectedRowIndex = Math.max(0, Math.min(rowsToRender.length - 1, this.selectedRowIndex));
+    const maxRows = this.getMaxRows();
+    const rowCount = Math.max(6, Math.min(maxRows, rowsToRender.length));
+    this.lastRowCount = rowCount;
+
+    // Clamp selectedRowIndex and ensure cursor is visible within viewport
+    this.ensureCursorVisible(rowCount);
+
+    const hasScrollbar = rowsToRender.length > rowCount;
+    const contentW = hasScrollbar ? Math.max(16, safeW - 2) : safeW;
 
     // Determine left column width (key shortcut)
     const maxKeyW = Math.min(26, Math.max(14, ...rowsToRender.map((r) => visibleWidth(r.key))));
-    const actionW = Math.max(10, safeW - maxKeyW - 8);
+    const actionW = Math.max(10, contentW - maxKeyW - 8);
 
-    for (let i = 0; i < rowsToRender.length; i++) {
-      const row = rowsToRender[i]!;
-      const isSelected = i === this.selectedRowIndex;
+    const visibleRows = rowsToRender.slice(this.scrollOffset, this.scrollOffset + rowCount);
+
+    for (let i = 0; i < visibleRows.length; i++) {
+      const rowIndex = this.scrollOffset + i;
+      const row = visibleRows[i]!;
+      const isSelected = rowIndex === this.selectedRowIndex;
 
       const bullet = isSelected ? t.fg("accent", "●") : t.fg("dim", "○");
       const keyPadded =
@@ -239,13 +299,28 @@ export class DcKeysPanel implements Component {
 
       const rawContent = ` ${bullet}  ${formattedKey}  ${t.fg("dim", "→")}  ${formattedAction}`;
       const vLen = visibleWidth(rawContent);
-      const paddedRow = vLen < safeW ? rawContent + " ".repeat(safeW - vLen) : rawContent;
+      const paddedRow = vLen < contentW ? rawContent + " ".repeat(contentW - vLen) : truncateToWidth(rawContent, contentW, "");
 
-      if (isSelected) {
-        lines.push(t.bg("selectedBg", paddedRow));
-      } else {
-        lines.push(paddedRow);
+      let scrollChar = "";
+      if (hasScrollbar) {
+        if (i === 0) {
+          scrollChar = this.scrollOffset > 0 ? t.fg("accent", "▲") : t.fg("dim", "─");
+        } else if (i === visibleRows.length - 1) {
+          const hasMore = this.scrollOffset + visibleRows.length < rowsToRender.length;
+          scrollChar = hasMore ? t.fg("accent", "▼") : t.fg("dim", "─");
+        } else {
+          const maxScroll = rowsToRender.length - rowCount;
+          const trackHeight = Math.max(1, visibleRows.length - 2);
+          const thumbRow = Math.min(trackHeight - 1, Math.round((this.scrollOffset / maxScroll) * (trackHeight - 1)));
+          const isThumb = (i - 1) === thumbRow;
+          scrollChar = isThumb ? t.fg("accent", "█") : t.fg("dim", "░");
+        }
       }
+
+      const rowText = isSelected ? t.bg("selectedBg", paddedRow) : paddedRow;
+      const fullLine = hasScrollbar ? `${rowText} ${scrollChar}` : rowText;
+
+      lines.push(fullLine);
     }
 
     return lines.map((l) => truncateToWidth(l, safeW, ""));
@@ -253,11 +328,13 @@ export class DcKeysPanel implements Component {
 
   handleInput(data: string): boolean {
     const rows = this.getFilteredRows();
+    const rowCount = this.lastRowCount || this.getMaxRows();
 
-    // Up / Down navigate between shortcuts (like in caritas)
+    // Up / Down navigate between shortcuts with autoscroll
     if (matchesKey(data, Key.up)) {
       if (this.selectedRowIndex > 0) {
         this.selectedRowIndex--;
+        this.ensureCursorVisible(rowCount);
         this.requestRender();
       }
       return true;
@@ -265,28 +342,47 @@ export class DcKeysPanel implements Component {
     if (matchesKey(data, Key.down)) {
       if (this.selectedRowIndex < rows.length - 1) {
         this.selectedRowIndex++;
+        this.ensureCursorVisible(rowCount);
         this.requestRender();
       }
       return true;
     }
 
+    // PageUp / PageDown scroll by page
+    if (matchesKey(data, Key.pageUp)) {
+      const pageSize = Math.max(1, rowCount - 1);
+      this.selectedRowIndex = Math.max(0, this.selectedRowIndex - pageSize);
+      this.ensureCursorVisible(rowCount);
+      this.requestRender();
+      return true;
+    }
+    if (matchesKey(data, Key.pageDown)) {
+      const pageSize = Math.max(1, rowCount - 1);
+      this.selectedRowIndex = Math.min(rows.length - 1, this.selectedRowIndex + pageSize);
+      this.ensureCursorVisible(rowCount);
+      this.requestRender();
+      return true;
+    }
+
     // Left / Right / Tab switch categories
-    if (matchesKey(data, Key.left) || matchesKey(data, Key.pageUp)) {
+    if (matchesKey(data, Key.left) || matchesKey(data, "shift+tab") || matchesKey(data, Key.shift("tab"))) {
       this.prevCategory();
       return true;
     }
-    if (matchesKey(data, Key.right) || matchesKey(data, Key.tab) || matchesKey(data, Key.pageDown)) {
+    if (matchesKey(data, Key.right) || matchesKey(data, Key.tab)) {
       this.nextCategory();
       return true;
     }
 
     if (matchesKey(data, Key.home)) {
       this.selectedRowIndex = 0;
+      this.ensureCursorVisible(rowCount);
       this.requestRender();
       return true;
     }
     if (matchesKey(data, Key.end)) {
       this.selectedRowIndex = Math.max(0, rows.length - 1);
+      this.ensureCursorVisible(rowCount);
       this.requestRender();
       return true;
     }
@@ -295,6 +391,7 @@ export class DcKeysPanel implements Component {
       if (this.filter.length > 0) {
         this.filter = this.filter.slice(0, -1);
         this.selectedRowIndex = 0;
+        this.scrollOffset = 0;
         this.requestRender();
         return true;
       }
@@ -303,6 +400,7 @@ export class DcKeysPanel implements Component {
       if (this.filter.length > 0) {
         this.filter = "";
         this.selectedRowIndex = 0;
+        this.scrollOffset = 0;
         this.requestRender();
         return true;
       }
@@ -313,6 +411,7 @@ export class DcKeysPanel implements Component {
     if (data.length === 1 && data.charCodeAt(0) >= 32 && data.charCodeAt(0) <= 126) {
       this.filter += data;
       this.selectedRowIndex = 0;
+      this.scrollOffset = 0;
       this.requestRender();
       return true;
     }
@@ -321,6 +420,10 @@ export class DcKeysPanel implements Component {
   }
 
   handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
+    const rows = this.getFilteredRows();
+    const rowCount = this.lastRowCount || this.getMaxRows();
+    const hasScrollbar = rows.length > rowCount;
+
     if (event.type === "click" && event.button === "left") {
       // Row 3 is the tabs line (y = 3)
       if (event.y === 3) {
@@ -329,34 +432,64 @@ export class DcKeysPanel implements Component {
           if (event.x >= bound.start && event.x < bound.end) {
             this.activeCategoryIndex = i;
             this.selectedRowIndex = 0;
+            this.scrollOffset = 0;
             this.requestRender();
             return { handled: true, render: true };
           }
         }
       }
 
-      // Click on a shortcut row (y >= 6 due to tabsBorderBottom)
       const clickedRow = event.y - 6;
-      const rows = this.getFilteredRows();
-      if (clickedRow >= 0 && clickedRow < rows.length) {
-        this.selectedRowIndex = clickedRow;
-        this.requestRender();
-        return { handled: true, render: true };
+
+      // Scrollbar click on the right edge
+      if (hasScrollbar && event.x >= this.lastWidth - 2) {
+        if (clickedRow === 0) {
+          if (this.selectedRowIndex > 0) {
+            this.selectedRowIndex = Math.max(0, this.selectedRowIndex - 1);
+            this.ensureCursorVisible(rowCount);
+            this.requestRender();
+            return { handled: true, render: true };
+          }
+        } else if (clickedRow === rowCount - 1) {
+          if (this.selectedRowIndex < rows.length - 1) {
+            this.selectedRowIndex = Math.min(rows.length - 1, this.selectedRowIndex + 1);
+            this.ensureCursorVisible(rowCount);
+            this.requestRender();
+            return { handled: true, render: true };
+          }
+        } else if (clickedRow > 0 && clickedRow < rowCount - 1) {
+          const trackHeight = Math.max(1, rowCount - 2);
+          const ratio = (clickedRow - 1) / trackHeight;
+          this.selectedRowIndex = Math.max(0, Math.min(rows.length - 1, Math.round(ratio * (rows.length - 1))));
+          this.ensureCursorVisible(rowCount);
+          this.requestRender();
+          return { handled: true, render: true };
+        }
+      }
+
+      // Click on a shortcut row (y >= 6 due to tabsBorderBottom)
+      if (clickedRow >= 0 && clickedRow < rowCount) {
+        const clickedIndex = this.scrollOffset + clickedRow;
+        if (clickedIndex >= 0 && clickedIndex < rows.length) {
+          this.selectedRowIndex = clickedIndex;
+          this.ensureCursorVisible(rowCount);
+          this.requestRender();
+          return { handled: true, render: true };
+        }
       }
     }
 
     if (event.type === "wheel") {
-      const delta = event.wheelDelta ?? 0;
-      const rows = this.getFilteredRows();
-      if (delta > 0 && this.selectedRowIndex < rows.length - 1) {
-        this.selectedRowIndex++;
-        this.requestRender();
-        return { handled: true, render: true };
-      } else if (delta < 0 && this.selectedRowIndex > 0) {
-        this.selectedRowIndex--;
+      const delta = event.wheelDelta ?? ((event as any).deltaY > 0 ? 1 : -1);
+      if (rows.length === 0) return undefined;
+      const nextIndex = Math.max(0, Math.min(rows.length - 1, this.selectedRowIndex + (delta > 0 ? 1 : -1)));
+      if (nextIndex !== this.selectedRowIndex) {
+        this.selectedRowIndex = nextIndex;
+        this.ensureCursorVisible(rowCount);
         this.requestRender();
         return { handled: true, render: true };
       }
+      return { handled: true };
     }
 
     return undefined;

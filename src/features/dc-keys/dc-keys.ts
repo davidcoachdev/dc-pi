@@ -17,13 +17,19 @@ export async function openKeysViewer(
     frame: "double",
     width: "50%",
     maxHeight: "85%",
+    scrollable: false,
     footer: (theme) => ({
-      left: `  ${theme.fg("accent", "←→ / Tab")} ${theme.fg("dim", "categoría")}   ${theme.fg("accent", "Escribí")} ${theme.fg("dim", "buscar")}   ${theme.fg("accent", "esc")} ${theme.fg("dim", "cerrar")}`,
+      left: `  ${theme.fg("accent", "←→ / Tab")} ${theme.fg("dim", "categoría")}   ${theme.fg("accent", "↑↓/PgUp/Dn")} ${theme.fg("dim", "navegar")}   ${theme.fg("accent", "Escribí")} ${theme.fg("dim", "buscar")}   ${theme.fg("accent", "esc")} ${theme.fg("dim", "cerrar")}`,
       right: `${theme.fg("accent", "[ Cerrar ]")}  `,
     }),
     onFooterRightClick: () => {},
     content: (_done, theme, tui) => {
-      return new DcKeysPanel(theme, () => tui.requestRender(), categories);
+      return new DcKeysPanel(
+        theme,
+        () => tui.requestRender(),
+        categories,
+        () => Math.max(8, Math.min(26, Math.floor(((tui as any)?.terminal?.rows ?? process.stdout?.rows ?? 40) * 0.85) - 8)),
+      );
     },
   });
 }

@@ -76,6 +76,107 @@ test("DcKeysPanel filters shortcuts as user types", () => {
   assert.equal(panel.getFilter(), "");
 });
 
+test("DcKeysPanel autoscrolls down and up when navigating beyond viewport", () => {
+  let renders = 0;
+  // Limit viewport to 8 visible rows to test autoscroll clearly
+  const panel = new DcKeysPanel(dummyTheme, () => { renders++; }, getDefaultCategories(), 8);
+
+  // Initial render with width 70
+  panel.render(70);
+  assert.equal(panel.getSelectedRowIndex(), 0);
+  assert.equal(panel.getScrollOffset(), 0);
+
+  // Move down to row 7 (still within 8 rows budget 0..7)
+  for (let i = 0; i < 7; i++) {
+    panel.handleInput("\x1b[B"); // Down
+  }
+  assert.equal(panel.getSelectedRowIndex(), 7);
+  assert.equal(panel.getScrollOffset(), 0);
+
+  // Move down to row 8 -> should autoscroll down to scrollOffset = 1
+  panel.handleInput("\x1b[B"); // Down
+  assert.equal(panel.getSelectedRowIndex(), 8);
+  assert.equal(panel.getScrollOffset(), 1);
+
+  // Move down further to row 12 -> scrollOffset = 12 - 8 + 1 = 5
+  for (let i = 0; i < 4; i++) {
+    panel.handleInput("\x1b[B"); // Down
+  }
+  assert.equal(panel.getSelectedRowIndex(), 12);
+  assert.equal(panel.getScrollOffset(), 5);
+
+  // Render when scrolled: should contain row 12
+  const lines = panel.render(70);
+  assert.ok(lines.some((l) => l.includes("●") && l.includes("Alt+6..9")));
+
+  // Move up to row 4 -> scrollOffset should autoscroll up to 4
+  for (let i = 0; i < 8; i++) {
+    panel.handleInput("\x1b[A"); // Up
+  }
+  assert.equal(panel.getSelectedRowIndex(), 4);
+  assert.equal(panel.getScrollOffset(), 4);
+
+  // End key jumps to the end of the category
+  panel.handleInput("\x1b[F"); // End or Key.end
+  const totalRows = panel.getActiveCategory().rows.length;
+  assert.equal(panel.getSelectedRowIndex(), totalRows - 1);
+  assert.equal(panel.getScrollOffset(), totalRows - 8);
+
+  // Home key jumps to 0
+  panel.handleInput("\x1b[H"); // Home
+  assert.equal(panel.getSelectedRowIndex(), 0);
+  assert.equal(panel.getScrollOffset(), 0);
+});
+
+test("DcKeysPanel handles PageDown and PageUp scrolling", () => {
+  const panel = new DcKeysPanel(dummyTheme, () => {}, getDefaultCategories(), 8);
+  panel.render(70);
+
+  // PageDown advances by pageSize (8 - 1 = 7)
+  panel.handleInput("\x1b[6~"); // PageDown
+  assert.equal(panel.getSelectedRowIndex(), 7);
+
+  panel.handleInput("\x1b[6~"); // PageDown
+  assert.equal(panel.getSelectedRowIndex(), 14);
+  assert.equal(panel.getScrollOffset(), 14 - 8 + 1);
+
+  // PageUp retreats by pageSize
+  panel.handleInput("\x1b[5~"); // PageUp
+  assert.equal(panel.getSelectedRowIndex(), 7);
+  assert.equal(panel.getScrollOffset(), 7);
+});
+
+test("DcKeysPanel handles mouse wheel and row click with scroll offset", () => {
+  let renders = 0;
+  const panel = new DcKeysPanel(dummyTheme, () => { renders++; }, getDefaultCategories(), 8);
+  panel.render(70);
+
+  // Mouse wheel down
+  const wheelDown = panel.handleMouse({
+    type: "wheel",
+    wheelDelta: 1,
+  } as unknown as TuiMouseEvent);
+  assert.equal(wheelDown?.handled, true);
+  assert.equal(panel.getSelectedRowIndex(), 1);
+
+  // Set selection to row 10 and update scroll offset
+  for (let i = 0; i < 9; i++) {
+    panel.handleInput("\x1b[B");
+  }
+  assert.equal(panel.getSelectedRowIndex(), 10);
+  assert.equal(panel.getScrollOffset(), 3);
+
+  // Click on row y = 6 (which is visible row 0, corresponding to index scrollOffset + 0 = 3)
+  const clickRow = panel.handleMouse({
+    type: "click",
+    button: "left",
+    x: 10,
+    y: 6,
+  } as unknown as TuiMouseEvent);
+  assert.equal(clickRow?.handled, true);
+  assert.equal(panel.getSelectedRowIndex(), 3);
+});
+
 test("dcKeysExtension registers only /dc-keys", () => {
   const registeredCommands: string[] = [];
   let registeredShortcut: string | undefined;
