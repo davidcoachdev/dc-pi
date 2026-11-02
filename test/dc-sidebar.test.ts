@@ -123,6 +123,9 @@ test("dcSidebarExtension registers /dc-sidebar command and alt+shift+b shortcut"
 
   assert.ok(commands.has("dc-sidebar"));
   assert.ok(shortcuts.has("alt+shift+b"));
+  for (let i = 1; i <= 9; i++) {
+    assert.ok(shortcuts.has(`alt+${i}`));
+  }
   assert.ok(events.has("session_start"));
 });
 

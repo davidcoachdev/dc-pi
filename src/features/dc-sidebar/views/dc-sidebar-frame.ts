@@ -70,14 +70,20 @@ export function getSidebarScrollView(tui: any): ScrollView {
   return cachedScrollView;
 }
 
-export function getSidebarTabs(tui: any): DcSidebarTabs {
+export function getSidebarTabs(tui?: any): DcSidebarTabs {
   if (!cachedTabs) {
-    cachedTabs = new DcSidebarTabs(undefined, (tabId) => {
+    const themeFn = (globalThis as any)[Symbol.for("dc.sidebar.theme-fn")];
+    const theme = typeof themeFn === "function" ? themeFn() : undefined;
+    cachedTabs = new DcSidebarTabs(theme, (tabId) => {
       const pagedBody = getSidebarPagedBody();
       pagedBody?.setTab(tabId);
     });
   }
   return cachedTabs;
+}
+
+export function resetSidebarTabsCacheForTesting(): void {
+  cachedTabs = undefined;
 }
 
 export function framedRail(tui: any, bodyComp?: Component, footerComp?: Component): Component {
