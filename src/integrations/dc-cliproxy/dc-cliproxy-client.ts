@@ -6,6 +6,19 @@ import { fetchJson, type FetchJsonOptions } from "../dc-http/dc-fetch.ts";
 export const DEFAULT_CLIPROXY_URL = "http://127.0.0.1:8317";
 export const DEFAULT_MGMT_KEY_FILE = path.join(os.homedir(), ".config/cliproxy/mgmt-key");
 
+export interface CliProxyModelItem {
+  id: string;
+  object?: string;
+  created?: number;
+  owned_by?: string;
+  [key: string]: unknown;
+}
+
+export interface CliProxyModelsResponse {
+  object?: string;
+  data?: CliProxyModelItem[];
+}
+
 export interface AuthFileSummary {
   name?: string;
   email?: string;
@@ -116,6 +129,21 @@ export class CliProxyClient {
   async downloadAuthFile<T = unknown>(fileName: string): Promise<T> {
     const query = encodeURIComponent(fileName);
     return this.getManagement<T>(`/auth-files/download?name=${query}`);
+  }
+
+  /** Fetch raw model catalog from CLIProxy OpenAI-compatible endpoint (/v1/models). */
+  async getModels(apiKey = "DC20DEV26CAPI#"): Promise<CliProxyModelItem[]> {
+    try {
+      const res = await fetchJson<CliProxyModelsResponse>(`${this.baseUrl}/v1/models`, {
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+        },
+        timeoutMs: this.timeoutMs,
+      });
+      return Array.isArray(res.data) ? res.data : [];
+    } catch {
+      return [];
+    }
   }
 
   /** Build account prefix-to-email dictionary across all auth files. */

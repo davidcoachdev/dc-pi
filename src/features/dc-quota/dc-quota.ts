@@ -4,6 +4,7 @@ import * as path from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { openDcModal } from "../../ui/dc-modal.ts";
 import { cliProxyClient } from "../../integrations/dc-cliproxy/dc-cliproxy-client.ts";
+import { accountCoordinator } from "../../integrations/dc-cliproxy/dc-account-coordinator.ts";
 import { fetchJson } from "../../integrations/dc-http/dc-fetch.ts";
 import { dcNotifier } from "../../integrations/dc-notify/dc-notifier.ts";
 import { DcQuotaPanel } from "./dc-quota-panel.ts";
@@ -301,7 +302,7 @@ export async function fetchBridgeQuota(prefix: string): Promise<QuotaRow[] | nul
 }
 
 /** Consulta las secciones de cuentas de CLIProxy */
-export async function fetchCliProxySections(): Promise<QuotaSection[]> {
+export async function fetchCliProxySections(forceRefresh = false): Promise<QuotaSection[]> {
   if (!cliProxyClient.hasManagementKey()) {
     return [
       {
@@ -313,10 +314,9 @@ export async function fetchCliProxySections(): Promise<QuotaSection[]> {
     ];
   }
 
-  let files: Array<{ name?: string; auth_index?: string; provider?: string }> = [];
+  let accounts: Map<string, any>;
   try {
-    const data = await cliProxyClient.getAuthFiles();
-    files = (data?.files as any) ?? [];
+    accounts = await accountCoordinator.getAccounts(forceRefresh);
   } catch (e: any) {
     return [
       {
@@ -328,84 +328,52 @@ export async function fetchCliProxySections(): Promise<QuotaSection[]> {
     ];
   }
 
-  // Filtrar cuentas desactivadas (disabled o status === 'disabled')
-  const activeFiles = files.filter((f: any) => !f.disabled && f.status !== "disabled");
+  const accountList = Array.from(accounts.values()).filter((a) => !a.disabled);
 
   const discovered = await Promise.all(
-    activeFiles.map(async (f: any) => {
-      let prefix = "";
-      let provider = (f.provider ?? "").toLowerCase();
-      let chatgptAccountId: string | undefined;
+    accountList.map(async (a: any) => {
+      const prefix = a.prefix.toLowerCase();
+      const provider = (a.provider ?? "").toLowerCase();
+      const raw = a.raw ?? {};
+      const chatgptAccountId = raw.id_token?.chatgpt_account_id;
+      const email = a.email ?? raw.id_token?.email;
+
+      const section: QuotaSection = {
+        id: `cliproxy-${prefix}`,
+        title: email ? `[${prefix.toUpperCase()} - ${email}]` : `[${prefix.toUpperCase()}]`,
+        rows: [],
+      };
 
       try {
-        const d = await cliProxyClient.downloadAuthFile<{
-          prefix?: string;
-          type?: string;
-          provider?: string;
-          disabled?: boolean;
-          status?: string;
-          email?: string;
-          id_token?: { chatgpt_account_id?: string; email?: string; chatgpt_subscription_active_until?: string };
-        }>(f.name ?? "");
-
-        if (!d.prefix) {
-          return {
-            id: `cliproxy-${f.name ?? "?"}`,
-            title: `[CLIProxy]`,
-            rows: [],
-            error: `sin prefix: ${f.name ?? "?"}`,
-          };
-        }
-
-        // Si el archivo auth interno marca disabled, se ignora
-        if (d.disabled || d.status === "disabled") {
-          return null;
-        }
-
-        prefix = d.prefix.toLowerCase();
-        provider = (d.provider ?? d.type ?? provider).toLowerCase();
-        chatgptAccountId = d.id_token?.chatgpt_account_id;
-        const email = d.email ?? d.id_token?.email;
-        const section: QuotaSection = {
-          id: `cliproxy-${prefix}`,
-          title: email ? `[${prefix.toUpperCase()} - ${email}]` : `[${prefix.toUpperCase()}]`,
-          rows: [],
-        };
-
-        try {
-          const bridgeRows = await fetchBridgeQuota(prefix);
-          if (bridgeRows && bridgeRows.length > 0) {
-            section.rows = bridgeRows;
-          } else {
-            const authIndex = f.auth_index ?? "";
-            if (!authIndex) throw new Error(`sin auth_index para ${prefix}`);
-            if (provider === "antigravity") {
-              section.rows = await fetchAntigravityRows(authIndex, prefix);
-            } else if (provider === "codex") {
-              const codexRes = await fetchCodexData(authIndex, chatgptAccountId);
-              section.rows = codexRes.rows;
-              section.resetCredits = codexRes.resetCredits;
-              section.limitReached = codexRes.limitReached;
-              if (d.id_token?.chatgpt_subscription_active_until) {
-                section.resetRenewalDate = d.id_token.chatgpt_subscription_active_until;
-              }
-            } else {
-              section.error = `provider '${provider || "?"}' sin lector`;
+        const bridgeRows = await accountCoordinator.getCachedQuota(
+          prefix,
+          async () => (await fetchBridgeQuota(prefix)) ?? [],
+          forceRefresh,
+        );
+        if (bridgeRows && bridgeRows.length > 0) {
+          section.rows = bridgeRows;
+        } else {
+          const authIndex = raw.auth_index ?? "";
+          if (!authIndex) throw new Error(`sin auth_index para ${prefix}`);
+          if (provider === "antigravity") {
+            section.rows = await fetchAntigravityRows(authIndex, prefix);
+          } else if (provider === "codex") {
+            const codexRes = await fetchCodexData(authIndex, chatgptAccountId);
+            section.rows = codexRes.rows;
+            section.resetCredits = codexRes.resetCredits;
+            section.limitReached = codexRes.limitReached;
+            if (raw.id_token?.chatgpt_subscription_active_until) {
+              section.resetRenewalDate = raw.id_token.chatgpt_subscription_active_until;
             }
+          } else {
+            section.error = `provider '${provider || "?"}' sin lector`;
           }
-        } catch (e: any) {
-          section.error = String(e?.message ?? e).slice(0, 80);
         }
-
-        return section;
       } catch (e: any) {
-        return {
-          id: `cliproxy-${f.name ?? "?"}`,
-          title: `[CLIProxy]`,
-          rows: [],
-          error: String(e?.message ?? e).slice(0, 80),
-        };
+        section.error = String(e?.message ?? e).slice(0, 80);
       }
+
+      return section;
     }),
   );
 
@@ -415,7 +383,7 @@ export async function fetchCliProxySections(): Promise<QuotaSection[]> {
 }
 
 /** Fetch live quotas across OpenCode Go and CLIProxy accounts. */
-export async function fetchAllQuotas(): Promise<QuotaSection[]> {
+export async function fetchAllQuotas(forceRefresh = false): Promise<QuotaSection[]> {
   const [zenRes, cliproxyRes] = await Promise.allSettled([
     (async () => {
       const key = readPiAuthKey();
@@ -429,7 +397,7 @@ export async function fetchAllQuotas(): Promise<QuotaSection[]> {
       }
       return fetchZenQuota(key);
     })(),
-    fetchCliProxySections(),
+    fetchCliProxySections(forceRefresh),
   ]);
 
   const sections: QuotaSection[] = [];
@@ -475,9 +443,12 @@ export async function fetchAllQuotas(): Promise<QuotaSection[]> {
 export async function openQuotaViewer(ctx: ExtensionContext): Promise<void> {
   let panelRef: DcQuotaPanel | undefined;
 
-  const loadQuotas = async (panel?: DcQuotaPanel) => {
+  const loadQuotas = async (panel?: DcQuotaPanel, forceRefresh = false) => {
     try {
-      const data = await fetchAllQuotas();
+      if (forceRefresh) {
+        accountCoordinator.invalidateAll();
+      }
+      const data = await fetchAllQuotas(forceRefresh);
       panel?.setSections(data);
     } catch (err: any) {
       panel?.setSections([
@@ -505,7 +476,7 @@ export async function openQuotaViewer(ctx: ExtensionContext): Promise<void> {
     onFooterRightClick: async () => {
       if (panelRef) {
         panelRef.setLoading(true);
-        await loadQuotas(panelRef);
+        await loadQuotas(panelRef, true);
         dcNotifier.notify(ctx, "Cuotas", "Cuotas actualizadas en vivo", "info");
       }
     },
@@ -519,7 +490,7 @@ export async function openQuotaViewer(ctx: ExtensionContext): Promise<void> {
         currentModelId: ctx.model?.id,
         currentModelProvider: ctx.model?.provider ? String(ctx.model.provider) : undefined,
         onRefresh: async () => {
-          await loadQuotas(panel);
+          await loadQuotas(panel, true);
           tui.requestRender();
         },
         requestRender: () => tui.requestRender(),
@@ -527,7 +498,7 @@ export async function openQuotaViewer(ctx: ExtensionContext): Promise<void> {
       panelRef = panel;
 
       // Iniciar carga en segundo plano
-      void loadQuotas(panel).then(() => {
+      void loadQuotas(panel, false).then(() => {
         tui.requestRender();
       });
 
