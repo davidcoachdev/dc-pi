@@ -3,7 +3,8 @@ import { ScrollView } from "@earendil-works/pi-tui";
 import { FRAME, RAIL_WIDTH, LAYOUT_NODE } from "../core/dc-sidebar-types.ts";
 import { coloredFrame, titleBarLine } from "./dc-sidebar-header.ts";
 import { createSidebarFooter } from "./dc-sidebar-footer.ts";
-import { createSidebarBody } from "./dc-sidebar-body.ts";
+import { createSidebarBody, getSidebarPagedBody } from "./dc-sidebar-body.ts";
+import { DcSidebarTabs } from "./dc-sidebar-tabs.ts";
 import { openProfilePicker } from "../../dc-face/views/dc-profile-duel.ts";
 import { getSidebarContext } from "../dc-sidebar.ts";
 
@@ -56,6 +57,7 @@ export function wrapVStack(top: Component, bottom: Component): Component {
 
 let cachedBody: Component | undefined;
 let cachedScrollView: ScrollView | undefined;
+let cachedTabs: DcSidebarTabs | undefined;
 
 export function getSidebarScrollView(tui: any): ScrollView {
   if (!cachedScrollView) {
@@ -68,6 +70,16 @@ export function getSidebarScrollView(tui: any): ScrollView {
   return cachedScrollView;
 }
 
+export function getSidebarTabs(tui: any): DcSidebarTabs {
+  if (!cachedTabs) {
+    cachedTabs = new DcSidebarTabs(undefined, (tabId) => {
+      const pagedBody = getSidebarPagedBody();
+      pagedBody?.setTab(tabId);
+    });
+  }
+  return cachedTabs;
+}
+
 export function framedRail(tui: any, bodyComp?: Component, footerComp?: Component): Component {
   const total = RAIL_WIDTH + 2; // 52
   const b = (s: string) => coloredFrame(tui, s);
@@ -76,6 +88,7 @@ export function framedRail(tui: any, bodyComp?: Component, footerComp?: Componen
   const ruleLine = b(FRAME.dividerLeft + FRAME.h.repeat(total - 2) + FRAME.dividerRight);
   const bottomLine = b(FRAME.bl + FRAME.h.repeat(total - 2) + FRAME.br);
 
+  const tabs = getSidebarTabs(tui);
   const body = getSidebarScrollView(tui);
   const footer = footerComp || createSidebarFooter(tui, total, {
     onFaceClick: () => {
@@ -89,12 +102,31 @@ export function framedRail(tui: any, bodyComp?: Component, footerComp?: Componen
       }
     },
   });
-  const content = wrapVStack(body, footer);
+
+  // wrapVStack modificado: [Tabs (fijo arriba), Body (scrollable centro), Footer (fijo abajo)]
+  const innerStack: Component = {
+    render: () => [] as string[],
+    invalidate() {
+      tabs.invalidate?.();
+      body.invalidate?.();
+      footer.invalidate?.();
+    },
+    [LAYOUT_NODE]: () => ({
+      type: "vstack",
+      gap: 0,
+      align: "stretch",
+      entries: [
+        { component: tabs, basis: "auto", grow: 0, shrink: 0, minSize: 2 },
+        { component: body, basis: 0, grow: 1, shrink: 1, minSize: 1 },
+        { component: footer, basis: "auto", grow: 0, shrink: 0, minSize: 0 },
+      ],
+    }),
+  } as unknown as Component;
 
   const middle: Component = {
     render: () => [] as string[],
     invalidate() {
-      content.invalidate?.();
+      innerStack.invalidate?.();
     },
     [LAYOUT_NODE]: () => ({
       type: "hstack",
@@ -102,7 +134,7 @@ export function framedRail(tui: any, bodyComp?: Component, footerComp?: Componen
       align: "stretch",
       entries: [
         { component: borderColumn(tui, FRAME.v), basis: 1, grow: 0, shrink: 0, minSize: 1 },
-        { component: content, basis: 0, grow: 1, shrink: 1, minSize: 1 },
+        { component: innerStack, basis: 0, grow: 1, shrink: 1, minSize: 1 },
         { component: borderColumn(tui, FRAME.v), basis: 1, grow: 0, shrink: 0, minSize: 1 },
       ],
     }),

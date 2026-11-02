@@ -10,6 +10,7 @@ export interface DcSidebarPrefs {
   bodyFrame?: boolean;
   headerBar?: boolean;
   minWidth?: number;
+  activeTab?: string;
 }
 
 export const STATE_FILE = resolveDcConfigPath("sidebar");
@@ -26,9 +27,10 @@ export function readSidebarPrefs(): DcSidebarPrefs {
       bodyFrame: j.bodyFrame === true,
       headerBar: j.headerBar === true,
       minWidth,
+      activeTab: typeof j.activeTab === "string" ? j.activeTab : "main",
     };
   } catch {
-    return { hidden: false, frame: true, bodyFrame: false, headerBar: false, minWidth: DEFAULT_SIDEBAR_BREAKPOINT };
+    return { hidden: false, frame: true, bodyFrame: false, headerBar: false, minWidth: DEFAULT_SIDEBAR_BREAKPOINT, activeTab: "main" };
   }
 }
 

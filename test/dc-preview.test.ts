@@ -309,3 +309,11 @@ test("openPreviewDirectionMenu handles plain terminal without multiplexer gracef
     "Must notify gracefully about missing multiplexer",
   );
 });
+
+test("openPreviewDirectionMenu handles undefined ctx safely without uncaught exception", async () => {
+  // Verifies fix for TypeError: Cannot read properties of undefined (reading 'hasUI')
+  await assert.doesNotReject(async () => {
+    await openPreviewDirectionMenu(undefined, "yazi", "/var/project/my-app");
+  });
+});
+
