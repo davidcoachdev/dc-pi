@@ -17,6 +17,7 @@ import { openChangesViewer } from "../../dc-changes/dc-changes.ts";
 import { openGitGraphViewer } from "../../dc-git-graph/index.ts";
 import { openPreviewDirectionMenu } from "../../dc-preview/index.ts";
 import { openQuotaViewer } from "../../dc-quota/dc-quota.ts";
+import { DcTabs } from "../../../ui/dc-tabs.ts";
 import { openTaxisViewer } from "../../dc-agents/dc-agents.ts";
 import { openEngramExplorer, openEngramEnrollModal, openProjectDashboard } from "../../dc-engram/dc-engram.ts";
 import { openSentinelViewer } from "../../dc-sentinel/views/dc-sentinel-modal.ts";
@@ -55,7 +56,9 @@ export function createTaxiUnitRows(unit: DcTaxiUnit): DcJustifiedRow[] {
     const modelRaw = p.model || "gemini-3.8-flash";
     const modelClean = modelRaw.split("/").pop() || modelRaw;
     const elapsed = formatElapsedDuration(p.startedAt);
-    const plate = p.plate || `DC-${p.pid}`;
+    const plateRaw = p.plate || `DC-${p.pid}`;
+    // Permitir hasta 22 caracteres (10 caracteres más de margen) sin corchetes
+    const plate = plateRaw.length > 22 ? `${plateRaw.slice(0, 20)}..` : plateRaw;
 
     const tokensNum = typeof p.tokens === "number"
       ? p.tokens
@@ -75,12 +78,18 @@ export function createTaxiUnitRows(unit: DcTaxiUnit): DcJustifiedRow[] {
       taximeterText = elapsed;
     }
 
+    // Truncar el taxímetro para que nunca desborde
+    const taximeterClean = taximeterText.length > 18 ? `${taximeterText.slice(0, 16)}..` : taximeterText;
+
+    const roleShort = role.length > 16 ? `${role.slice(0, 14)}..` : role;
+    const modelShort = modelClean.length > 16 ? `${modelClean.slice(0, 14)}..` : modelClean;
+
     return [
-      new DcJustifiedRow(`      ${bloodSoft("Pasajero:")}`, `${bloodWhite(role)} `),
+      new DcJustifiedRow(`      ${bloodSoft("Pasajero:")}`, `${bloodWhite(roleShort)} `),
       new DcJustifiedRow(`      ${bloodSoft("Circuito:")}`, `${bloodWhite(taskShort)} `),
-      new DcJustifiedRow(`      ${bloodSoft("Conductor:")}`, `${bloodSoft(modelClean)} `),
+      new DcJustifiedRow(`      ${bloodSoft("Conductor:")}`, `${bloodSoft(modelShort)} `),
       new DcJustifiedRow(`      ${bloodSoft("Placa:")}`, `${bloodWhite(plate)} `),
-      new DcJustifiedRow(`      ${bloodSoft("Taxímetro:")}`, `${dim(taximeterText)} `),
+      new DcJustifiedRow(`      ${bloodSoft("Taxímetro:")}`, `${dim(taximeterClean)} `),
       new DcJustifiedRow(
         `      ${dim("Telemetría en vivo")}`,
         `${bloodBright("[Alt+Shift+T ↗]")} `,
@@ -609,13 +618,58 @@ export function createStatusCard(reqRender: () => void): Component {
   class TaxiUnitList implements Component {
     public children: DcCollapsible[] = [];
     private stack = new DcVStack([]);
+    private activeTab: "ac" | "vip" = "ac";
+    private allUnits: DcTaxiUnit[] = [];
+    private tabsComponent: DcTabs;
     private unitsMap = new Map<string, {
       collapsible: DcCollapsible;
       rowsStack: DcVStack;
     }>();
 
+    constructor() {
+      this.tabsComponent = new DcTabs({
+        tabs: [
+          { id: "ac", label: "Taxis AC" },
+          { id: "vip", label: "VIP (CC)" },
+        ],
+        activeId: "ac",
+        paddingX: 2,
+        separator: " │ ",
+        onSelect: (id) => {
+          this.activeTab = id as "ac" | "vip";
+          this.rebuildDisplayList();
+          reqRender();
+        },
+      });
+    }
+
     update(units: DcTaxiUnit[]) {
-      this.children = units.map((unit) => {
+      this.allUnits = units;
+
+      // Calcular conteos para badges dinámicos
+      let acCount = 0;
+      let vipCount = 0;
+      for (const u of units) {
+        const isVip = u.tier === "vip" || (u.account && u.account.startsWith("cc"));
+        if (isVip) vipCount++;
+        else acCount++;
+      }
+
+      this.tabsComponent.options.tabs = [
+        { id: "ac", label: `Taxis AC (${acCount})` },
+        { id: "vip", label: `VIP CC (${vipCount})` },
+      ];
+
+      this.rebuildDisplayList();
+    }
+
+    private rebuildDisplayList() {
+      const filtered = this.allUnits.filter((unit) => {
+        const isVip = unit.tier === "vip" || (unit.account && unit.account.startsWith("cc"));
+        return this.activeTab === "vip" ? isVip : !isVip;
+      });
+
+      this.children = filtered.map((unit) => {
         let entry = this.unitsMap.get(unit.account);
         const rows = createTaxiUnitRows(unit);
         
@@ -655,7 +709,8 @@ export function createStatusCard(reqRender: () => void): Component {
 
         return entry.collapsible;
       });
-      this.stack.children = this.children;
+
+      this.stack.children = [this.tabsComponent, ...this.children];
     }
 
     render(width: number) {

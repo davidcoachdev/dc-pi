@@ -122,7 +122,15 @@ export function getSidebarTaxiFleet(forceReload = false): SidebarTaxiFleetInfo {
       ocupados: summary.ocupados,
       recargando: summary.recargando,
       en_taller: summary.en_taller,
-      units: summary.units,
+      units: [...summary.units].sort((a, b) => {
+        const isVipA = a.tier === "vip" || (a.account && a.account.startsWith("cc"));
+        const isVipB = b.tier === "vip" || (b.account && b.account.startsWith("cc"));
+        // Cuentas normales (ac) primero, VIPs (cc) después
+        if (isVipA !== isVipB) {
+          return isVipA ? 1 : -1;
+        }
+        return (a.account || "").localeCompare(b.account || "", undefined, { numeric: true });
+      }),
       summaryText,
     };
     lastFetchTime = now;
