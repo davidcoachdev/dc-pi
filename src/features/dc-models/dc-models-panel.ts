@@ -173,13 +173,17 @@ export class DcModelsPanel implements Component {
    */
   getFilteredModels(): ModelItem[] {
     return this.allModels.filter((m) => {
-      // Tab filter por cuenta/prefijo
+      // Tab filter por cuenta/prefijo o provider
       const tabLower = this.activeTabId.toLowerCase();
       const idLower = m.id.toLowerCase();
       const providerLower = m.provider ? String(m.provider).toLowerCase() : "";
-      const matchesProvider = providerLower === tabLower;
+      
+      // Si la pestaña es un provider (ej. "cpam"), mostrar sus modelos sin prefijo de cuenta
+      // Si la pestaña es una cuenta (ej. "ac01"), mostrar los modelos que empiezan por "ac01/"
       const matchesPrefix = idLower.startsWith(`${tabLower}/`) || idLower === tabLower;
-      if (!matchesPrefix && !matchesProvider) {
+      const matchesProviderDirect = providerLower === tabLower && !idLower.includes("/");
+      
+      if (!matchesPrefix && !matchesProviderDirect) {
         return false;
       }
       // Solo aplicamos búsqueda de texto a los modelos si el foco NO está en tabs

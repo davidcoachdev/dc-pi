@@ -68,7 +68,7 @@ export function discoverCpamAccounts(
 
   // 3. Fallback defensivo si no había archivo
   if (accounts.size === 0) {
-    for (let i = 1; i <= 44; i++) {
+    for (let i = 1; i <= 50; i++) {
       accounts.add(`ac${String(i).padStart(2, "0")}`);
     }
   }

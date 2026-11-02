@@ -4,6 +4,8 @@ import * as path from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { openDcModal } from "../../ui/dc-modal.ts";
 import { cliProxyClient } from "../../integrations/dc-cliproxy/dc-cliproxy-client.ts";
+import { accountCoordinator } from "../../integrations/dc-cliproxy/dc-account-coordinator.ts";
+import { syncLiveCliProxyModels } from "./core/dc-models-sync.ts";
 import { dcNotifier } from "../../integrations/dc-notify/dc-notifier.ts";
 import { DcModelsPanel, type ModelAccountTab, type ModelItem, type EffortLevel } from "./dc-models-panel.ts";
 import { resolveRecommendedContextWindow, resolveSafeMaxTokens } from "./core/dc-model-calibration.ts";
@@ -97,7 +99,11 @@ export async function openModelsSelector(
     /* si falla el fallback, seguimos con lo que tenemos */
   }
 
-  // 2. Calibrar ventanas de contexto defensivas y tokens de salida seguros (inspirado en Joker/CPAM)
+  // 2. Sincronizar dinámicamente con los modelos en vivo de CLIProxy (/v1/models)
+  const syncRes = await syncLiveCliProxyModels(models, { persistToDisk: true });
+  models = syncRes.merged;
+
+  // 3. Calibrar ventanas de contexto defensivas y tokens de salida seguros (inspirado en Joker/CPAM)
   for (const m of models) {
     if (m.id) {
       m.contextWindow = resolveRecommendedContextWindow(m.id, m.contextWindow);
@@ -105,8 +111,8 @@ export async function openModelsSelector(
     }
   }
 
-  // 3. Discover accounts / prefixes via CLIProxy
-  const prefixEmails = await cliProxyClient.fetchPrefixEmails();
+  // 4. Discover accounts / prefixes via accountCoordinator (con caché y single-flight)
+  const prefixEmails = await accountCoordinator.getPrefixEmails();
   const tabs: ModelAccountTab[] = [];
 
   // Group prefixes found in model IDs
@@ -127,24 +133,22 @@ export async function openModelsSelector(
     });
   }
 
-  // 3. Discover providers without prefixes (e.g. opencode-go, openai, etc.)
-  const providerHasPrefixes = new Set<string>();
+  // 5. Discover providers without prefixes, o proveedores como CPAM que también tienen modelos raíz sin prefijo
+  const providerHasUnprefixed = new Set<string>();
   for (const m of models) {
-    if (m.provider && m.id.includes("/")) {
-      providerHasPrefixes.add(m.provider);
+    if (m.provider && !m.id.includes("/")) {
+      providerHasUnprefixed.add(m.provider);
     }
   }
-  const discoveredProviders = new Set<string>();
-  for (const m of models) {
-    if (m.provider && !providerHasPrefixes.has(m.provider)) {
-      discoveredProviders.add(m.provider);
+
+  for (const provider of Array.from(providerHasUnprefixed).sort((a, b) => a.localeCompare(b, undefined, { numeric: true }))) {
+    // Si ya existe un tab con este id (por ejemplo si un prefijo coincide con un provider), evitar duplicado
+    if (!tabs.some((t) => t.id.toLowerCase() === provider.toLowerCase())) {
+      tabs.push({
+        id: provider,
+        title: provider.toUpperCase(),
+      });
     }
-  }
-  for (const provider of Array.from(discoveredProviders).sort((a, b) => a.localeCompare(b, undefined, { numeric: true }))) {
-    tabs.push({
-      id: provider,
-      title: provider.toUpperCase(),
-    });
   }
 
   // Leer modelThinkingLevels de settings.json para pasarlos al panel
