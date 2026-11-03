@@ -14,7 +14,7 @@ export interface ScanGuardDecision {
   reason?: string;
 }
 
-export const GUARDED_TOOLS: ReadonlySet<string> = new Set(["bash", "shell", "sh", "grep", "find"]);
+export const GUARDED_TOOLS: ReadonlySet<string> = new Set(["bash", "shell", "sh", "grep", "find", "read"]);
 
 /**
  * Checks if a token represents a filesystem root.
@@ -89,6 +89,38 @@ function isRootedRecursiveSearch(tokens: string[]): boolean {
 }
 
 /**
+ * Rutas y patrones estrictamente prohibidos para proteger credenciales y claves privadas del host
+ * contra lecturas no autorizadas o filtraciones (mitigación de la brecha crítica de DeepSeek Harness).
+ */
+export const FORBIDDEN_SENSITIVE_PATTERNS: readonly RegExp[] = [
+  /[/\\]\.ssh([/\\]|$)/i,               // Claves SSH (~/.ssh/id_rsa, id_ed25519)
+  /[/\\]\.gnupg([/\\]|$)/i,             // Claves GPG
+  /[/\\]\.aws([/\\]|$)/i,               // Credenciales AWS (~/.aws/credentials)
+  /[/\\]\.config[/\\]gcloud([/\\]|$)/i, // Credenciales Google Cloud
+  /[/\\]\.config[/\\]gh([/\\]|$)/i,     // Tokens GitHub CLI
+  /[/\\]\.azure([/\\]|$)/i,             // Tokens Azure
+  /[/\\]\.netrc$/i,                     // Credenciales en texto claro
+  /[/\\]\.bash_history$/i,              // Historial de comandos con posibles passwords
+  /[/\\]\.zsh_history$/i,
+];
+
+/**
+ * Determina si una ruta o comando intenta acceder a claves o credenciales privadas del host.
+ */
+export function isSensitiveCredentialPath(targetPath: string): boolean {
+  if (typeof targetPath !== "string") return false;
+  const clean = targetPath.trim().replace(/^['"]|['"]$/g, "");
+  return FORBIDDEN_SENSITIVE_PATTERNS.some((pattern) => pattern.test(clean));
+}
+
+export function sensitiveCredentialReason(pathOrCommand: string): string {
+  return (
+    `dc-scan-guard (credential-protection): se bloqueó el acceso a una ruta de credenciales críticas (\`${pathOrCommand}\`). ` +
+    `El acceso a claves SSH, tokens de nube (~/.aws, ~/.ssh, ~/.config/gh) e historiales del host está estrictamente restringido por política de seguridad.`
+  );
+}
+
+/**
  * Regla de Doble Codificación: bloquea mecánicamente comandos destructivos masivos
  * (rm -rf sobre raíz, home, variables de entorno globales o wildcards raíz).
  */
@@ -142,6 +174,12 @@ export function classifyShellCommand(command: unknown): ScanGuardDecision {
     if (isDestructiveRm(tokens)) {
       return { block: true, reason: destructiveRmReason(segment) };
     }
+    // Chequeo de acceso a credenciales en shell (ej: cat ~/.ssh/id_rsa, cp ~/.aws/credentials .)
+    for (const token of tokens) {
+      if (isSensitiveCredentialPath(token)) {
+        return { block: true, reason: sensitiveCredentialReason(token) };
+      }
+    }
     if (isRootedFind(tokens) || isRootedRecursiveSearch(tokens)) {
       return { block: true, reason: blockReason(command) };
     }
@@ -155,14 +193,22 @@ export function classifyShellCommand(command: unknown): ScanGuardDecision {
 export function classifyNativeToolScan(toolName: string, input: Record<string, unknown> | undefined): ScanGuardDecision {
   if (!input || typeof input !== "object") return { block: false };
 
-  const targetPath = (input.path || input.directory || input.dir) as string | undefined;
-  if (typeof targetPath === "string" && isRootPath(targetPath)) {
-    return {
-      block: true,
-      reason: `dc-scan-guard: se bloqueó la invocación de \`${toolName}\` en la raíz \`${targetPath}\`. ` +
-        `Buscar en \`/\`, \`~\` o el home del usuario colgará el proceso indefinidamente con miles de gigabytes. ` +
-        `Acotá la búsqueda a una subcarpeta concreta o relativa (ej: \`src/\`, \`lib/\`).`,
-    };
+  const targetPath = (input.path || input.directory || input.dir || input.filePath) as string | undefined;
+  if (typeof targetPath === "string") {
+    if (isSensitiveCredentialPath(targetPath)) {
+      return {
+        block: true,
+        reason: sensitiveCredentialReason(targetPath),
+      };
+    }
+    if (isRootPath(targetPath)) {
+      return {
+        block: true,
+        reason: `dc-scan-guard: se bloqueó la invocación de \`${toolName}\` en la raíz \`${targetPath}\`. ` +
+          `Buscar en \`/\`, \`~\` o el home del usuario colgará el proceso indefinidamente con miles de gigabytes. ` +
+          `Acotá la búsqueda a una subcarpeta concreta o relativa (ej: \`src/\`, \`lib/\`).`,
+      };
+    }
   }
 
   return { block: false };
