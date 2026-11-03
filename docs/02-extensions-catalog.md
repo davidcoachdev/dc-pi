@@ -31,6 +31,10 @@ Todas las extensiones se registran de forma unificada a través de `dcStudioExte
 | `/dc-keys` | — | `Alt+?` | `dc-keys` | Catálogo interactivo y buscador de atajos de teclado |
 | `/dc-sentinel-live` | — | `Alt+S` | `dc-sentinel` | Monitor interactivo en vivo de subagentes, crónicas y worktrees |
 | `/dc-tts` | — | `Alt+U` | `dc-tts` | Monitor y control del sintetizador de voz TTS local |
+| `/inbox` | — | — | `dc-agents` | Lista y gestiona reportes de tareas finalizadas de subagentes en background |
+| `/dc-lazyweb` | — | — | `dc-lazyweb` | Consulta +281k pantallas reales, experimentos A/B y flujos de producto |
+| `/dc-notify-test` | — | — | `dc-notify` | Prueba el sistema de notificaciones unificado (Herdr / Pi toast) |
+| `/dc-state-test` | — | — | `dc-agent-state` | Inspecciona o simula estados visuales reactivos del agente |
 | `/dc-reload` | — | `F5` | `dc-reload` | Recarga en caliente de extensiones, skills, temas y atajos |
 | `/body-frame` | — | — | `dc-body` | Activa/desactiva el marco de doble línea alrededor del chat |
 | `/dc-tool-box` | — | — | `dc-tool-box` | Configura las tarjetas redondeadas de ejecución de herramientas |
@@ -193,10 +197,20 @@ Todas las extensiones se registran de forma unificada a través de `dcStudioExte
 
 Por diseño de rendimiento (**Fresh Context Loop**), el orquestador principal mantiene en su contexto directo únicamente `dc_ephemeral_agent_run` y las herramientas de seguridad `dc_owasp_*`. Las otras 35 herramientas especializadas son inyectadas bajo demanda en los subagentes efímeros mediante **Tool Bricks**.
 
-### 1. Orquestación Efímera (`dc-agents`)
+### 1. Orquestación Efímera, Inbox y Swarm (`dc-agents`)
 | Nombre de Tool | Parámetros Clave | Descripción |
 | :--- | :--- | :--- |
 | `dc_ephemeral_agent_run` | `task`, `archetype?`, `role?`, `toolBricks?`, `behaviorBricks?`, `seedContext?`, `effort?`, `mode?` | Crea un subagente efímero de una sola vida, arrienda una cuenta libre de la Flota de Taxis, ejecuta la tarea con herramientas aisladas y limpia todo al finalizar. |
+| `dc_ephemeral_batch_run` | `items`, `mode?` | Despacha múltiples tareas concurrentes en paralelo puro (Fan-Out / Fan-In) asignando unidades libres de la Flota de Taxis sin turnos bloqueantes. |
+| `dc_research_swarm` | `query`, `channels?`, `outputDir?`, `model?`, `effort?` | Despliega un enjambre de subagentes efímeros para investigar en simultáneo por canales especializados (web, docs, discussions, github, academic, youtube) y consolidar un informe unificado. |
+| `dc_subagent_inbox_list` | `onlyUnread?` | Lista los reportes de tareas finalizadas o fallidas de subagentes en background en el buzón estructurado. |
+| `dc_subagent_inbox_get` | `taskId` | Obtiene el contenido completo del reporte de un subagente del buzón y lo marca como leído. |
+
+### 1b. Programmatic Tool Calling & Lazyweb (`dc-ptc`, `dc-lazyweb`)
+| Nombre de Tool | Parámetros Clave | Descripción |
+| :--- | :--- | :--- |
+| `dc_ptc_run` | `code`, `timeoutMs?` | Programmatic Tool Calling: Ejecuta JavaScript/TypeScript en un subproceso aislado de Node.js con bindings asíncronos nativos (`pi.fs.*`, `pi.bash()`) permitiendo procesar y filtrar datos masivos en 1 solo turno de LLM. |
+| `dc_lazyweb_search` | `query`, `platform?`, `category?`, `limit?` | Consulta la base de datos de Lazyweb (+281k pantallas y flujos reales de UI/UX) mediante un cliente JSON-RPC aislado. |
 
 ### 2. Seguridad OWASP (`dc-owasp` — Siempre activa)
 | Nombre de Tool | Parámetros Clave | Descripción |

@@ -55,6 +55,8 @@ All extensions are unified under the canonical `dcStudioExtension` entrypoint.
 | `/dc-keys` | `Alt+?` | Visor interactivo y buscador de atajos de teclado / Keyboard shortcuts catalog | `dc-keys` |
 | `/dc-sentinel-live` | `Alt+S` | Monitor en vivo de Centinela, subagentes y worktrees / Live Sentinel monitor | `dc-sentinel` |
 | `/dc-tts` | `Alt+U` | Monitor y control de voz TTS y Asistente / TTS monitor & voice control | `dc-tts` |
+| `/inbox` | — | Buzón estructurado de subagentes en background / Background subagent report inbox | `dc-agents` |
+| `/dc-lazyweb` | — | Búsqueda e inspección de UI/UX en Lazyweb / Lazyweb UI/UX patterns explorer | `dc-lazyweb` |
 | `/dc-changes` | `Alt+F` | Visor a 2 columnas de cambios git y diffs / Two-column Git diff & changes viewer | `dc-changes` |
 | `/dc-models` | `Alt+M` | Selector a 3 columnas de modelos, cuentas y reasoning effort / Model & effort selector | `dc-models` |
 | `/dc-quota` | `Alt+Shift+Q` | Monitor interactivo de cuotas y tokens de CLIProxy / Token quota dashboard | `dc-quota` |
@@ -101,6 +103,11 @@ All extensions are unified under the canonical `dcStudioExtension` entrypoint.
 | Tool | Description |
 | :--- | :--- |
 | `dc_ephemeral_agent_run` | Ejecuta subagentes efímeros de un solo uso con Fresh Context Loop y arriendo de cuentas taxi. |
+| `dc_ephemeral_batch_run` | Despacha múltiples tareas en paralelo puro a subagentes efímeros concurrentes (Fan-Out / Fan-In). |
+| `dc_research_swarm` | Despliega un enjambre de subagentes efímeros para investigar en paralelo a través de múltiples canales especializados. |
+| `dc_subagent_inbox_*` | Buzón estructurado para consultar y leer reportes de subagentes ejecutados en background. |
+| `dc_ptc_run` | Programmatic Tool Calling (PTC): Ejecuta código JS/TS en Node.js aislado con bindings nativos (`pi.fs`, `pi.bash`) en 1 solo turno. |
+| `dc_lazyweb_search` | Consulta +281k pantallas reales, flujos de producto y experimentos A/B de Lazyweb. |
 | `dc_owasp_query` | Consulta directivas y snippets de seguridad de OWASP Cheat Sheets. |
 | `dc_owasp_audit` | Audita código fuente o git diffs contra vectores OWASP (SQLi, XSS, TLS, Secrets). |
 | `dc_browser_*` | Automatización de navegador vía Chrome CDP (navegación, capturas PNG, evaluación JS). |
