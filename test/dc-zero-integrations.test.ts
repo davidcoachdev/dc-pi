@@ -68,6 +68,8 @@ test("classifyShellCommand blocks root-rooted scans and allows scoped scans", ()
   assert.equal(dangerousFindH.block, true);
   const dangerousFindL = classifyShellCommand("find -L ~/ -name '*.key'");
   assert.equal(dangerousFindL.block, true);
+  const dangerousFindP = classifyShellCommand("find -P / -name '*.env'");
+  assert.equal(dangerousFindP.block, true);
 
   const dangerous2 = classifyShellCommand("grep -r 'api_key' ~/");
   assert.equal(dangerous2.block, true);

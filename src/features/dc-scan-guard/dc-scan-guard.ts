@@ -63,8 +63,12 @@ function isRootedFind(tokens: string[]): boolean {
   const idx = tokens.findIndex((t) => t === "find" || /[/\\]find$/.test(t));
   if (idx === -1) return false;
 
+  // find acepta flags iniciales de enlace simbólico (-H, -L, -P, -D, -O) antes de los directorios
   for (let i = idx + 1; i < tokens.length; i++) {
     const tok = tokens[i];
+    if (tok === "-H" || tok === "-L" || tok === "-P" || /^-[DO]\d*$/.test(tok)) {
+      continue;
+    }
     if (tok.startsWith("-") || tok === "(" || tok === "!" || tok === ")") break;
     if (isRootPath(tok)) return true;
   }
@@ -74,9 +78,13 @@ function isRootedFind(tokens: string[]): boolean {
 function isRecursiveGrep(tokens: string[]): boolean {
   const idx = tokens.findIndex((t) => t === "grep" || /[/\\]grep$/.test(t));
   if (idx === -1) return false;
-  return tokens
-    .slice(idx + 1)
-    .some((t) => t === "--recursive" || /^-[a-zA-Z]*[rR]/.test(t));
+  return tokens.slice(idx + 1).some((t, i, arr) => {
+    if (t === "--recursive" || t === "--dereference-recursive") return true;
+    if (t === "--directories=recurse") return true;
+    if (t === "--directories" && arr[i + 1] === "recurse") return true;
+    if (/^-[a-zA-Z]*[rR]/.test(t)) return true;
+    return false;
+  });
 }
 
 function isRootedRecursiveSearch(tokens: string[]): boolean {
@@ -128,8 +136,8 @@ function isDestructiveRm(tokens: string[]): boolean {
   const rmIdx = tokens.findIndex((t) => t === "rm" || /[/\\]rm$/.test(t));
   if (rmIdx === -1) return false;
 
-  // Verificar si tiene flag recursivo (-r, -rf, -fr, -R, etc.)
-  const hasRecursive = tokens.some((t, i) => i > rmIdx && /^-[a-zA-Z]*[rR]/.test(t));
+  // Verificar si tiene flag recursivo (-r, -rf, -fr, -R, --recursive, etc.)
+  const hasRecursive = tokens.some((t, i) => i > rmIdx && (/^-[a-zA-Z]*[rR]/.test(t) || t === "--recursive" || t === "-r" || t === "-R"));
   if (!hasRecursive) return false;
 
   // Verificar si alguno de los argumentos objetivo es una raíz, wildcard de raíz o home

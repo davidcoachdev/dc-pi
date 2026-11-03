@@ -1,6 +1,85 @@
+import http from "node:http";
+import https from "node:https";
+import dns from "node:dns";
 import { convert } from "html-to-text";
 import type { WebFetchResponse, WebSearchItem, WebSearchResponse } from "../../core/dc-websearch-types.ts";
-import { isSafeWebUrl, redactSecrets } from "../../core/dc-websearch-security.ts";
+import { isPrivateIp, isSafeWebUrl, redactSecrets, validatePublicUrlResolved } from "../../core/dc-websearch-security.ts";
+
+/**
+ * Cliente HTTP nativo que fija la resolución DNS (DNS Pinning) para eliminar la ventana TOCTOU.
+ * Valida cada dirección IP devuelta por el resolver en el momento exacto de abrir el socket de red.
+ */
+export function fetchWithDnsPinning(
+  targetUrl: string,
+  options: {
+    timeoutMs?: number;
+    headers?: Record<string, string>;
+    dnsLookupOverride?: typeof dns.lookup;
+  } = {},
+): Promise<{ ok: boolean; status: number; statusText: string; text: () => Promise<string>; headers: { get: (name: string) => string | null } }> {
+  return new Promise((resolve, reject) => {
+    const parsed = new URL(targetUrl);
+    const isHttps = parsed.protocol === "https:";
+    const mod = isHttps ? https : http;
+
+    const req = mod.request({
+      protocol: parsed.protocol,
+      hostname: parsed.hostname,
+      port: parsed.port || (isHttps ? 443 : 80),
+      path: parsed.pathname + parsed.search,
+      method: "GET",
+      headers: {
+        Host: parsed.host,
+        ...(options.headers || {}),
+      },
+      timeout: options.timeoutMs ?? 12000,
+      lookup: (hostname, lookupOpts, callback) => {
+        // En el socket connect, validar que ninguna IP resuelta sea privada/loopback
+        const resolver = options.dnsLookupOverride ?? dns.lookup;
+        (resolver as any)(hostname, lookupOpts, (err: Error | null, addresses: any, family?: number) => {
+          if (err) return (callback as any)(err, addresses, family);
+          if (Array.isArray(addresses)) {
+            for (const addr of addresses) {
+              if (isPrivateIp(addr.address)) {
+                return (callback as any)(new Error(`DNS Rebinding detectado en socket connect: ${hostname} -> ${addr.address}`));
+              }
+            }
+            (callback as any)(null, addresses, family);
+          } else {
+            if (isPrivateIp(addresses)) {
+              return (callback as any)(new Error(`DNS Rebinding detectado en socket connect: ${hostname} -> ${addresses}`));
+            }
+            (callback as any)(null, addresses, family);
+          }
+        });
+      },
+    }, (res) => {
+      let data = "";
+      res.setEncoding("utf8");
+      res.on("data", (chunk) => { data += chunk; });
+      res.on("end", () => {
+        resolve({
+          ok: (res.statusCode ?? 500) >= 200 && (res.statusCode ?? 500) < 300,
+          status: res.statusCode ?? 500,
+          statusText: res.statusMessage ?? "",
+          text: () => Promise.resolve(data),
+          headers: {
+            get: (name: string) => {
+              const val = res.headers[name.toLowerCase()];
+              return Array.isArray(val) ? val.join(", ") : (val ?? null);
+            },
+          },
+        });
+      });
+    });
+
+    req.on("timeout", () => {
+      req.destroy(new Error(`Timeout tras ${options.timeoutMs ?? 12000}ms`));
+    });
+    req.on("error", reject);
+    req.end();
+  });
+}
 
 const EXA_MCP_ENDPOINT = "https://mcp.exa.ai/mcp";
 const PARALLEL_SEARCH_ENDPOINT = "https://search.parallel.ai/v1/search";
@@ -154,25 +233,26 @@ export async function executeWebSearch(options: WebSearchOptions): Promise<WebSe
 }
 
 /**
- * Lector web seguro con límite de 2MB, protección anti-SSRF y sanitización con html-to-text.
+ * Lector web seguro con límite de 2MB, protección anti-SSRF con DNS Pinning y sanitización con html-to-text.
  */
-export async function executeWebFetch(url: string, maxBytes: number = 2 * 1024 * 1024): Promise<WebFetchResponse> {
-  const check = isSafeWebUrl(url);
+export async function executeWebFetch(
+  url: string,
+  maxBytes: number = 2 * 1024 * 1024,
+  customFetcher?: typeof fetchWithDnsPinning,
+): Promise<WebFetchResponse> {
+  const check = await validatePublicUrlResolved(url);
   if (!check.safe) {
     throw new Error(`fetch bloqueado: ${check.reason}`);
   }
 
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), 12000);
-
-  const res = await fetch(url, {
+  const fetcher = customFetcher ?? fetchWithDnsPinning;
+  const res = await fetcher(url, {
     headers: {
       "User-Agent": "DC-Studio-WebFetch/1.0",
       Accept: "text/html,application/xhtml+xml,text/plain,application/json;q=0.9,*/*;q=0.8",
     },
-    signal: ctrl.signal,
+    timeoutMs: 12000,
   });
-  clearTimeout(timer);
 
   if (!res.ok) {
     throw new Error(`HTTP ${res.status}: ${res.statusText}`);

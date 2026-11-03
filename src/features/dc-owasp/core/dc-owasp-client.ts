@@ -12,6 +12,33 @@ import { OWASP_CATALOG } from "./dc-owasp-catalog.ts";
 const BASE_RAW_URL = "https://raw.githubusercontent.com/OWASP/CheatSheetSeries/master/cheatsheets";
 const SEARCH_INDEX_URL = "https://cheatsheetseries.owasp.org/search/search_index.json";
 
+/**
+ * Escribe un archivo atómicamente asegurando que NUNCA siga symlinks
+ * mediante la bandera O_NOFOLLOW a nivel de kernel (eliminando carreras TOCTOU).
+ */
+function safeWriteFileNoFollow(filePath: string, data: string): boolean {
+  try {
+    const lstat = fs.lstatSync(filePath, { throwIfNoEntry: false });
+    if (lstat && lstat.isSymbolicLink()) {
+      return false; // Rechazar si ya es un enlace simbólico
+    }
+    // Abrir con O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW: si es un symlink, el kernel falla con ELOOP
+    const fd = fs.openSync(
+      filePath,
+      fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_TRUNC | fs.constants.O_NOFOLLOW,
+      0o644,
+    );
+    try {
+      fs.writeSync(fd, data, 0, "utf-8");
+      return true;
+    } finally {
+      fs.closeSync(fd);
+    }
+  } catch {
+    return false;
+  }
+}
+
 export class DcOwaspClient {
   private cacheDir: string;
   private indexCache: OwaspIndexEntry[] | null = null;
@@ -26,6 +53,8 @@ export class DcOwaspClient {
       if (!fs.existsSync(this.cacheDir)) {
         fs.mkdirSync(this.cacheDir, { recursive: true });
       }
+      // Resolver realpath para anclar el directorio de caché canónico y evitar symlinks en directorios antecesores
+      this.cacheDir = fs.realpathSync(this.cacheDir);
     } catch {
       // Best effort
     }
@@ -66,11 +95,7 @@ export class DcOwaspClient {
         const data = await resp.json();
         const docs: OwaspIndexEntry[] = Array.isArray(data?.docs) ? data.docs : [];
         if (docs.length > 0) {
-          try {
-            fs.writeFileSync(indexPath, JSON.stringify(data), "utf-8");
-          } catch {
-            // Best effort
-          }
+          safeWriteFileNoFollow(indexPath, JSON.stringify(data));
           this.indexCache = docs;
           return docs;
         }
@@ -162,11 +187,40 @@ export class DcOwaspClient {
 
     if (catalogItem) {
       filename = catalogItem.filename;
-    } else if (!filename.endsWith(".md")) {
-      filename = `${filename.replace(/\/$/, "")}.md`;
+    } else {
+      // Sanitizar contra Path Traversal: extraer únicamente el basename sin separadores ni secuencias '../'
+      const baseNameOnly = path.basename(filename.replace(/\\/g, "/"));
+      if (!baseNameOnly || baseNameOnly === "." || baseNameOnly === "..") {
+        return null;
+      }
+      filename = baseNameOnly.endsWith(".md") ? baseNameOnly : `${baseNameOnly}.md`;
     }
 
-    const localPath = path.join(this.cacheDir, filename);
+    const localPath = path.resolve(this.cacheDir, filename);
+    const resolvedCacheDir = path.resolve(this.cacheDir);
+    // Verificar confinamiento estricto dentro de cacheDir
+    if (!localPath.startsWith(resolvedCacheDir + path.sep)) {
+      return null;
+    }
+
+    // Verificar si localPath ya existe como symlink (incluso dangling/colgante cuyo destino aún no existe)
+    try {
+      const lstat = fs.lstatSync(localPath, { throwIfNoEntry: false });
+      if (lstat && lstat.isSymbolicLink()) {
+        try {
+          const realTarget = fs.realpathSync(localPath);
+          if (!realTarget.startsWith(resolvedCacheDir + path.sep)) {
+            return null; // Symlink malicioso que escapa de la caché
+          }
+        } catch {
+          // Si realpathSync falla porque el destino del symlink no existe (dangling symlink),
+          // rechazar terminantemente para evitar escritura o creación fuera de cacheDir
+          return null;
+        }
+      }
+    } catch {
+      // Ignorar errores en inspección de lstat
+    }
 
     // 1. Revisar si ya está en caché local
     if (fs.existsSync(localPath)) {
@@ -191,11 +245,7 @@ export class DcOwaspClient {
       const resp = await fetch(rawUrl, { signal: AbortSignal.timeout(6000) });
       if (resp.ok) {
         const md = await resp.text();
-        try {
-          fs.writeFileSync(localPath, md, "utf-8");
-        } catch {
-          // Best effort
-        }
+        safeWriteFileNoFollow(localPath, md);
         return {
           title: catalogItem ? catalogItem.title : filename.replace(/_Cheat_Sheet\.md$/, "").replace(/_/g, " "),
           filename,
