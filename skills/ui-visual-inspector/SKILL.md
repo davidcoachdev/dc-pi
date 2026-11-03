@@ -24,6 +24,7 @@ Do not use for purely backend, CLI, or database tasks.
 - **Isolated Execution**: When reviewing complex UI trees or multi-component layouts, delegate inspection to ephemeral subagent via `dc_ephemeral_agent_run` with `archetype: "dc-ui-visual-inspector"` to prevent context inflation.
 - **Fail on Arbitrary Values**: Flag hardcoded, arbitrary spacing or font classes (`w-[273px]`, `text-[11px]`) as anti-patterns when design system equivalents exist.
 - **Check Mobile Breakpoints**: Never approve frontend changes without verifying the mobile breakpoint (375px width). Layouts that create unexpected horizontal scrollbars must be flagged as blockers.
+- **Mandatory Before & After Visual Evidence**: No UI modification or frontend PR can be marked as `ready` without concrete Before & After visual comparison evidence. If the component is brand-new, provide rendered captures at mobile (375px) and desktop (1440px) viewports.
 - **Auditor Does Not Fix**: The inspector reports findings and provides exact CSS/Tailwind replacement recommendations. Code fixes must be applied by a dedicated worker under human review.
 
 ## Decision Gates
@@ -52,6 +53,7 @@ Do not use for purely backend, CLI, or database tasks.
 
 Report must include:
 - Components audited and viewports evaluated.
+- Mandatory Before & After visual evidence artifacts (or mobile/desktop captures for new views).
 - Summary table with Severity, Viewport, Finding, and Exact line references.
 - Recommended CSS/Tailwind class diffs.
 - Pass/Fail status for Mobile (375px), Tablet (768px), and Desktop (1440px).
