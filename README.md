@@ -19,7 +19,7 @@ The `dc-pi` ecosystem is organized into four modular layers:
 
 ### 3. Integrations (`src/integrations/`)
 - **`dcClipboard`**: Multiplatform clipboard client supporting Wayland (`wl-copy`), X11 (`xclip`/`xsel`), macOS (`pbcopy`), Windows (`clip.exe`), and OSC 52 ANSI escape sequences.
-- **`fetchJson<T>()`**: Resilient HTTP client with timeouts, abort signals, payload size limits, and sensitive credential redaction.
+- **`fetchJson<T>()`**: Resilient HTTP client with timeouts, abort signals, payload size limits, sensitive credential redaction, and optional `enforceSsrfProtection` against private IPs, loopback, cloud metadata, and DNS Rebinding.
 - **`CliProxyClient`**: API client for CLIProxy auth files, management endpoints, and quota status.
 - **`dcNotifier` / `notifyHerdr`**: Unified notification service bridging Herdr socket notifications with automatic Pi toast fallback (`ctx.ui.notify`).
 - **`getGitChanges` / `parseGitStatus`**: Git status porcelain parser and diff extractor.
@@ -53,6 +53,8 @@ All extensions are unified under the canonical `dcStudioExtension` entrypoint.
 | `/dc-caritas` | `Alt+Shift+C` | Selector interactivo de kaomojis con inserción en editor / Interactive kaomoji picker | `dc-caritas` |
 | `/dc-faces` / `/dc-perfil` | `Alt+C` | Duelo de perfiles de usuario (`dcdev` vs `cubis`) / Profile duel switcher | `dc-faces` |
 | `/dc-keys` | `Alt+?` | Visor interactivo y buscador de atajos de teclado / Keyboard shortcuts catalog | `dc-keys` |
+| `/dc-sentinel-live` | `Alt+S` | Monitor en vivo de Centinela, subagentes y worktrees / Live Sentinel monitor | `dc-sentinel` |
+| `/dc-tts` | `Alt+U` | Monitor y control de voz TTS y Asistente / TTS monitor & voice control | `dc-tts` |
 | `/dc-changes` | `Alt+F` | Visor a 2 columnas de cambios git y diffs / Two-column Git diff & changes viewer | `dc-changes` |
 | `/dc-models` | `Alt+M` | Selector a 3 columnas de modelos, cuentas y reasoning effort / Model & effort selector | `dc-models` |
 | `/dc-quota` | `Alt+Shift+Q` | Monitor interactivo de cuotas y tokens de CLIProxy / Token quota dashboard | `dc-quota` |
