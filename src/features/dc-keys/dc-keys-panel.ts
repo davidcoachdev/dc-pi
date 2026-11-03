@@ -25,6 +25,7 @@ export function getDefaultCategories(): ShortcutCategory[] {
       title: "DC Studio",
       rows: [
         { key: "Alt+Shift+G", action: "visor de memorias Engram (Engram Manager)" },
+        { key: "Alt+Shift+A", action: "monitor en vivo de Centinela, subagentes y worktrees (Sentinel Live)" },
         { key: "Alt+H", action: "visor de historial Git y grafo (Git Graph)" },
         { key: "Alt+O", action: "explorador de seguridad OWASP (OWASP Cheat Sheets)" },
         { key: "Alt+Shift+F", action: "control de cambios y diff Git (Changes)" },
@@ -48,6 +49,7 @@ export function getDefaultCategories(): ShortcutCategory[] {
         { key: "Alt+Q", action: "cerrar y salir limpiamente de Pi (Exit)" },
         { key: "Alt+?", action: "visor de atajos de teclado (Keyboard Shortcuts)" },
         { key: "/dc-plan", action: "abrir visor interactivo de planificación ODD y tareas" },
+        { key: "/dc-sentinel-live", action: "abrir monitor en vivo de Centinela, diffs y worktrees" },
         { key: "/dc-agents", action: "abrir visor de subagentes y ejecuciones" },
         { key: "/dc-taxis", action: "abrir monitor interactivo de Flota de Taxis y tokens" },
         { key: "/dc-body", action: "activar/desactivar marco doble en chat (/dc-body [on|off])" },

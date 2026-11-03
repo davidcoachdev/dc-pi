@@ -23,6 +23,8 @@ Do not use for initial PR creation (use `branch-pr` or `chained-pr`).
 - **On-Demand Only**: Never run continuous polling or background daemon loops. Execute once per invocation.
 - **Fast-Path Bailout**: Check for comments first using `gh pr view --json comments,reviews`. If there are zero unresolved comments, report clean status immediately without spawning a subagent.
 - **Context Isolation**: When comments exist, delegate parsing, diff cross-checking, and report synthesis to ephemeral subagent via `dc_ephemeral_agent_run` with `archetype: "dc-pr-comment-analyst"`. Never dump raw GitHub API JSON into the parent session context.
+- **Silent Thread Resolution**: Once an approved fix is verified with tests, resolve the review thread silently in GitHub using GraphQL (`resolveReviewThread`). Never post redundant comments like "Fixed in commit abc".
+- **3-Round Bot Anti-Loop Ceiling**: Enforce a strict budget of at most 3 iteration rounds when responding to automated bot reviewers (CodeRabbit, SonarQube, linters). If feedback persists after round 3, stop immediately and escalate to human review.
 - **Auditor Does Not Fix**: The analyst produces an actionable triage report. It never modifies code. Bounded implementation fixes must be explicitly approved by the user before dispatching `gentle-ai-worker`.
 - **Preserve Human Control**: Never auto-resolve threads or auto-commit fixes without human review of the plan.
 
@@ -53,6 +55,8 @@ Do not use for initial PR creation (use `branch-pr` or `chained-pr`).
 5. **Implement Approved Fixes (Optional)**:
    - If user confirms: derive narrow `## Allowed edit surfaces` from the report.
    - Launch `gentle-ai-worker` to apply fixes under TDD.
+   - Upon verification (exit code 0), silently resolve the corresponding review thread via GitHub GraphQL mutation:
+     `gh api graphql -f query='mutation { resolveReviewThread(input: {threadId: "<THREAD_ID>"}) { clientMutationId } }'`
 
 ## Output Contract
 
