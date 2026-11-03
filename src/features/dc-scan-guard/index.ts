@@ -28,8 +28,8 @@ export function handleToolCall(event: PiToolCallEvent): PiToolCallResult | undef
       }
     }
 
-    // 2. Verificación para herramientas nativas de búsqueda (grep, find)
-    if (event.toolName === "grep" || event.toolName === "find") {
+    // 2. Verificación para herramientas nativas de lectura y búsqueda (read, grep, find)
+    if (event.toolName === "grep" || event.toolName === "find" || event.toolName === "read") {
       const decision = classifyNativeToolScan(event.toolName, rawInput);
       if (decision.block && decision.reason) {
         return { block: true, reason: decision.reason };

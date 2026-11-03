@@ -107,6 +107,40 @@ test("classifyShellCommand blocks destructive rm -rf on roots and global wildcar
   assert.equal(safeRmDir.block, false);
 });
 
+test("classifyShellCommand and classifyNativeToolScan block sensitive credential theft", () => {
+  // Shell command credential theft attempts
+  const sshCat = classifyShellCommand("cat ~/.ssh/id_rsa");
+  assert.equal(sshCat.block, true);
+  assert.match(sshCat.reason!, /credential-protection/);
+
+  const awsGrep = classifyShellCommand("grep -i key ~/.aws/credentials");
+  assert.equal(awsGrep.block, true);
+
+  const ghToken = classifyShellCommand("cat ~/.config/gh/hosts.yml");
+  assert.equal(ghToken.block, true);
+
+  // Native tool read/grep credential protection
+  const nativeReadSsh = handleToolCall({
+    toolName: "read",
+    input: { path: "/home/dc-studio/.ssh/id_ed25519" },
+  });
+  assert.equal(nativeReadSsh?.block, true);
+  assert.match(nativeReadSsh!.reason, /credential-protection/);
+
+  const nativeGrepAws = handleToolCall({
+    toolName: "grep",
+    input: { path: "~/.aws" },
+  });
+  assert.equal(nativeGrepAws?.block, true);
+
+  // Safe non-credential reads
+  const safeNativeRead = handleToolCall({
+    toolName: "read",
+    input: { path: "src/index.ts" },
+  });
+  assert.equal(safeNativeRead, undefined);
+});
+
 test("checkNodeVersion detects supported node version", () => {
   const result = checkNodeVersion("v22.19.0", "20.6.0");
   assert.equal(result.ok, true);
