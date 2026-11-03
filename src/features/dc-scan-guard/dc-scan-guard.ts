@@ -66,7 +66,7 @@ function isRootedFind(tokens: string[]): boolean {
   // find acepta flags iniciales de enlace simbólico (-H, -L, -P, -D, -O) antes de los directorios
   for (let i = idx + 1; i < tokens.length; i++) {
     const tok = tokens[i];
-    if (tok === "-H" || tok === "-L" || tok === "-P" || /^-[DO]\d*$/.test(tok)) {
+    if (tok === "-H" || tok === "-L" || tok === "-P" || /^-[DO]\d*$/.test(tok) || /^--exec/.test(tok)) {
       continue;
     }
     if (tok.startsWith("-") || tok === "(" || tok === "!" || tok === ")") break;
@@ -146,6 +146,7 @@ function isDestructiveRm(tokens: string[]): boolean {
     if (tok.startsWith("-")) continue;
     if (isRootPath(tok)) return true;
     if (tok === "/*" || tok === "~/*" || tok === ".*" || tok === "$HOME/*" || tok === "${HOME}/*") return true;
+    if (/^[/\\]\*+$/.test(tok) || /^\~[/\\]\*+$/.test(tok)) return true;
   }
   return false;
 }

@@ -113,6 +113,9 @@ test("classifyShellCommand blocks destructive rm -rf on roots and global wildcar
   const rmSlashStar = classifyShellCommand("rm -fr /*");
   assert.equal(rmSlashStar.block, true);
 
+  const rmSlashStarStar = classifyShellCommand("rm -fr /**");
+  assert.equal(rmSlashStarStar.block, true);
+
   const rmWildcardRoot = classifyShellCommand("rm -rf /home/dc-studio");
   assert.equal(rmWildcardRoot.block, true);
 

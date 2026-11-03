@@ -350,7 +350,7 @@ test("dc-sentinel: public hooks redact durable capture and live controls gate ev
   let command: any;
   const pi = {
     on: (name: string, hook: any) => hooks.set(name, hook),
-    registerCommand: (_name: string, spec: any) => { command = spec.handler; },
+    registerCommand: (name: string, spec: any) => { if (name === "dc-sentinel") command = spec.handler; },
     registerShortcut() {},
   } as unknown as ExtensionAPI;
   const ctx = { cwd: process.env.TMPDIR, hasUI: false } as ExtensionContext;
@@ -425,8 +425,8 @@ test("dc-sentinel: preference write failure preserves cache and reports command 
   let command: any;
   const notices: string[] = [];
   t.mock.method(dcNotifier, "notify", (_ctx: unknown, msg: string) => { notices.push(msg); return true; });
-  dcSentinelExtension({ on() {}, registerShortcut() {}, registerCommand(_name: string, spec: any) {
-    command = spec.handler;
+  dcSentinelExtension({ on() {}, registerShortcut() {}, registerCommand(name: string, spec: any) {
+    if (name === "dc-sentinel") command = spec.handler;
   } } as any);
   const failingWrite = t.mock.method(defaultFs, "writeFileSync", () => { throw new Error("fixture write failure"); });
   syncBuiltinESMExports();
@@ -505,7 +505,7 @@ test("T3: deferred settlement never writes disposed handles after switch or shut
     t.mock.method(recorder, "flushTurnChronicle", (turn: any) => { chronicles.push(turn); return null; });
     t.mock.method(dcNotifier, "notify", () => true);
     dcSentinelExtension({ on: (name: string, hook: any) => hooks.set(name, hook), registerShortcut() {},
-      registerCommand: (_name: string, spec: any) => { command = spec.handler; } } as any, {
+      registerCommand: (name: string, spec: any) => { if (name === "dc-sentinel") command = spec.handler; } } as any, {
       recorder, enableRecall: false, gitStatsExtractor: () => pending,
       databaseFactory: (_name, dbRoot) => {
         let closed = false;

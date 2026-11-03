@@ -292,6 +292,8 @@ export default function dcSentinelExtension(
           captureEpoch++;
           liveCalls.clear();
           lastAssistantSnippet = undefined;
+        } else {
+          captureEpoch++;
         }
         if (!writeSentinelPrefs({ enabled: next })) {
           dcNotifier.notify(ctx, next

@@ -98,19 +98,19 @@ test("DcKeysPanel autoscrolls down and up when navigating beyond viewport", () =
   assert.equal(panel.getSelectedRowIndex(), 8);
   assert.equal(panel.getScrollOffset(), 1);
 
-  // Move down further to row 12 -> scrollOffset = 12 - 8 + 1 = 5
-  for (let i = 0; i < 4; i++) {
+  // Move down further to row 13 -> scrollOffset = 13 - 8 + 1 = 6
+  for (let i = 0; i < 5; i++) {
     panel.handleInput("\x1b[B"); // Down
   }
-  assert.equal(panel.getSelectedRowIndex(), 12);
-  assert.equal(panel.getScrollOffset(), 5);
+  assert.equal(panel.getSelectedRowIndex(), 13);
+  assert.equal(panel.getScrollOffset(), 6);
 
-  // Render when scrolled: should contain row 12
+  // Render when scrolled: should contain row 13
   const lines = panel.render(70);
   assert.ok(lines.some((l) => l.includes("●") && l.includes("Alt+6..9")));
 
   // Move up to row 4 -> scrollOffset should autoscroll up to 4
-  for (let i = 0; i < 8; i++) {
+  for (let i = 0; i < 9; i++) {
     panel.handleInput("\x1b[A"); // Up
   }
   assert.equal(panel.getSelectedRowIndex(), 4);

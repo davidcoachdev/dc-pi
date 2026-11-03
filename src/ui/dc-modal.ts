@@ -115,7 +115,11 @@ export async function openDcModal<T = void>(
             } catch {
               /* defensive */
             }
-            options.onClose?.(val);
+            try {
+              options.onClose?.(val);
+            } catch {
+              /* defensive */
+            }
             done(val);
           }
         };

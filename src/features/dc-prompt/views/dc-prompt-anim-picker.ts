@@ -184,6 +184,9 @@ export async function openPromptAnimPicker(ctx: ExtensionContext): Promise<strin
       }
     },
     onClose: () => {
+      if (activePanel) {
+        activePanel.dispose();
+      }
       activePanel = undefined;
     },
     content: (done, _theme, tui) => {
