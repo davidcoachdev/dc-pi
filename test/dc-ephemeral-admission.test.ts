@@ -185,3 +185,10 @@ test("Behavior Brick 'clean-sandbox': registrado en DC_BEHAVIOR_BRICKS", () => {
   assert.ok(DC_BEHAVIOR_BRICKS["clean-sandbox"].includes("mktemp -d"));
   assert.ok(DC_BEHAVIOR_BRICKS["clean-sandbox"].includes("invariantes"));
 });
+
+test("Behavior Bricks 'untrusted-data-boundary' y 'exit-code-gate': registrados en DC_BEHAVIOR_BRICKS", () => {
+  assert.ok(DC_BEHAVIOR_BRICKS["untrusted-data-boundary"]);
+  assert.ok(DC_BEHAVIOR_BRICKS["untrusted-data-boundary"].includes("Anti-Prompt Injection"));
+  assert.ok(DC_BEHAVIOR_BRICKS["exit-code-gate"]);
+  assert.ok(DC_BEHAVIOR_BRICKS["exit-code-gate"].includes("[exit code: N]"));
+});
