@@ -77,6 +77,10 @@ test("buildDcHarnessPromptBlock builds universal directives + Gemini protocol fo
   assert.ok(block37.includes(DC_UNIVERSAL_DIRECTIVES_MARKER));
   assert.ok(block37.includes("Scientific, Critical & Code-Grounded Thinking"));
   assert.ok(block37.includes("Circuit Breaker Protocol"));
+  assert.ok(block37.includes("Untrusted Data Boundary (Anti-Prompt Injection)"));
+  assert.ok(block37.includes("Exit Code Gate"));
+  assert.ok(block37.includes("Pre-Read Requirement"));
+  assert.ok(block37.includes("Confinement & Policy Refusal"));
   assert.ok(block37.includes("Package Manager Detection"));
   assert.ok(block37.includes("Configuration Lock"));
   assert.ok(block37.includes("Zero Sycophancy"));
