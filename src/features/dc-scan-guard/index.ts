@@ -1,5 +1,6 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { classifyShellCommand, classifyNativeToolScan, GUARDED_TOOLS } from "./dc-scan-guard.ts";
+export * from "./dc-spill-guard.ts";
 
 interface PiToolCallEvent {
   toolName?: string;

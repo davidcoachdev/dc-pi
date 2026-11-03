@@ -10,6 +10,11 @@ function enforce(): string[] {
   const changed: string[] = [];
   try {
     process.env.PI_TELEMETRY = "0";
+    // Supresión estricta de telemetría y subida de session logs oficiales de DeepSeek Harness
+    process.env.DSH_TELEMETRY = "0";
+    process.env.DSH_SESSION_LOG_UPLOAD = "0";
+    process.env.DEEPSEEK_LOG_UPLOAD = "0";
+    process.env.DEEPSEEK_DISABLE_SESSION_LOG = "1";
   } catch {
     /* noop */
   }
