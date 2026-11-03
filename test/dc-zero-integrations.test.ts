@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import * as os from "node:os";
 import { isRootPath, classifyShellCommand, classifyNativeToolScan } from "../src/features/dc-scan-guard/dc-scan-guard.ts";
-import { handleToolCall, guardOutputSpill } from "../src/features/dc-scan-guard/index.ts";
+import { handleToolCall, guardOutputSpill, DcAntiLoopGuard } from "../src/features/dc-scan-guard/index.ts";
 import { checkNodeVersion } from "../src/features/dc-doctor/dc-doctor-env.ts";
 import { generateCheckpointId, untrackedFromStatus } from "../src/features/dc-checkpoint/dc-checkpoint.ts";
 
@@ -178,6 +178,39 @@ test("guardOutputSpill: trunca contenidos masivos preservando head, tail y marca
   assert.ok(bigResult.text.endsWith("_TAIL_FIN"));
   assert.ok(bigResult.text.includes("dc-spill-guard: se omitieron"));
   assert.equal(bigResult.originalLength, bigText.length);
+});
+
+test("DcAntiLoopGuard: detecta llamadas idénticas y bloquea bucles tras umbral", () => {
+  const guard = new DcAntiLoopGuard({ warnThreshold: 3, blockThreshold: 5 });
+
+  const call1 = guard.evaluate("bash", { command: "git status" });
+  assert.equal(call1.allow, true);
+  assert.equal(call1.repeatCount, 1);
+
+  const call2 = guard.evaluate("bash", { command: "git status" });
+  assert.equal(call2.allow, true);
+  assert.equal(call2.repeatCount, 2);
+
+  // Umbral 3: genera advertencia pero aún permite
+  const call3 = guard.evaluate("bash", { command: "git status" });
+  assert.equal(call3.allow, true);
+  assert.equal(call3.repeatCount, 3);
+  assert.ok(call3.warning && call3.warning.includes("Llamada repetida"));
+
+  const call4 = guard.evaluate("bash", { command: "git status" });
+  assert.equal(call4.allow, true);
+  assert.equal(call4.repeatCount, 4);
+
+  // Umbral 5: Bloqueo duro contra el bucle
+  const call5 = guard.evaluate("bash", { command: "git status" });
+  assert.equal(call5.allow, false);
+  assert.equal(call5.blocked, true);
+  assert.ok(call5.warning && call5.warning.includes("Se bloqueó la ejecución"));
+
+  // Cambio de herramienta o argumento reinicia la racha
+  const callOther = guard.evaluate("bash", { command: "npm test" });
+  assert.equal(callOther.allow, true);
+  assert.equal(callOther.repeatCount, 1);
 });
 
 test("checkNodeVersion detects supported node version", () => {

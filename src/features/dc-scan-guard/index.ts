@@ -1,6 +1,8 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { classifyShellCommand, classifyNativeToolScan, GUARDED_TOOLS } from "./dc-scan-guard.ts";
+import { globalAntiLoopGuard } from "./dc-anti-loop-guard.ts";
 export * from "./dc-spill-guard.ts";
+export * from "./dc-anti-loop-guard.ts";
 
 interface PiToolCallEvent {
   toolName?: string;
@@ -19,6 +21,12 @@ export function handleToolCall(event: PiToolCallEvent): PiToolCallResult | undef
     if (!GUARDED_TOOLS.has(event.toolName)) return undefined;
 
     const rawInput = event.input ?? event.args;
+
+    // 0. Detector de bucles y repetición infinita (Anti-Loop Guard de DeepSeek)
+    const loopDecision = globalAntiLoopGuard.evaluate(event.toolName, rawInput);
+    if (!loopDecision.allow && loopDecision.warning) {
+      return { block: true, reason: loopDecision.warning };
+    }
 
     // 1. Verificación para herramientas shell (bash, sh)
     if (event.toolName === "bash" || event.toolName === "shell" || event.toolName === "sh") {
