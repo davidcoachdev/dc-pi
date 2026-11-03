@@ -3,8 +3,9 @@ import { openDcModal } from "../../../ui/dc-modal.ts";
 import { DcSentinelLivePanel } from "./dc-sentinel-live-panel.ts";
 
 /**
- * Abre el Monitor en Vivo del Centinela y Worktrees con soporte Multi-Repo,
- * Sliding Tabs horizontales, flechas ◀ ▶ y soporte completo de clics de mouse.
+ * Abre el Monitor en Vivo del Centinela y Worktrees adoptando el motor de renderizado
+ * estable de Git Graph (alt+h): altura fija sin jitter, selección directa por clic
+ * de mouse sin pelear con el foco, sliding tabs y diffs fluidos.
  */
 export async function openSentinelLiveViewer(ctx: ExtensionContext): Promise<void> {
   const projectRoot = ctx.cwd || process.cwd();
@@ -14,12 +15,12 @@ export async function openSentinelLiveViewer(ctx: ExtensionContext): Promise<voi
     glyph: "⛩ ",
     frame: "double",
     paddingX: 0,
-    width: "86%",
-    maxHeight: "80%",
+    width: "98%",
+    maxHeight: "96%",
     scrollable: false,
     showScrollbar: false,
     footer: (theme) => ({
-      left: `  ${theme.fg("accent", "1-9 / w")} cambiar worktree  ·  ${theme.fg("accent", "↑↓/Clic")} archivo  ·  ${theme.fg("accent", "Tab")} alternar panel  ·  ${theme.fg("accent", "Rueda/j/k")} scroll diff  ·  ${theme.fg("accent", "esc")} cerrar`,
+      left: `  ${theme.fg("accent", "↑↓/Clic")} tarea   ${theme.fg("accent", "Clic pestaña/←→")} archivo   ${theme.fg("accent", "Rueda/j/k")} scroll diff   ${theme.fg("accent", "r")} refrescar   ${theme.fg("accent", "esc")} cerrar`,
       right: `${theme.fg("accent", "[ Centinela Live ]")}  `,
     }),
     content: (done, theme, tui) => {
@@ -27,7 +28,7 @@ export async function openSentinelLiveViewer(ctx: ExtensionContext): Promise<voi
         theme,
         projectRoot,
         onDone: done,
-        maxRows: 32,
+        maxRows: () => Math.max(12, Math.floor((tui.terminal.rows || 40) * 0.94) - 8),
         requestRender: () => tui.requestRender(),
       });
     },

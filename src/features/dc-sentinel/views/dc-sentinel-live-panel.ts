@@ -24,7 +24,7 @@ export interface DcSentinelLivePanelOptions {
   projectRoot: string;
   onDone: () => void;
   requestRender: () => void;
-  maxRows?: number;
+  maxRows?: number | (() => number);
 }
 
 export class DcSentinelLivePanel implements Component {
@@ -32,20 +32,20 @@ export class DcSentinelLivePanel implements Component {
   private readonly projectRoot: string;
   private readonly onDone: () => void;
   private readonly requestRender: () => void;
-  private readonly maxRows: number;
+  private readonly maxRowsOption?: number | (() => number);
 
   private tasks: SentinelWorktreeTask[] = [];
   private activeTaskIndex = 0;
   private activeFileIndex = 0;
   private diffScrollOffset = 0;
-  private activePanel: "list" | "diff" = "list";
 
-  // Hitboxes para clics de mouse
+  // Geometría y hitboxes para selección directa por clic
   private lastLeftW = 34;
-  private worktreeHitboxes: TabHitbox[] = [];
-  private fileHitboxes: TabHitbox[] = [];
-  private lastWorktreeVisualRow = 0;
-  private lastFilesVisualRow = 2;
+  private lastHeaderRows = 2;
+  private lastRowsCount = 24;
+  private lastFileTabsVisualRow = -1;
+  private lastFileTabHitboxes: TabHitbox[] = [];
+  private lastTopWorktreeHitboxes: TabHitbox[] = [];
 
   public invalidate: () => void = () => {};
 
@@ -54,16 +54,14 @@ export class DcSentinelLivePanel implements Component {
     this.projectRoot = options.projectRoot;
     this.onDone = options.onDone;
     this.requestRender = options.requestRender;
-    this.maxRows = options.maxRows ?? 32;
+    this.maxRowsOption = options.maxRows;
 
     this.refresh();
   }
 
   public refresh(): void {
-    // 1. Obtener tareas registradas en el Centinela
     let loaded = sentinelLiveRegistry.getTasks();
 
-    // 2. Si no hay tareas activas en memoria, detectar worktrees reales de Git como fallback
     if (loaded.length === 0) {
       const gitWts = listGitWorktrees(this.projectRoot);
       loaded = gitWts.map((wt, idx) => {
@@ -122,7 +120,7 @@ export class DcSentinelLivePanel implements Component {
       return;
     }
 
-    // Teclas 1 a 9 para selección directa de Worktree
+    // Teclas 1 a 9 para selección instantánea de Worktree
     if (/^[1-9]$/.test(data)) {
       const idx = parseInt(data, 10) - 1;
       if (idx < this.tasks.length) {
@@ -146,108 +144,151 @@ export class DcSentinelLivePanel implements Component {
       return;
     }
 
-    // Tab alternar panel
-    if (matchesKey(data, Key.tab)) {
-      this.activePanel = this.activePanel === "list" ? "diff" : "list";
+    const currentTask = this.tasks[this.activeTaskIndex];
+    const totalFiles = currentTask?.files.length ?? 0;
+
+    // ── FUNCIONALIDADES DE FLECHAS Y CTRL (ESTILO GIT GRAPH) ────
+
+    // Ctrl+Left / Ctrl+Right o h/l: Cambiar archivo seleccionado
+    if (
+      matchesKey(data, Key.ctrl("left")) ||
+      matchesKey(data, Key.left) ||
+      data === "h"
+    ) {
+      if (totalFiles > 0 && this.activeFileIndex > 0) {
+        this.activeFileIndex--;
+        this.diffScrollOffset = 0;
+        this.requestRender();
+      }
+      return;
+    }
+
+    if (
+      matchesKey(data, Key.ctrl("right")) ||
+      matchesKey(data, Key.right) ||
+      data === "l"
+    ) {
+      if (totalFiles > 0 && this.activeFileIndex < totalFiles - 1) {
+        this.activeFileIndex++;
+        this.diffScrollOffset = 0;
+        this.requestRender();
+      }
+      return;
+    }
+
+    // Ctrl+Up / Ctrl+Down o j/k: Scroll del diff
+    if (matchesKey(data, Key.ctrl("up")) || data === "k") {
+      this.diffScrollOffset = Math.max(0, this.diffScrollOffset - 2);
       this.requestRender();
       return;
     }
 
-    const currentTask = this.tasks[this.activeTaskIndex];
-    const totalFiles = currentTask ? currentTask.files.length : 0;
-
-    // Navegación en la lista de archivos
-    if (this.activePanel === "list") {
-      if (matchesKey(data, Key.up) || data === "k") {
-        if (totalFiles > 0) {
-          this.activeFileIndex = Math.max(0, this.activeFileIndex - 1);
-          this.diffScrollOffset = 0;
-          this.requestRender();
-        }
-        return;
-      }
-      if (matchesKey(data, Key.down) || data === "j") {
-        if (totalFiles > 0) {
-          this.activeFileIndex = Math.min(totalFiles - 1, this.activeFileIndex + 1);
-          this.diffScrollOffset = 0;
-          this.requestRender();
-        }
-        return;
-      }
+    if (matchesKey(data, Key.ctrl("down")) || data === "j") {
+      this.diffScrollOffset += 2;
+      this.requestRender();
+      return;
     }
 
-    // Scroll en el panel de diff
-    if (this.activePanel === "diff" || data === "j" || data === "k") {
-      if (data === "k" || matchesKey(data, Key.up)) {
-        this.diffScrollOffset = Math.max(0, this.diffScrollOffset - 1);
+    // Up / Down solos: Navegar archivos en la lista de la izquierda
+    if (matchesKey(data, Key.up)) {
+      if (totalFiles > 0 && this.activeFileIndex > 0) {
+        this.activeFileIndex--;
+        this.diffScrollOffset = 0;
         this.requestRender();
-        return;
       }
-      if (data === "j" || matchesKey(data, Key.down)) {
-        this.diffScrollOffset += 1;
+      return;
+    }
+
+    if (matchesKey(data, Key.down)) {
+      if (totalFiles > 0 && this.activeFileIndex < totalFiles - 1) {
+        this.activeFileIndex++;
+        this.diffScrollOffset = 0;
         this.requestRender();
-        return;
       }
-      if (matchesKey(data, Key.pageUp)) {
-        this.diffScrollOffset = Math.max(0, this.diffScrollOffset - 8);
-        this.requestRender();
-        return;
-      }
-      if (matchesKey(data, Key.pageDown)) {
-        this.diffScrollOffset += 8;
-        this.requestRender();
-        return;
-      }
+      return;
+    }
+
+    if (matchesKey(data, Key.pageUp)) {
+      this.diffScrollOffset = Math.max(0, this.diffScrollOffset - 8);
+      this.requestRender();
+      return;
+    }
+
+    if (matchesKey(data, Key.pageDown)) {
+      this.diffScrollOffset += 8;
+      this.requestRender();
+      return;
     }
   }
 
   public handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
-    const { x, y } = event;
+    const { type, x = 0, y = 0 } = event;
 
-    // Scroll de rueda de mouse
-    if ((event as any).button === 4 || (event as any).type === "wheel-up") {
-      this.diffScrollOffset = Math.max(0, this.diffScrollOffset - 3);
-      this.requestRender();
+    // ── 1. RUEDA DEL MOUSE (SCROLL DIFF SUAVE) ────────────────────
+    if (type === "wheel") {
+      const rawDelta =
+        (event as any).wheelDelta ??
+        ((event as any).button === 4 ? -1 : (event as any).button === 5 ? 1 : undefined);
+      const delta = rawDelta !== undefined && rawDelta !== 0 ? (rawDelta > 0 ? 1 : -1) : 1;
+
+      if (delta > 0) {
+        this.diffScrollOffset += 3;
+        this.requestRender();
+      } else if (delta < 0) {
+        this.diffScrollOffset = Math.max(0, this.diffScrollOffset - 3);
+        this.requestRender();
+      }
       return { handled: true };
     }
-    if ((event as any).button === 5 || (event as any).type === "wheel-down") {
-      this.diffScrollOffset += 3;
-      this.requestRender();
-      return { handled: true };
-    }
 
-    // Clic en la barra superior de Worktrees
-    if (y === this.lastWorktreeVisualRow && this.worktreeHitboxes.length > 0) {
-      const hit = this.worktreeHitboxes.find((h) => x >= h.start && x < h.end);
-      if (hit && hit.targetIndex !== this.activeTaskIndex) {
-        this.activeTaskIndex = hit.targetIndex;
-        this.activeFileIndex = 0;
-        this.diffScrollOffset = 0;
-        this.requestRender();
-        return { handled: true };
+    // ── 2. SELECCIÓN DIRECTA CON UN CLIC (SIN AUTO-FOCUS) ─────────
+    if (type === "click" || (event as any).button === 0) {
+      // A. Clic en la barra superior de Worktrees
+      if (y === 0 && this.lastTopWorktreeHitboxes.length > 0) {
+        const hit = this.lastTopWorktreeHitboxes.find((h) => x >= h.start && x < h.end);
+        if (hit && hit.targetIndex !== this.activeTaskIndex) {
+          this.activeTaskIndex = hit.targetIndex;
+          this.activeFileIndex = 0;
+          this.diffScrollOffset = 0;
+          this.requestRender();
+          return { handled: true };
+        }
       }
-    }
 
-    // Clic en la barra de archivos (panel derecho)
-    if (y === this.lastFilesVisualRow && this.fileHitboxes.length > 0 && x > this.lastLeftW) {
-      const hit = this.fileHitboxes.find((h) => x >= h.start && x < h.end);
-      if (hit && hit.targetIndex !== this.activeFileIndex) {
-        this.activeFileIndex = hit.targetIndex;
-        this.diffScrollOffset = 0;
-        this.requestRender();
-        return { handled: true };
+      // B. Clic en la lista de archivos de la columna izquierda
+      // Los archivos empiezan después de los metadatos (fila visual ~7)
+      if (x <= this.lastLeftW) {
+        const visualRow = y - this.lastHeaderRows;
+        const fileListStartVisualRow = 7;
+        if (visualRow >= fileListStartVisualRow) {
+          const fileIndex = visualRow - fileListStartVisualRow;
+          const currentTask = this.tasks[this.activeTaskIndex];
+          if (currentTask && fileIndex >= 0 && fileIndex < currentTask.files.length) {
+            if (fileIndex !== this.activeFileIndex) {
+              this.activeFileIndex = fileIndex;
+              this.diffScrollOffset = 0;
+              this.requestRender();
+            }
+            return { handled: true };
+          }
+        }
       }
-    }
 
-    // Clic en la lista de archivos de la izquierda
-    if (x <= this.lastLeftW && y > 8) {
-      const fileRowOffset = y - 9;
-      const currentTask = this.tasks[this.activeTaskIndex];
-      if (currentTask && fileRowOffset >= 0 && fileRowOffset < currentTask.files.length) {
-        this.activeFileIndex = fileRowOffset;
-        this.diffScrollOffset = 0;
-        this.requestRender();
-        return { handled: true };
+      // C. Clic en las pestañas deslizantes de archivos (columna derecha)
+      if (x > this.lastLeftW) {
+        const visualRow = y - this.lastHeaderRows;
+        if (visualRow === this.lastFileTabsVisualRow && this.lastFileTabHitboxes.length > 0) {
+          const relX = x - (this.lastLeftW + 3);
+          if (relX >= 0) {
+            const hit = this.lastFileTabHitboxes.find((h) => relX >= h.start && relX < h.end);
+            if (hit && hit.targetIndex !== this.activeFileIndex) {
+              this.activeFileIndex = hit.targetIndex;
+              this.diffScrollOffset = 0;
+              this.requestRender();
+              return { handled: true };
+            }
+          }
+        }
       }
     }
 
@@ -256,13 +297,19 @@ export class DcSentinelLivePanel implements Component {
 
   public render(width: number): string[] {
     const t = this.theme;
+    const innerW = Math.max(60, width);
+
+    // Altura fija estricta: nunca salta ni se encoge entre renders
+    const rowsCount =
+      typeof this.maxRowsOption === "function"
+        ? this.maxRowsOption()
+        : Math.max(14, this.maxRowsOption ?? 24);
+    this.lastRowsCount = rowsCount;
+
     const lines: string[] = [];
-    const innerW = Math.max(40, width);
 
     // ── 1. BARRA SUPERIOR DE WORKTREES CON SLIDING TABS ──────────
-    this.lastWorktreeVisualRow = lines.length;
-    this.worktreeHitboxes = [];
-
+    this.lastTopWorktreeHitboxes = [];
     const worktreeTabs = this.tasks.map((task, idx) => {
       const statusIcon =
         task.status === "working" ? "🟢" : task.status === "review" ? "🟡" : task.status === "blocked" ? "🔴" : "⏸";
@@ -278,7 +325,7 @@ export class DcSentinelLivePanel implements Component {
     if (slidingWts.hiddenLeft > 0) {
       const text = `+${slidingWts.hiddenLeft} ◀ `;
       const w = visibleWidth(text);
-      this.worktreeHitboxes.push({
+      this.lastTopWorktreeHitboxes.push({
         start: wtCol,
         end: wtCol + w,
         targetIndex: Math.max(0, this.activeTaskIndex - 1),
@@ -291,7 +338,7 @@ export class DcSentinelLivePanel implements Component {
     for (const item of slidingWts.slice) {
       const label = ` [${item.item.label}] `;
       const w = visibleWidth(label);
-      this.worktreeHitboxes.push({
+      this.lastTopWorktreeHitboxes.push({
         start: wtCol,
         end: wtCol + w,
         targetIndex: item.index,
@@ -309,7 +356,7 @@ export class DcSentinelLivePanel implements Component {
     if (slidingWts.hiddenRight > 0) {
       const text = ` ▶ +${slidingWts.hiddenRight}`;
       const w = visibleWidth(text);
-      this.worktreeHitboxes.push({
+      this.lastTopWorktreeHitboxes.push({
         start: wtCol,
         end: wtCol + w,
         targetIndex: Math.min(this.tasks.length - 1, this.activeTaskIndex + 1),
@@ -320,17 +367,18 @@ export class DcSentinelLivePanel implements Component {
     const wtHeaderLine = ` ${t.bold("WORKTREES:")} ${leftWtIndicator}${wtBadges.join(" ")}${rightWtIndicator}`;
     lines.push(pad(truncateToWidth(wtHeaderLine, innerW, ""), innerW));
     lines.push(t.fg("border", "─".repeat(innerW)));
+    this.lastHeaderRows = lines.length;
 
-    // ── 2. CUERPO DE DOS PANELES (IZQUIERDA: ESTADO / DERECHA: DIFF) ──
+    // ── 2. COLUMNA IZQUIERDA (METADATOS Y ARCHIVOS) Y DERECHA (DIFF) ──
     const leftW = Math.max(28, Math.min(36, Math.floor(innerW * 0.32)));
-    const rightW = Math.max(20, innerW - leftW - 3);
+    const rightW = Math.max(24, innerW - leftW - 3);
     this.lastLeftW = leftW;
 
     const currentTask = this.tasks[this.activeTaskIndex];
     const leftLines: string[] = [];
     const rightLines: string[] = [];
 
-    // --- Columna Izquierda: Metadatos y Archivos ---
+    // --- Columna Izquierda: Información Completa ---
     if (currentTask) {
       const statusBadge =
         currentTask.status === "working"
@@ -347,6 +395,8 @@ export class DcSentinelLivePanel implements Component {
       leftLines.push(pad(`🤖 ${t.bold("Subagente:")} ${currentTask.subagentName}`, leftW));
       if (currentTask.currentTool) {
         leftLines.push(pad(`🛠 ${t.bold("Tool:")} ${t.fg("warning", currentTask.currentTool)}`, leftW));
+      } else {
+        leftLines.push(pad(`⏱ ${t.bold("Fase:")} ${t.fg("dim", currentTask.currentPhase)}`, leftW));
       }
       leftLines.push(t.fg("border", "┄".repeat(leftW)));
 
@@ -376,23 +426,23 @@ export class DcSentinelLivePanel implements Component {
       leftLines.push(pad(t.fg("dim", "Sin tareas activas"), leftW));
     }
 
-    // --- Columna Derecha: Sliding File Tabs y Diff ---
-    this.lastFilesVisualRow = lines.length;
-    this.fileHitboxes = [];
-
+    // --- Columna Derecha: Sliding File Tabs y Diff Fijo ---
+    this.lastFileTabHitboxes = [];
     if (currentTask && currentTask.files.length > 0) {
+      this.lastFileTabsVisualRow = rightLines.length;
+
       const fileTabs = currentTask.files.map((f) => ({
         label: `📄 ${pathBase(f.path)}`,
       }));
 
       const slidingFiles = computeSlidingTabs(fileTabs, this.activeFileIndex, rightW - 14);
 
-      let fileCol = leftW + 3 + 12;
+      let fileCol = 4;
       let leftFIndicator = "";
       if (slidingFiles.hiddenLeft > 0) {
         const text = `+${slidingFiles.hiddenLeft} ◀ `;
         const w = visibleWidth(text);
-        this.fileHitboxes.push({
+        this.lastFileTabHitboxes.push({
           start: fileCol,
           end: fileCol + w,
           targetIndex: Math.max(0, this.activeFileIndex - 1),
@@ -405,7 +455,7 @@ export class DcSentinelLivePanel implements Component {
       for (const item of slidingFiles.slice) {
         const label = ` ${item.item.label} `;
         const w = visibleWidth(label);
-        this.fileHitboxes.push({
+        this.lastFileTabHitboxes.push({
           start: fileCol,
           end: fileCol + w,
           targetIndex: item.index,
@@ -423,7 +473,7 @@ export class DcSentinelLivePanel implements Component {
       if (slidingFiles.hiddenRight > 0) {
         const text = ` ▶ +${slidingFiles.hiddenRight}`;
         const w = visibleWidth(text);
-        this.fileHitboxes.push({
+        this.lastFileTabHitboxes.push({
           start: fileCol,
           end: fileCol + w,
           targetIndex: Math.min(currentTask.files.length - 1, this.activeFileIndex + 1),
@@ -431,11 +481,14 @@ export class DcSentinelLivePanel implements Component {
         rightFIndicator = ` ${t.fg("dim", "▶")} ${t.bold(t.fg("accent", `+${slidingFiles.hiddenRight}`))}`;
       }
 
-      const filesHeader = ` ${t.bold("ARCHIVOS:")} ${leftFIndicator}${fileBadges.join(" ")}${rightFIndicator}`;
+      const filesHeader = ` 📂 ${leftFIndicator}${fileBadges.join(" ")}${rightFIndicator}`;
       rightLines.push(pad(truncateToWidth(filesHeader, rightW, ""), rightW));
       rightLines.push(t.fg("border", "┄".repeat(rightW)));
 
-      // Renderizar diff formateado con renderDcCodeBox
+      // Renderizar diff dentro de renderDcCodeBox en el budget exacto restante
+      const headerLinesCount = rightLines.length;
+      const diffBudget = Math.max(4, rowsCount - headerLinesCount);
+
       const selectedFile = currentTask.files[this.activeFileIndex];
       const rawDiff = selectedFile ? currentTask.diffsByFile[selectedFile.path] || [] : [];
 
@@ -443,7 +496,7 @@ export class DcSentinelLivePanel implements Component {
         title: selectedFile ? `📄 ${selectedFile.path}` : "Diff",
         lines: rawDiff.length > 0 ? rawDiff : ["  (archivo nuevo o sin diferencias registradas)"],
         width: rightW,
-        maxRows: Math.max(6, this.maxRows - 6),
+        maxRows: diffBudget,
         scrollOffset: this.diffScrollOffset,
       });
 
@@ -451,17 +504,18 @@ export class DcSentinelLivePanel implements Component {
         rightLines.push(cbLine);
       }
     } else {
-      rightLines.push(pad(t.fg("dim", "Selecciona una tarea con archivos para inspeccionar su diff en vivo"), rightW));
+      this.lastFileTabsVisualRow = -1;
+      rightLines.push(pad(` 🌿 ${t.bold("Rama:")} ${currentTask ? currentTask.branchName : "n/a"}`, rightW));
+      rightLines.push(pad(t.fg("dim", " 📂 (Sin archivos modificados en este worktree)"), rightW));
     }
 
-    // ── 3. COMBINAR COLUMNAS EN PANTALLA ──────────────────────────
-    const totalBodyRows = Math.max(leftLines.length, rightLines.length, 12);
+    // ── 3. RELLENAR CON PADDING FIJO HASTA rowsCount (CERO JITTER / CERO MOVIMIENTO) ──
     const borderSep = t.fg("border", " │ ");
 
-    for (let r = 0; r < totalBodyRows; r++) {
-      const leftCol = leftLines[r] || " ".repeat(leftW);
-      const rightCol = rightLines[r] || " ".repeat(rightW);
-      lines.push(`${leftCol}${borderSep}${rightCol}`);
+    for (let r = 0; r < rowsCount; r++) {
+      const leftCol = leftLines[r] ?? " ".repeat(leftW);
+      const rightCol = rightLines[r] ?? " ".repeat(rightW);
+      lines.push(`${pad(leftCol, leftW)}${borderSep}${pad(rightCol, rightW)}`);
     }
 
     return lines;
