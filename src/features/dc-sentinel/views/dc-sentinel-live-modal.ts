@@ -14,8 +14,8 @@ export async function openSentinelLiveViewer(ctx: ExtensionContext): Promise<voi
     glyph: "⛩ ",
     frame: "double",
     paddingX: 0,
-    width: "96%",
-    maxHeight: 40,
+    width: "86%",
+    maxHeight: "80%",
     scrollable: false,
     showScrollbar: false,
     footer: (theme) => ({

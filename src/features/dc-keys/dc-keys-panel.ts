@@ -25,7 +25,7 @@ export function getDefaultCategories(): ShortcutCategory[] {
       title: "DC Studio",
       rows: [
         { key: "Alt+Shift+G", action: "visor de memorias Engram (Engram Manager)" },
-        { key: "Alt+Shift+A", action: "monitor en vivo de Centinela, subagentes y worktrees (Sentinel Live)" },
+        { key: "Alt+S", action: "monitor en vivo de Centinela, subagentes y worktrees (Sentinel Live)" },
         { key: "Alt+H", action: "visor de historial Git y grafo (Git Graph)" },
         { key: "Alt+O", action: "explorador de seguridad OWASP (OWASP Cheat Sheets)" },
         { key: "Alt+Shift+F", action: "control de cambios y diff Git (Changes)" },
