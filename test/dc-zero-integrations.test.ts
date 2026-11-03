@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import * as os from "node:os";
 import { isRootPath, classifyShellCommand, classifyNativeToolScan } from "../src/features/dc-scan-guard/dc-scan-guard.ts";
-import { handleToolCall } from "../src/features/dc-scan-guard/index.ts";
+import { handleToolCall, guardOutputSpill } from "../src/features/dc-scan-guard/index.ts";
 import { checkNodeVersion } from "../src/features/dc-doctor/dc-doctor-env.ts";
 import { generateCheckpointId, untrackedFromStatus } from "../src/features/dc-checkpoint/dc-checkpoint.ts";
 
@@ -63,8 +63,22 @@ test("classifyShellCommand blocks root-rooted scans and allows scoped scans", ()
   assert.equal(dangerous1.block, true);
   assert.match(dangerous1.reason!, /dc-scan-guard/);
 
+  // find con flags de symlinks (-H, -L, -P)
+  const dangerousFindH = classifyShellCommand("find -H / -type f");
+  assert.equal(dangerousFindH.block, true);
+  const dangerousFindL = classifyShellCommand("find -L ~/ -name '*.key'");
+  assert.equal(dangerousFindL.block, true);
+
   const dangerous2 = classifyShellCommand("grep -r 'api_key' ~/");
   assert.equal(dangerous2.block, true);
+
+  // grep con variantes de flag larga
+  const dangerousGrepDir = classifyShellCommand("grep --directories=recurse 'token' /");
+  assert.equal(dangerousGrepDir.block, true);
+  const dangerousGrepDirSpace = classifyShellCommand("grep --directories recurse 'secret' ~/");
+  assert.equal(dangerousGrepDirSpace.block, true);
+  const dangerousGrepRec = classifyShellCommand("grep --recursive 'secret' /");
+  assert.equal(dangerousGrepRec.block, true);
 
   const dangerous3 = classifyShellCommand("cd src && rg 'function' /");
   assert.equal(dangerous3.block, true);
@@ -83,6 +97,10 @@ test("classifyShellCommand blocks destructive rm -rf on roots and global wildcar
   const rmRoot = classifyShellCommand("rm -rf /");
   assert.equal(rmRoot.block, true);
   assert.match(rmRoot.reason!, /destructivo/);
+
+  const rmLongRec = classifyShellCommand("rm --recursive /");
+  assert.equal(rmLongRec.block, true);
+  assert.match(rmLongRec.reason!, /destructivo/);
 
   const rmHome = classifyShellCommand("rm -rf ~");
   assert.equal(rmHome.block, true);
@@ -139,6 +157,27 @@ test("classifyShellCommand and classifyNativeToolScan block sensitive credential
     input: { path: "src/index.ts" },
   });
   assert.equal(safeNativeRead, undefined);
+});
+
+test("guardOutputSpill: trunca contenidos masivos preservando head, tail y marcador de contexto", () => {
+  const shortText = "Texto breve y normal de salida.";
+  const shortResult = guardOutputSpill(shortText);
+  assert.equal(shortResult.truncated, false);
+  assert.equal(shortResult.text, shortText);
+
+  // Cadena gigante simulada
+  const bigText = "HEAD_INICIO_" + "A".repeat(80000) + "_TAIL_FIN";
+  const bigResult = guardOutputSpill(bigText, {
+    maxChars: 1000,
+    headChars: 300,
+    tailChars: 200,
+  });
+
+  assert.equal(bigResult.truncated, true);
+  assert.ok(bigResult.text.startsWith("HEAD_INICIO_"));
+  assert.ok(bigResult.text.endsWith("_TAIL_FIN"));
+  assert.ok(bigResult.text.includes("dc-spill-guard: se omitieron"));
+  assert.equal(bigResult.originalLength, bigText.length);
 });
 
 test("checkNodeVersion detects supported node version", () => {
