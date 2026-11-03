@@ -1,3 +1,5 @@
+import { validatePublicUrlResolved } from "../../features/dc-websearch/core/dc-websearch-security.ts";
+
 export class DcHttpError extends Error {
   public readonly status?: number;
   public readonly url?: string;
@@ -33,6 +35,12 @@ export interface FetchJsonOptions {
   maxSizeBytes?: number;
   /** Optional custom validator/guard before issuing request (e.g. anti-SSRF) */
   validateUrl?: (url: string) => boolean | { safe: boolean; reason?: string } | Promise<boolean | { safe: boolean; reason?: string }>;
+  /**
+   * Enforce SSRF and DNS rebinding prevention via validatePublicUrlResolved.
+   * Defaults to true if options.validateUrl is not explicitly provided.
+   * Set to false only when targeting trusted internal local endpoints (e.g. CLIProxy localhost or mock server).
+   */
+  enforceSsrfProtection?: boolean;
 }
 
 /** Sanitize URLs to prevent logging bearer tokens or query credentials in error traces. */
@@ -65,9 +73,17 @@ export async function fetchJson<T = unknown>(
     timeoutMs = 5000,
     signal: externalSignal,
     maxSizeBytes = 5 * 1024 * 1024,
+    enforceSsrfProtection = false,
   } = options;
 
   const safeUrl = sanitizeUrl(url);
+
+  if (enforceSsrfProtection && !options.validateUrl) {
+    const verdict = await validatePublicUrlResolved(url);
+    if (!verdict.safe) {
+      throw new DcHttpError(`SSRF protection blocked request: ${verdict.reason ?? "disallowed host"}`, undefined, safeUrl);
+    }
+  }
 
   if (options.validateUrl) {
     const verdict = await options.validateUrl(url);

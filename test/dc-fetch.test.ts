@@ -139,3 +139,27 @@ test("fetchJson respects external AbortSignal", async () => {
     server.close();
   }
 });
+
+test("fetchJson blocks SSRF when enforceSsrfProtection is active", async () => {
+  await assert.rejects(
+    async () => {
+      await fetchJson("http://127.0.0.1:9999/private", { enforceSsrfProtection: true });
+    },
+    (err: any) => {
+      assert.ok(err instanceof DcHttpError);
+      assert.match(err.message, /SSRF protection blocked request/);
+      return true;
+    },
+  );
+
+  await assert.rejects(
+    async () => {
+      await fetchJson("http://169.254.169.254/latest/meta-data", { enforceSsrfProtection: true });
+    },
+    (err: any) => {
+      assert.ok(err instanceof DcHttpError);
+      assert.match(err.message, /SSRF protection blocked request/);
+      return true;
+    },
+  );
+});
