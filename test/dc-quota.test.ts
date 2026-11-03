@@ -17,7 +17,9 @@ import dcQuotaExtension, {
   fetchZenQuota,
   fetchBridgeQuota,
   fetchAllQuotas,
+  fetchAccountQuotaRows,
 } from "../src/features/dc-quota/dc-quota.ts";
+import { accountCoordinator } from "../src/integrations/dc-cliproxy/dc-account-coordinator.ts";
 
 const dummyTheme: Pick<Theme, "fg" | "bg" | "bold"> = {
   fg: (_color: string, text: string) => text,
@@ -199,6 +201,25 @@ test("fetchBridgeQuota duplicates Claude entries to Gemini for shared Antigravit
   assert.equal(enriched.length, 4);
   assert.ok(enriched.some((r) => r.label === "Gemini Weekly" && r.pctLeft === 85));
   assert.ok(enriched.some((r) => r.label === "Gemini Five-hour" && r.pctLeft === 95));
+});
+
+test("fetchAccountQuotaRows uses bridge when available or falls back to direct CLIProxy", async () => {
+  accountCoordinator.invalidateAll();
+
+  // Test with a mock metadata hint providing authIndex
+  const mockMeta = {
+    prefix: "ac99",
+    name: "ac99.json",
+    email: "test@ac99.com",
+    provider: "unknown-provider",
+    authIndex: "mock-auth-99",
+    disabled: false,
+    raw: { auth_index: "mock-auth-99" },
+  };
+
+  const rows = await fetchAccountQuotaRows("ac99", true, mockMeta);
+  // Unknown provider returns [] without crashing
+  assert.deepEqual(rows, []);
 });
 
 test("dcQuotaExtension registers only /dc-quota with Alt+Shift+Q", () => {

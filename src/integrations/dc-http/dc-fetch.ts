@@ -1,11 +1,16 @@
 export class DcHttpError extends Error {
+  public readonly status?: number;
+  public readonly url?: string;
+
   constructor(
     message: string,
-    public readonly status?: number,
-    public readonly url?: string,
+    status?: number,
+    url?: string,
   ) {
     super(message);
     this.name = "DcHttpError";
+    this.status = status;
+    this.url = url;
   }
 }
 

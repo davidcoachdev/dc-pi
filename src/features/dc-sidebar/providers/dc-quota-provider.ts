@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import * as path from "node:path";
-import { fetchBridgeQuota, fetchZenQuota, readPiAuthKey } from "../../dc-quota/dc-quota.ts";
+import { fetchAccountQuotaRows, fetchBridgeQuota, fetchZenQuota, readPiAuthKey } from "../../dc-quota/dc-quota.ts";
 import { humanizeReset } from "../../dc-quota/dc-quota-types.ts";
 import { getSidebarContext } from "../dc-sidebar.ts";
 
@@ -107,11 +107,11 @@ export function isOpenCodeActive(): boolean {
 }
 
 /**
- * Consulta la cuota de una cuenta específica a través del bridge :8325.
+ * Consulta la cuota de una cuenta específica a través del bridge :8325 o fallback directo a CLIProxy.
  */
 export async function fetchAccountQuota(prefix: string): Promise<AccountQuotaSummary | null> {
   try {
-    const rows = await fetchBridgeQuota(prefix);
+    const rows = await fetchAccountQuotaRows(prefix);
     if (!rows || rows.length === 0) return null;
 
     let family = "AI";

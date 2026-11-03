@@ -5,6 +5,7 @@ export interface AccountMetadata {
   name: string;
   email?: string;
   provider?: string;
+  authIndex?: string;
   disabled: boolean;
   raw?: Record<string, unknown>;
 }
@@ -15,6 +16,8 @@ export interface CachedQuotaEntry {
     pctLeft: number;
     resetMs: number | null;
   }>;
+  resetCredits?: number | null;
+  limitReached?: boolean;
   fetchedAt: number;
 }
 
@@ -78,15 +81,17 @@ export class DcAccountCoordinator {
 
               const disabled = Boolean(f.disabled || f.status === "disabled" || body.disabled);
               const email = f.email ?? (body.email as string | undefined);
-              const provider = (body.provider as string | undefined) ?? (body.type as string | undefined);
+              const provider = (f.provider as string | undefined) ?? (body.provider as string | undefined) ?? (body.type as string | undefined);
+              const authIndex = (f.auth_index as string | undefined) ?? (body.auth_index as string | undefined);
 
               out.set(prefix, {
                 prefix,
                 name: f.name,
                 email,
                 provider,
+                authIndex,
                 disabled,
-                raw: body,
+                raw: { ...body, auth_index: authIndex, provider: provider ?? body.provider },
               });
             } catch {
               // Si falla la descarga de una cuenta específica, no bloquea las demás
