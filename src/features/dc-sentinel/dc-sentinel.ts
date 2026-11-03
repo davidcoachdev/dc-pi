@@ -428,6 +428,15 @@ export default function dcSentinelExtension(
       },
     });
 
+    pi.registerShortcut("alt+shift+a" as never, {
+      description: "Monitor en vivo del Centinela y Worktrees (DC Studio)",
+      handler: async (ctx: ExtensionContext) => {
+        if (ctx.hasUI) {
+          await openSentinelLiveViewer(ctx);
+        }
+      },
+    });
+
     pi.registerShortcut("alt+s" as never, {
       description: "Monitor en vivo del Centinela y Worktrees (DC Studio)",
       handler: async (ctx: ExtensionContext) => {
