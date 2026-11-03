@@ -70,6 +70,7 @@ import dcSentinelExtension from "./features/dc-sentinel/index.ts";
 import dcOwaspExtension from "./features/dc-owasp/index.ts";
 import dcLazywebExtension from "./features/dc-lazyweb/index.ts";
 import dcStateMonitorExtension from "./core/dc-agent-state/index.ts";
+import dcPtcExtension from "./features/dc-ptc/index.ts";
 
 export const profileDuelExtension = dcFaceExtension;
 export const dcFacesExtension = dcFaceExtension;
@@ -124,6 +125,7 @@ export {
   dcOwaspExtension,
   dcLazywebExtension,
   dcStateMonitorExtension,
+  dcPtcExtension,
 };
 
 export * from "./features/dc-engram/index.ts";
@@ -148,6 +150,7 @@ export * from "./features/dc-handoff/index.ts";
 export * from "./features/dc-sentinel/index.ts";
 export * from "./features/dc-owasp/index.ts";
 export * from "./features/dc-lazyweb/index.ts";
+export * from "./features/dc-ptc/index.ts";
 
 /**
  * Unified DC Studio Extension.
@@ -200,6 +203,7 @@ export function dcStudioExtension(pi: ExtensionAPI, ctx?: ExtensionContext): voi
   dcSentinelExtension(pi);
   dcOwaspExtension(pi);
   dcLazywebExtension(pi);
+  dcPtcExtension(pi);
   dcDialogsExtension(pi, ctx);
 }
 
