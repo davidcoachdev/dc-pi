@@ -29,6 +29,8 @@ Todas las extensiones se registran de forma unificada a través de `dcStudioExte
 | `/dc-user` | — | `Alt+N` | `dc-user` | Configuración del nombre/nickname de usuario activo |
 | `/dc-preview` | — | `Alt+Shift+V` | `dc-preview` | Lanzador de paneles externos (`yazi`, `nvim`, `fzf`) en Herdr/Tmux |
 | `/dc-keys` | — | `Alt+?` | `dc-keys` | Catálogo interactivo y buscador de atajos de teclado |
+| `/dc-sentinel-live` | — | `Alt+S` | `dc-sentinel` | Monitor interactivo en vivo de subagentes, crónicas y worktrees |
+| `/dc-tts` | — | `Alt+U` | `dc-tts` | Monitor y control del sintetizador de voz TTS local |
 | `/dc-reload` | — | `F5` | `dc-reload` | Recarga en caliente de extensiones, skills, temas y atajos |
 | `/body-frame` | — | — | `dc-body` | Activa/desactiva el marco de doble línea alrededor del chat |
 | `/dc-tool-box` | — | — | `dc-tool-box` | Configura las tarjetas redondeadas de ejecución de herramientas |
@@ -164,6 +166,14 @@ Todas las extensiones se registran de forma unificada a través de `dcStudioExte
 
 #### 18. `dc-scan-guard` (`src/features/dc-scan-guard/`)
 * **Propósito:** Escudo pasivo en el hook `tool_call`. Analiza comandos de shell (`bash`, `sh`) antes de que se ejecuten y bloquea búsquedas recursivas (`find`, `grep -r`, `rg`) lanzadas contra la raíz del disco (`/`, `~`, `C:\`, `$HOME`), evitando cuelgues por hidratación de archivos en la nube (OneDrive/WSL) o pseudo-sistemas de archivos (`/proc`, `/sys`).
+* **Protecciones Activas:**
+  * Bloqueo de ejecuciones peligrosas y enlaces simbólicos con flags como `-H`, `-L`, `-P`, `-D`, `-O` y `--exec`.
+  * Regla de Doble Codificación contra comandos destructivos masivos (`rm -rf` sobre `/`, `~`, `/*`, `/**`, `$HOME/*`).
+  * Bloqueo de acceso no autorizado a claves SSH, tokens de nube (`~/.aws`, `~/.config/gh`), historiales de terminal y credenciales del host.
+
+#### 18b. `dc-fetch` con Anti-SSRF (`src/integrations/dc-http/dc-fetch.ts`)
+* **Propósito:** Cliente HTTP universal resiliente para extensiones y herramientas.
+* **Seguridad:** Soporta `enforceSsrfProtection: true` que valida la URL efectiva contra IPs privadas (RFC 1918), loopbacks (`127.0.0.1`), link-local/cloud metadata (`169.254.169.254`), IPv6 privadas/mapeadas y resuelve nombres DNS para neutralizar ataques de DNS Rebinding.
 
 #### 19. `dc-status` (`src/features/dc-status/`) & `dc-doctor` (`src/features/dc-doctor/`)
 * **`dc-status` (`Alt+E`):** Panel de auditoría con 3 pestañas: **[1] Entorno & Git** (versiones de Node, Pi, gentle-pi, multiplexor, estado de rama), **[2] Alertas** (diagnósticos e incidencias de carga de extensiones capturadas limpiamente) y **[3] Changelog** (últimas notas de versión de Pi).
