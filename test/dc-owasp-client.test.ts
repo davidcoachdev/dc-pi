@@ -49,4 +49,52 @@ describe("DcOwaspClient & Catalog", () => {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     } catch {}
   });
+
+  it("bloquea intentos de Path Traversal fuera del directorio de caché incluso con symlinks", async () => {
+    const tmpDir = path.join(os.tmpdir(), `dc-owasp-traversal-test-${Date.now()}`);
+    fs.mkdirSync(tmpDir, { recursive: true });
+
+    const client = new DcOwaspClient(tmpDir);
+
+    // Intentos de escape con ../ o rutas absolutas
+    const escape1 = await client.getSheetMarkdown("../../../etc/passwd");
+    assert.strictEqual(escape1, null);
+
+    const escape2 = await client.getSheetMarkdown("..\\..\\windows\\win.ini");
+    assert.strictEqual(escape2, null);
+
+    const escape3 = await client.getSheetMarkdown("../");
+    assert.strictEqual(escape3, null);
+
+    // Escape mediante symlink hacia un archivo externo
+    const outsideFile = path.join(os.tmpdir(), `outside-secret-${Date.now()}.md`);
+    fs.writeFileSync(outsideFile, "SECRET_DATA", "utf-8");
+    const linkPath = path.join(tmpDir, "evil_symlink.md");
+    try {
+      fs.symlinkSync(outsideFile, linkPath);
+      const escapeSymlink = await client.getSheetMarkdown("evil_symlink.md");
+      assert.strictEqual(escapeSymlink, null, "Symlink que apunta fuera de cacheDir debe ser bloqueado");
+    } finally {
+      try { fs.unlinkSync(outsideFile); } catch {}
+      try { fs.unlinkSync(linkPath); } catch {}
+    }
+
+    // Escape mediante dangling symlink (symlink colgante cuyo destino no existe)
+    const danglingTarget = path.join(os.tmpdir(), `dangling-secret-${Date.now()}.md`);
+    const danglingLink = path.join(tmpDir, "dangling_link.md");
+    try {
+      fs.symlinkSync(danglingTarget, danglingLink);
+      const escapeDangling = await client.getSheetMarkdown("dangling_link.md");
+      assert.strictEqual(escapeDangling, null, "Dangling symlink debe ser bloqueado para evitar creación fuera de cacheDir");
+      assert.strictEqual(fs.existsSync(danglingTarget), false, "El destino externo nunca debe ser creado");
+    } finally {
+      try { fs.unlinkSync(danglingLink); } catch {}
+      try { fs.unlinkSync(danglingTarget); } catch {}
+    }
+
+    // Cleanup
+    try {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    } catch {}
+  });
 });

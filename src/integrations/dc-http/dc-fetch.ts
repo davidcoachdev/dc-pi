@@ -31,6 +31,8 @@ export interface FetchJsonOptions {
   signal?: AbortSignal;
   /** Maximum response body size in bytes (default: 5MB) */
   maxSizeBytes?: number;
+  /** Optional custom validator/guard before issuing request (e.g. anti-SSRF) */
+  validateUrl?: (url: string) => boolean | { safe: boolean; reason?: string } | Promise<boolean | { safe: boolean; reason?: string }>;
 }
 
 /** Sanitize URLs to prevent logging bearer tokens or query credentials in error traces. */
@@ -66,6 +68,15 @@ export async function fetchJson<T = unknown>(
   } = options;
 
   const safeUrl = sanitizeUrl(url);
+
+  if (options.validateUrl) {
+    const verdict = await options.validateUrl(url);
+    if (typeof verdict === "boolean" && !verdict) {
+      throw new DcHttpError("URL validation rejected request (SSRF guard)", undefined, safeUrl);
+    } else if (typeof verdict === "object" && !verdict.safe) {
+      throw new DcHttpError(`URL validation rejected request: ${verdict.reason ?? "SSRF guard"}`, undefined, safeUrl);
+    }
+  }
 
   // Combine external signal and internal timeout controller
   const timeoutController = new AbortController();

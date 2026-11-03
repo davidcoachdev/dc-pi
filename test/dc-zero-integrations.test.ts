@@ -63,6 +63,22 @@ test("classifyShellCommand blocks root-rooted scans and allows scoped scans", ()
   assert.equal(dangerous1.block, true);
   assert.match(dangerous1.reason!, /dc-scan-guard/);
 
+  // find con flags de symlinks (-H, -L, -P)
+  const dangerousFindH = classifyShellCommand("find -H / -type f");
+  assert.equal(dangerousFindH.block, true);
+  const dangerousFindL = classifyShellCommand("find -L ~/ -name '*.key'");
+  assert.equal(dangerousFindL.block, true);
+  const dangerousFindP = classifyShellCommand("find -P / -name '*.env'");
+  assert.equal(dangerousFindP.block, true);
+
+  // grep con flags recursivas extendidas
+  const dangerousGrepDir = classifyShellCommand("grep --directories=recurse 'token' /");
+  assert.equal(dangerousGrepDir.block, true);
+  const dangerousGrepDirSpace = classifyShellCommand("grep --directories recurse 'secret' ~/");
+  assert.equal(dangerousGrepDirSpace.block, true);
+  const dangerousGrepRec = classifyShellCommand("grep --recursive 'secret' /");
+  assert.equal(dangerousGrepRec.block, true);
+
   const dangerous2 = classifyShellCommand("grep -r 'api_key' ~/");
   assert.equal(dangerous2.block, true);
 
@@ -83,6 +99,10 @@ test("classifyShellCommand blocks destructive rm -rf on roots and global wildcar
   const rmRoot = classifyShellCommand("rm -rf /");
   assert.equal(rmRoot.block, true);
   assert.match(rmRoot.reason!, /destructivo/);
+
+  const rmLongRec = classifyShellCommand("rm --recursive /");
+  assert.equal(rmLongRec.block, true);
+  assert.match(rmLongRec.reason!, /destructivo/);
 
   const rmHome = classifyShellCommand("rm -rf ~");
   assert.equal(rmHome.block, true);
