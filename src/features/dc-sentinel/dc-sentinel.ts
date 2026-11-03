@@ -4,6 +4,7 @@ import { performPreFlightRecall } from "./core/dc-sentinel-recall.ts";
 import { SentinelRecorder, globalSentinelRecorder } from "./core/dc-sentinel-recorder.ts";
 import { readSentinelPrefs, writeSentinelPrefs } from "./core/dc-sentinel-prefs.ts";
 import { openSentinelViewer } from "./views/dc-sentinel-modal.ts";
+import { openSentinelLiveViewer } from "./views/dc-sentinel-live-modal.ts";
 import { dcNotifier } from "../../integrations/dc-notify/dc-notifier.ts";
 import { SentinelDatabase } from "./core/dc-sentinel-db.ts";
 import {
@@ -328,6 +329,11 @@ export default function dcSentinelExtension(
         return;
       }
 
+      if ((action === "live" || action === "monitor" || action === "worktrees") && ctx.hasUI && ctx.mode === "tui") {
+        await openSentinelLiveViewer(ctx);
+        return;
+      }
+
       if (action === "metro" && ctx.hasUI && ctx.mode === "tui") {
         await openSentinelViewer(ctx, "metro");
         return;
@@ -406,6 +412,27 @@ export default function dcSentinelExtension(
         if (!enabled) return;
         if (ctx.hasUI && ctx.mode === "tui") {
           await openSentinelViewer(ctx);
+        }
+      },
+    });
+
+    // Nuevo comando y atajo para el Monitor en Vivo con Sliding Tabs y Worktrees
+    pi.registerCommand("dc-sentinel-live", {
+      description: "Monitor visual interactivo en vivo de subagentes, tareas y worktrees del Centinela",
+      handler: async (_args: string, ctx: ExtensionContext) => {
+        if (!ctx.hasUI) {
+          dcNotifier.notify(ctx, "dc-sentinel-live necesita TUI interactiva.", "error");
+          return;
+        }
+        await openSentinelLiveViewer(ctx);
+      },
+    });
+
+    pi.registerShortcut("alt+s" as never, {
+      description: "Monitor en vivo del Centinela y Worktrees (DC Studio)",
+      handler: async (ctx: ExtensionContext) => {
+        if (ctx.hasUI) {
+          await openSentinelLiveViewer(ctx);
         }
       },
     });
