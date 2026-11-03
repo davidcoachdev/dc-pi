@@ -32,15 +32,19 @@ export interface Notifier {
 
 export class DcNotifier implements Notifier {
   public testMode = false;
+  private readonly getHerdrBin: () => string;
+
   constructor(
-    private readonly getHerdrBin = () => {
+    getHerdrBin: () => string = () => {
       const envBin = process.env.HERDR_BIN_PATH;
       if (envBin && existsSync(envBin)) {
         return envBin;
       }
       return "herdr";
     },
-  ) {}
+  ) {
+    this.getHerdrBin = getHerdrBin;
+  }
 
   isHerdrAvailable(): boolean {
     return Boolean(process.env.HERDR_SOCKET_PATH || process.env.HERDR_ENV);

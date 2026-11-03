@@ -301,6 +301,57 @@ export async function fetchBridgeQuota(prefix: string): Promise<QuotaRow[] | nul
   }
 }
 
+/**
+ * Consulta las filas de cuota para una cuenta específica:
+ * 1. Intenta bridge local :8325 si responde con datos.
+ * 2. Si no responde o está caído, hace fallback directo a CLIProxy management API.
+ * Usa accountCoordinator.getCachedQuota con deduplicación y TTL de 15s.
+ */
+export async function fetchAccountQuotaRows(
+  prefix: string,
+  forceRefresh = false,
+  metadataHint?: any,
+): Promise<QuotaRow[] | null> {
+  const normPrefix = prefix.toLowerCase();
+  return accountCoordinator.getCachedQuota(
+    normPrefix,
+    async () => {
+      // 1. Intentar bridge local si está disponible
+      try {
+        const bridgeRows = await fetchBridgeQuota(normPrefix);
+        if (bridgeRows && bridgeRows.length > 0) {
+          return bridgeRows;
+        }
+      } catch {
+        /* fallback directo */
+      }
+
+      // 2. Fallback directo a CLIProxy Management API
+      let meta = metadataHint;
+      if (!meta) {
+        const accounts = await accountCoordinator.getAccounts(forceRefresh);
+        meta = accounts.get(normPrefix);
+      }
+      if (!meta || meta.disabled) return [];
+
+      const raw = meta.raw ?? {};
+      const authIndex = meta.authIndex ?? raw.auth_index ?? "";
+      if (!authIndex) return [];
+
+      const provider = (meta.provider ?? raw.provider ?? "").toLowerCase();
+      if (provider === "antigravity") {
+        return await fetchAntigravityRows(authIndex, normPrefix);
+      } else if (provider === "codex") {
+        const chatgptAccountId = raw.id_token?.chatgpt_account_id;
+        const codexRes = await fetchCodexData(authIndex, chatgptAccountId);
+        return codexRes.rows;
+      }
+      return [];
+    },
+    forceRefresh,
+  );
+}
+
 /** Consulta las secciones de cuentas de CLIProxy */
 export async function fetchCliProxySections(forceRefresh = false): Promise<QuotaSection[]> {
   if (!cliProxyClient.hasManagementKey()) {
@@ -333,10 +384,11 @@ export async function fetchCliProxySections(forceRefresh = false): Promise<Quota
   const discovered = await Promise.all(
     accountList.map(async (a: any) => {
       const prefix = a.prefix.toLowerCase();
-      const provider = (a.provider ?? "").toLowerCase();
+      const provider = (a.provider ?? a.raw?.provider ?? "").toLowerCase();
       const raw = a.raw ?? {};
       const chatgptAccountId = raw.id_token?.chatgpt_account_id;
       const email = a.email ?? raw.id_token?.email;
+      const authIndex = a.authIndex ?? raw.auth_index ?? "";
 
       const section: QuotaSection = {
         id: `cliproxy-${prefix}`,
@@ -345,29 +397,18 @@ export async function fetchCliProxySections(forceRefresh = false): Promise<Quota
       };
 
       try {
-        const bridgeRows = await accountCoordinator.getCachedQuota(
-          prefix,
-          async () => (await fetchBridgeQuota(prefix)) ?? [],
-          forceRefresh,
-        );
-        if (bridgeRows && bridgeRows.length > 0) {
-          section.rows = bridgeRows;
-        } else {
-          const authIndex = raw.auth_index ?? "";
-          if (!authIndex) throw new Error(`sin auth_index para ${prefix}`);
-          if (provider === "antigravity") {
-            section.rows = await fetchAntigravityRows(authIndex, prefix);
-          } else if (provider === "codex") {
-            const codexRes = await fetchCodexData(authIndex, chatgptAccountId);
-            section.rows = codexRes.rows;
-            section.resetCredits = codexRes.resetCredits;
-            section.limitReached = codexRes.limitReached;
+        const rows = await fetchAccountQuotaRows(prefix, forceRefresh, a);
+        if (rows && rows.length > 0) {
+          section.rows = rows;
+          if (provider === "codex") {
             if (raw.id_token?.chatgpt_subscription_active_until) {
               section.resetRenewalDate = raw.id_token.chatgpt_subscription_active_until;
             }
-          } else {
-            section.error = `provider '${provider || "?"}' sin lector`;
           }
+        } else if (!authIndex) {
+          section.error = `sin auth_index para ${prefix}`;
+        } else {
+          section.error = `sin cuotas registradas para ${prefix}`;
         }
       } catch (e: any) {
         section.error = String(e?.message ?? e).slice(0, 80);
