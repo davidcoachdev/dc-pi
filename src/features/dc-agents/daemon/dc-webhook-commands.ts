@@ -2,6 +2,7 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { dcNotifier } from "../../../integrations/dc-notify/dc-notifier.ts";
 import { dcWebhookDaemonManager } from "./dc-webhook-daemon-manager.ts";
 import { dcConflictGuard } from "./dc-conflict-guard.ts";
+import { openControlCenterModal } from "../views/dc-control-center-modal.ts";
 
 export function registerWebhookDaemonCommands(pi: ExtensionAPI): void {
   pi.registerCommand("dc-webhook", {
@@ -42,6 +43,21 @@ export function registerWebhookDaemonCommands(pi: ExtensionAPI): void {
         const info = `Repositorio: ${repo} | Receptor: ${runningText} | Túnel GitHub: ${tunnelText} | Issues en proceso: ${dispatches} | Archivos reservados: ${conflicts}`;
         dcNotifier.notify(ctx, "DC Webhook Status", info, "info");
       }
+    },
+  });
+
+  // Comando /dc-control y atajo Alt+Shift+W para el Centro de Control y Worktrees (evita colisión con alt+c de dc-face)
+  pi.registerCommand("dc-control", {
+    description: "Abre el Centro de Control Autónomo, Worktrees, Hoja de Ruta ODD y Seguridad de Colaboradores",
+    handler: async (_args: string, ctx: ExtensionContext) => {
+      await openControlCenterModal(ctx);
+    },
+  });
+
+  pi.registerShortcut("alt+shift+w" as never, {
+    description: "Abrir Centro de Control Autónomo y Worktrees",
+    handler: async (ctx: ExtensionContext) => {
+      await openControlCenterModal(ctx);
     },
   });
 
