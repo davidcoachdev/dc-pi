@@ -161,6 +161,22 @@ test("DcControlCenterPanel: renderizado de 3 pestañas y navegación interactiva
   const afterToggle = getCollaboratorsDatabase().getCollaborator("davidcoachdev");
   assert.equal(afterToggle?.status, "BLOCK");
 
+  // Navegación con flechas izquierda y derecha (← y →)
+  panel.handleInput("1");
+  assert.equal(panel.getActiveTab(), "worktrees");
+  panel.handleInput("\x1b[C"); // flecha derecha -> collaborators
+  assert.equal(panel.getActiveTab(), "collaborators");
+  panel.handleInput("\x1b[C"); // flecha derecha -> audit
+  assert.equal(panel.getActiveTab(), "audit");
+  panel.handleInput("\x1b[D"); // flecha izquierda -> collaborators
+  assert.equal(panel.getActiveTab(), "collaborators");
+
+  // Ctrl+Flechas (secuencias ANSI xterm \x1b[1;5C y \x1b[1;5D)
+  panel.handleInput("\x1b[1;5C"); // Ctrl+Right -> audit
+  assert.equal(panel.getActiveTab(), "audit");
+  panel.handleInput("\x1b[1;5D"); // Ctrl+Left -> collaborators
+  assert.equal(panel.getActiveTab(), "collaborators");
+
   // Revertir a ALLOW
   getCollaboratorsDatabase().setCollaborator("davidcoachdev", "ALLOW", "OWNER");
 });

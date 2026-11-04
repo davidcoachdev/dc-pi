@@ -129,6 +129,45 @@ export class DcControlCenterPanel implements Component {
       return true;
     }
 
+    // Navegación de pestañas: Ctrl+← / Ctrl+→ o ← / →
+    const isCtrlLeft = data === "\x1b[1;5D" || data === "\x1b[5D";
+    const isCtrlRight = data === "\x1b[1;5C" || data === "\x1b[5C";
+
+    if (matchesKey(data, Key.left) || isCtrlLeft) {
+      if (this.activeTab === "worktrees") this.activeTab = "audit";
+      else if (this.activeTab === "collaborators") this.activeTab = "worktrees";
+      else this.activeTab = "collaborators";
+      this.selectedIndex = 0;
+      this.scrollOffset = 0;
+      this.requestRender?.();
+      return true;
+    }
+    if (matchesKey(data, Key.right) || isCtrlRight) {
+      if (this.activeTab === "worktrees") this.activeTab = "collaborators";
+      else if (this.activeTab === "collaborators") this.activeTab = "audit";
+      else this.activeTab = "worktrees";
+      this.selectedIndex = 0;
+      this.scrollOffset = 0;
+      this.requestRender?.();
+      return true;
+    }
+
+    // Scroll vertical rápido con Ctrl+↑ / Ctrl+↓ o PageUp / PageDown
+    const isCtrlUp = data === "\x1b[1;5A" || data === "\x1b[5A";
+    const isCtrlDown = data === "\x1b[1;5B" || data === "\x1b[5B";
+
+    if (matchesKey(data, Key.pageUp) || isCtrlUp) {
+      this.selectedIndex = Math.max(0, this.selectedIndex - 5);
+      this.requestRender?.();
+      return true;
+    }
+    if (matchesKey(data, Key.pageDown) || isCtrlDown) {
+      const total = this.getItemsCount();
+      this.selectedIndex = Math.min(Math.max(0, total - 1), this.selectedIndex + 5);
+      this.requestRender?.();
+      return true;
+    }
+
     if (matchesKey(data, Key.tab)) {
       if (this.activeTab === "worktrees") this.activeTab = "collaborators";
       else if (this.activeTab === "collaborators") this.activeTab = "audit";
@@ -324,6 +363,8 @@ export class DcControlCenterPanel implements Component {
 
 /**
  * Abre el Centro de Control Autónomo, Worktrees y Seguridad.
+ * Adopta las dimensiones completas e inmersivas de Alt+S (98% ancho x 96% alto)
+ * con soporte para flechas ← →, Ctrl+←/→ (pestañas) y Ctrl+↑/↓ (scroll rápido).
  */
 export async function openControlCenterModal(ctx: ExtensionContext): Promise<void> {
   let panelRef: DcControlCenterPanel | undefined;
@@ -332,10 +373,13 @@ export async function openControlCenterModal(ctx: ExtensionContext): Promise<voi
     title: "Dc Studio — Centro de Control Autónomo & Worktrees",
     glyph: "⛩ ",
     frame: "double",
-    width: 82,
-    maxHeight: 24,
+    paddingX: 0,
+    width: "98%",
+    maxHeight: "96%",
+    scrollable: false,
+    showScrollbar: false,
     footer: (theme) => ({
-      left: ` [1..3/Tab] Pestaña   [↑/↓] Navegar   [Espacio] Conmutar Toggle   [r] Refrescar`,
+      left: ` [1..3/Tab/←→] Pestaña   [↑/↓] Navegar   [Ctrl+↑/↓] Salto rápido   [Espacio] Conmutar Toggle   [r] Refrescar`,
       right: `[Esc Salir] `,
     }),
     content: (done, theme, tui) => {
