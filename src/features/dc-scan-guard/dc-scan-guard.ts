@@ -14,7 +14,7 @@ export interface ScanGuardDecision {
   reason?: string;
 }
 
-export const GUARDED_TOOLS: ReadonlySet<string> = new Set(["bash", "shell", "sh", "grep", "find", "read"]);
+export const GUARDED_TOOLS: ReadonlySet<string> = new Set(["bash", "shell", "sh", "grep", "find", "read", "edit", "write"]);
 
 /**
  * Checks if a token represents a filesystem root.

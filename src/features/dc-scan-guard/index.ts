@@ -1,6 +1,7 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { classifyShellCommand, classifyNativeToolScan, GUARDED_TOOLS } from "./dc-scan-guard.ts";
 import { globalAntiLoopGuard } from "./dc-anti-loop-guard.ts";
+import { dcConflictGuard } from "../dc-agents/daemon/dc-conflict-guard.ts";
 export * from "./dc-spill-guard.ts";
 export * from "./dc-anti-loop-guard.ts";
 
@@ -42,6 +43,20 @@ export function handleToolCall(event: PiToolCallEvent): PiToolCallResult | undef
       const decision = classifyNativeToolScan(event.toolName, rawInput);
       if (decision.block && decision.reason) {
         return { block: true, reason: decision.reason };
+      }
+    }
+
+    // 3. Verificación de Conflicto de Archivos Reservados por Subagentes Autónomos (Issue Conflict Guard)
+    if (event.toolName === "edit" || event.toolName === "write") {
+      const targetPath = (rawInput?.path || rawInput?.file) as string;
+      if (typeof targetPath === "string") {
+        const conflict = dcConflictGuard.checkFileConflict(targetPath);
+        if (conflict) {
+          return {
+            block: true,
+            reason: `dc-conflict-guard: el archivo '${targetPath}' está reservado temporalmente por el subagente en background del ${conflict.taskTitle} (${conflict.taskId}). Espera a que finalice o libéralo antes de editarlo.`,
+          };
+        }
       }
     }
 
