@@ -1,15 +1,12 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
+import { spawn } from "node:child_process";
 import type { DispatchedIssueTask } from "./dc-issue-dispatcher.ts";
 import { getCollaboratorsDatabase } from "./dc-collaborators-db.ts";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-
-const execFileAsync = promisify(execFile);
 
 export interface AutonomousLlmSessionOptions {
   worktreePath: string;
@@ -98,27 +95,53 @@ export class DcWorkerRunner {
 
   /**
    * Ejecuta un comando dentro del directorio del worktree de forma segura.
+   * Cierra stdin explícitamente pasando null o dev/null para evitar que binarios como pi
+   * se queden suspendidos en espera de datos en entornos headless no-TTY.
    */
   public async runInWorktree(
     worktreePath: string,
     command: string,
     args: string[],
+    options?: { timeoutMs?: number },
   ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
-    try {
-      const { stdout, stderr } = await execFileAsync(command, args, {
+    return new Promise((resolve) => {
+      let stdout = "";
+      let stderr = "";
+
+      const child = spawn(command, args, {
         cwd: worktreePath,
-        encoding: "utf8",
-        maxBuffer: 10 * 1024 * 1024,
+        stdio: ["ignore", "pipe", "pipe"], // stdin cerrado ("ignore" = /dev/null)
       });
-      return { stdout: stdout.trim(), stderr: stderr.trim(), exitCode: 0 };
-    } catch (err: any) {
-      const code = typeof err?.code === "number" ? err.code : 1;
-      return {
-        stdout: String(err?.stdout || "").trim(),
-        stderr: String(err?.stderr || err?.message || "").trim(),
-        exitCode: code,
-      };
-    }
+
+      const timeout = setTimeout(() => {
+        try {
+          child.kill("SIGKILL");
+        } catch {
+          /* noop */
+        }
+      }, options?.timeoutMs ?? 15 * 60 * 1000);
+
+      child.stdout?.on("data", (d) => { stdout += d.toString(); });
+      child.stderr?.on("data", (d) => { stderr += d.toString(); });
+
+      child.on("error", (err) => {
+        clearTimeout(timeout);
+        resolve({
+          stdout: stdout.trim(),
+          stderr: (stderr || err.message).trim(),
+          exitCode: 1,
+        });
+      });
+
+      child.on("close", (code) => {
+        clearTimeout(timeout);
+        resolve({
+          stdout: stdout.trim(),
+          stderr: stderr.trim(),
+          exitCode: typeof code === "number" ? code : 1,
+        });
+      });
+    });
   }
 
   /**
