@@ -266,7 +266,13 @@ export class DcControlCenterPanel implements Component {
       this.renderAuditLogTab(lines, innerW);
     }
 
-    return lines.map((l) => truncateToWidth(l, innerW, ""));
+    // Rellenar exactamente hasta 34 líneas interiores (altura fija constante igual a Sentinel)
+    const targetInteriorRows = 34;
+    while (lines.length < targetInteriorRows) {
+      lines.push("");
+    }
+
+    return lines.slice(0, targetInteriorRows).map((l) => truncateToWidth(l, innerW, ""));
   }
 
   private renderWorktreesTab(lines: string[], width: number): void {
@@ -363,8 +369,8 @@ export class DcControlCenterPanel implements Component {
 
 /**
  * Abre el Centro de Control Autónomo, Worktrees y Seguridad.
- * Adopta las dimensiones completas e inmersivas de Alt+S (98% ancho x 96% alto)
- * con soporte para flechas ← →, Ctrl+←/→ (pestañas) y Ctrl+↑/↓ (scroll rápido).
+ * Adopta las dimensiones exactas y el alto fijo de 40 filas del Centinela (Alt+Shift+S)
+ * rellenando siempre hasta 34 filas interiores constantes para evitar variaciones de altura.
  */
 export async function openControlCenterModal(ctx: ExtensionContext): Promise<void> {
   let panelRef: DcControlCenterPanel | undefined;
@@ -374,8 +380,8 @@ export async function openControlCenterModal(ctx: ExtensionContext): Promise<voi
     glyph: "⛩ ",
     frame: "double",
     paddingX: 0,
-    width: "98%",
-    maxHeight: "96%",
+    width: "92%",
+    maxHeight: 40,
     scrollable: false,
     showScrollbar: false,
     footer: (theme) => ({
