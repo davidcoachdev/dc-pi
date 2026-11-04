@@ -3,6 +3,7 @@ import { dcNotifier } from "../../../integrations/dc-notify/dc-notifier.ts";
 import { dcWebhookDaemonManager } from "./dc-webhook-daemon-manager.ts";
 import { dcConflictGuard } from "./dc-conflict-guard.ts";
 import { openControlCenterModal } from "../views/dc-control-center-modal.ts";
+import { isSessionChangeReason } from "../../dc-exit/dc-exit.ts";
 
 export function registerWebhookDaemonCommands(pi: ExtensionAPI): void {
   pi.registerCommand("dc-webhook", {
@@ -61,8 +62,13 @@ export function registerWebhookDaemonCommands(pi: ExtensionAPI): void {
     },
   });
 
-  // Limpieza al cerrar sesión
-  pi.on("session_shutdown", async () => {
+  // Limpieza al cerrar sesión REAL (no en /reload o cambios suaves de sesión)
+  pi.on("session_shutdown", async (event) => {
+    const reason = (event as { reason?: string } | undefined)?.reason;
+    if (isSessionChangeReason(reason)) {
+      // Es un /reload o fork de sesión: el daemon y el túnel deben PERMANECER VIVOS
+      return;
+    }
     await dcWebhookDaemonManager.stop();
   });
 }

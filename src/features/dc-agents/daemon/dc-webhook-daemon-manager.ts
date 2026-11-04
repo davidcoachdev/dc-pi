@@ -105,7 +105,7 @@ export class DcWebhookDaemonManager {
                 const workerSessionId = `dc-super-agent-issue-${issue.number}-${Date.now()}`;
 
                 try {
-                  // 1. Arrendar Taxi en la Flota y preparar definición de DC Super-Agent con etiqueta personalizada
+                  // 1. Arrendar Taxi en la Flota y preparar definición de DC Super-Agent con contrato estricto de Allowed edit surfaces
                   ephemeralPlan = prepareEphemeralAgent(
                     {
                       task: [
@@ -113,6 +113,13 @@ export class DcWebhookDaemonManager {
                         `Requerimiento: ${issue.body || "(Sin descripción)"}`,
                         `Directorio de trabajo asignado: ${dispatched.worktreePath}`,
                         `Rama de trabajo: ${dispatched.branchName}`,
+                        "",
+                        "## Allowed edit surfaces",
+                        "src/**",
+                        "test/**",
+                        "odd/**",
+                        "package.json",
+                        "tsconfig.json",
                       ].join("\n"),
                       role: "dc-super-agente",
                       archetype: "dc-odd-worker",
@@ -204,9 +211,21 @@ export class DcWebhookDaemonManager {
                     );
                   }
                 } catch (workerErr: any) {
-                  updateWorktreeOddRoadmap(dispatched.worktreePath, dispatched.taskSlug, "T5", "failed", workerErr?.message || "Error en entrega");
+                  const errorMsg = workerErr?.message || "Error en entrega";
+                  updateWorktreeOddRoadmap(dispatched.worktreePath, dispatched.taskSlug, "T5", "failed", errorMsg);
                   if (ctx) {
-                    dcNotifier.notify(ctx, "DC Super-Agent", `Error en superagente Issue #${issue.number}: ${workerErr.message}`, "error");
+                    dcNotifier.notify(ctx, "DC Super-Agent", `Error en superagente Issue #${issue.number}: ${errorMsg}`, "error");
+                    // Elevación interactiva mediante modal visual si hay UI activa
+                    if (ctx.hasUI) {
+                      void promptApprovalModal(ctx, {
+                        id: `error-${issue.number}-${Date.now()}`,
+                        toolName: "DC Super-Agent Runner",
+                        action: `Atender bloqueo/fallo en Issue #${issue.number}`,
+                        target: issue.title,
+                        reason: `El subagente se detuvo: ${errorMsg}. ¿Reintentar o continuar manualmente?`,
+                        timestamp: Date.now(),
+                      }).catch(() => {});
+                    }
                   }
                 } finally {
                   // 5. Liberar Taxi y limpiar recursos efímeros del superagente

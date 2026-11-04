@@ -21,7 +21,7 @@ export type ControlCenterTab = "worktrees" | "collaborators" | "audit";
 interface OddRoadmapItem {
   id: string; // T1, T2
   title: string;
-  status: "done" | "in_progress" | "pending";
+  status: "done" | "in_progress" | "pending" | "failed";
 }
 
 function parseOddTasksFromWorktree(worktreePath: string, taskSlug: string): OddRoadmapItem[] {
@@ -54,10 +54,11 @@ function parseOddTasksFromWorktree(worktreePath: string, taskSlug: string): OddR
         if (match && match[1] && match[2]) {
           const isDone = line.includes("[done]") || line.includes("✔");
           const isInProgress = line.includes("[in_progress]") || line.includes("▶");
+          const isFailed = line.includes("[failed]") || line.includes("✖");
           items.push({
             id: match[1],
             title: match[2].replace(/\[.*?\]/g, "").trim(),
-            status: isDone ? "done" : isInProgress ? "in_progress" : "pending",
+            status: isDone ? "done" : isInProgress ? "in_progress" : isFailed ? "failed" : "pending",
           });
         }
       }
@@ -279,38 +280,84 @@ export class DcControlCenterPanel implements Component {
     const t = this.theme;
     const dispatches = dcIssueDispatcher.getActiveDispatches();
 
+    const leftColW = Math.min(34, Math.max(26, Math.floor(width * 0.32)));
+    const rightColW = Math.max(20, width - leftColW - 3);
+
+    // Dividir en 2 paneles estilo Central de la imagen:
+    // Panel Izquierdo: 1 DECISIONES, 2 TAREAS (subagentes en worktrees), 3 HECHO HOY
+    // Panel Derecho: Inspección de decisión/tarea activa y acciones
+    const leftLines: string[] = [];
+    const rightLines: string[] = [];
+
+    // --- Columna Izquierda ---
+    leftLines.push(t.bold(t.fg("accent", "1 DECISIONES (0)")));
+    leftLines.push(`  ${t.fg("dim", "Sin decisiones bloqueantes")}`);
+    leftLines.push("");
+
+    leftLines.push(t.bold(t.fg("warning", `2 TAREAS (${dispatches.length})`)));
     if (dispatches.length === 0) {
-      lines.push("");
-      lines.push(`  ${t.fg("dim", "No hay worktrees activos en este momento.")}`);
-      lines.push(`  ${t.fg("dim", "Los issues que lleguen por GitHub Webhook se aislarán automáticamente aquí.")}`);
-      lines.push("");
-      lines.push(`  ${t.bold("Para simular o probar:")}`);
-      lines.push(`  ${t.fg("accent", "• Crea un nuevo issue en GitHub o ejecuta '/dc-webhook status'")}`);
-      return;
+      leftLines.push(`  ${t.fg("dim", "Ningún subagente corriendo")}`);
+    } else {
+      dispatches.forEach((d, idx) => {
+        const isSel = idx === this.selectedIndex;
+        const icon = isSel ? t.bold(t.fg("accent", "▶")) : t.fg("dim", "○");
+        const titleClipped = truncateToWidth(d.issueTitle, leftColW - 10, "");
+        const label = ` #${d.issueNumber} ${titleClipped}`;
+        leftLines.push(isSel ? t.bg("selectedBg", `${icon}${t.bold(label)}`) : `  ${icon}${label}`);
+      });
     }
+    leftLines.push("");
 
-    const currentDispatch = dispatches[this.selectedIndex] || dispatches[0]!;
-    lines.push(
-      `  ${t.bold(t.fg("accent", `▶ Issue #${currentDispatch.issueNumber}`))}: ${t.bold(currentDispatch.issueTitle)}`,
-    );
-    lines.push(`  ${t.fg("dim", "Rama:")} ${t.fg("warning", currentDispatch.branchName)}   ${t.fg("dim", "Worktree:")} ${t.fg("dim", currentDispatch.worktreePath)}`);
-    lines.push(t.fg("border", "  " + "─".repeat(Math.max(10, width - 6))));
-    lines.push(`  ${t.bold("📋 Hoja de Ruta ODD (Estado en Vivo):")}`);
+    leftLines.push(t.bold(t.fg("accent", "3 HECHO HOY (0)")));
+    leftLines.push(`  ${t.fg("dim", "Esperando primera entrega...")}`);
 
-    const roadmap = parseOddTasksFromWorktree(currentDispatch.worktreePath, currentDispatch.taskSlug);
+    // --- Columna Derecha ---
+    if (dispatches.length === 0) {
+      rightLines.push(t.bold("Bienvenido al Centro de Control de DC Super-Agent"));
+      rightLines.push(t.fg("dim", "─".repeat(rightColW)));
+      rightLines.push("");
+      rightLines.push(`• ${t.bold("1 Decisiones")}: Requerimientos que necesitan tu confirmación (s/n/d).`);
+      rightLines.push(`• ${t.bold("2 Tareas")}: Subagentes autónomos trabajando en sus worktrees.`);
+      rightLines.push(`• ${t.bold("3 Hecho Hoy")}: Tareas y Pull Requests entregadas exitosamente.`);
+      rightLines.push("");
+      rightLines.push(`  ${t.fg("dim", "Los issues que lleguen por GitHub Webhook se aislarán automáticamente aquí.")}`);
+    } else {
+      const current = dispatches[this.selectedIndex] || dispatches[0]!;
+      rightLines.push(t.bold(t.fg("accent", `Issue #${current.issueNumber}`)) + `: ${t.bold(current.issueTitle)}`);
+      rightLines.push(t.fg("dim", `Rama: ${current.branchName}  |  Worktree: ${current.worktreePath}`));
+      rightLines.push(t.fg("border", "─".repeat(rightColW)));
 
-    for (const item of roadmap) {
-      let icon = t.fg("dim", "○");
-      let statusLabel = t.fg("dim", "[PENDIENTE]");
-      if (item.status === "done") {
-        icon = t.fg("accent", "✔");
-        statusLabel = t.fg("accent", "[DONE]");
-      } else if (item.status === "in_progress") {
-        icon = t.bold(t.fg("warning", "▶"));
-        statusLabel = t.bold(t.fg("warning", "[EN PROCESO]"));
+      rightLines.push(t.bold("📋 Hoja de Ruta ODD en Vivo:"));
+      const roadmap = parseOddTasksFromWorktree(current.worktreePath, current.taskSlug);
+
+      for (const item of roadmap) {
+        let icon = t.fg("dim", "○");
+        let statusLabel = t.fg("dim", "[PENDIENTE]");
+        if (item.status === "done") {
+          icon = t.fg("accent", "✔");
+          statusLabel = t.fg("accent", "[DONE]");
+        } else if (item.status === "in_progress") {
+          icon = t.bold(t.fg("warning", "▶"));
+          statusLabel = t.bold(t.fg("warning", "[EN PROCESO]"));
+        } else if (item.status === "failed") {
+          icon = t.bold(t.fg("error", "✖"));
+          statusLabel = t.bold(t.fg("error", "[FALLO]"));
+        }
+        rightLines.push(`  ${icon} ${t.bold(item.id)}: ${item.title}  ${statusLabel}`);
       }
 
-      lines.push(`    ${icon} ${t.bold(item.id)}: ${item.title}  ${statusLabel}`);
+      rightLines.push("");
+      rightLines.push(t.fg("border", "─".repeat(rightColW)));
+      rightLines.push(`Acciones:  ${t.bold(t.fg("accent", "[s]"))} Aprobar/Arreglar   ${t.bold(t.fg("accent", "[n]"))} Descartar   ${t.bold(t.fg("accent", "[o]"))} Abrir en GitHub`);
+    }
+
+    // Combinar en dos columnas visuales
+    const maxRows = Math.max(leftLines.length, rightLines.length);
+    for (let r = 0; r < maxRows; r++) {
+      const leftPart = leftLines[r] ?? "";
+      const rightPart = rightLines[r] ?? "";
+      const leftPadded = truncateToWidth(leftPart, leftColW, "") + " ".repeat(Math.max(0, leftColW - visibleWidth(leftPart)));
+      lines.push(`  ${leftPadded} ${t.fg("border", "│")} ${rightPart}`);
     }
   }
 
