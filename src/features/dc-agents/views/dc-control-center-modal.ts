@@ -332,8 +332,8 @@ export async function openControlCenterModal(ctx: ExtensionContext): Promise<voi
     title: "Dc Studio — Centro de Control Autónomo & Worktrees",
     glyph: "⛩ ",
     frame: "double",
-    width: "88%",
-    maxHeight: "84%",
+    width: 82,
+    maxHeight: 24,
     footer: (theme) => ({
       left: ` [1..3/Tab] Pestaña   [↑/↓] Navegar   [Espacio] Conmutar Toggle   [r] Refrescar`,
       right: `[Esc Salir] `,
