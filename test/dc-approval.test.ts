@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import type { Theme } from "@earendil-works/pi-coding-agent";
+import { Key } from "@earendil-works/pi-tui";
 import { DcApprovalCoordinator } from "../src/features/dc-approval/core/dc-approval-coordinator.ts";
 import { DcApprovalPanel } from "../src/features/dc-approval/views/dc-approval-modal.ts";
 import type { ApprovalOutcome } from "../src/features/dc-approval/core/dc-approval-types.ts";
@@ -62,4 +63,32 @@ test("DcApprovalPanel: navegación por teclado y selección interactiva", () => 
   // Escape cancela
   panel.handleInput("escape");
   assert.equal(finalOutcome, "cancelled");
+
+  // Tecla numérica "1" aprueba de una
+  panel.handleInput("1");
+  assert.equal(finalOutcome, "allowed-once");
+
+  // Tecla numérica "3" cancela
+  panel.handleInput("3");
+  assert.equal(finalOutcome, "cancelled");
+
+  // Mouse click en botón
+  const lines2 = panel.render(68);
+  const btnRowIdx = lines2.length - 1;
+  const res = panel.handleMouse({
+    type: "click",
+    button: "left",
+    x: 2,
+    y: btnRowIdx,
+    screenX: 2,
+    screenY: btnRowIdx,
+    width: 68,
+    height: 10,
+    shift: false,
+    alt: false,
+    ctrl: false,
+  });
+  assert.deepEqual(res, { handled: true, render: true });
+  assert.equal(finalOutcome, "allowed-once");
 });
+

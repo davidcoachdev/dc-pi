@@ -11,6 +11,8 @@ export async function openKeysViewer(
   ctx: ExtensionContext,
   categories?: ShortcutCategory[],
 ): Promise<void> {
+  let doneRef: (() => void) | undefined;
+
   await openDcModal<void>(ctx, {
     title: "Dc Studio - Atajos",
     glyph: "⛩ ",
@@ -19,16 +21,19 @@ export async function openKeysViewer(
     maxHeight: "85%",
     scrollable: false,
     footer: (theme) => ({
-      left: `  ${theme.fg("accent", "←→ / Tab")} ${theme.fg("dim", "categoría")}   ${theme.fg("accent", "↑↓/PgUp/Dn")} ${theme.fg("dim", "navegar")}   ${theme.fg("accent", "Escribí")} ${theme.fg("dim", "buscar")}   ${theme.fg("accent", "esc")} ${theme.fg("dim", "cerrar")}`,
-      right: `${theme.fg("accent", "[ Cerrar ]")}  `,
+      left: ` [←/→/Tab] Categoría   [↑/↓] Navegar   [Escribir] Buscar`,
+      right: `[Esc Cerrar] `,
     }),
-    onFooterRightClick: () => {},
-    content: (_done, theme, tui) => {
+    onFooterRightClick: () => {
+      doneRef?.();
+    },
+    content: (done, theme, tui) => {
+      doneRef = done;
       return new DcKeysPanel(
         theme,
         () => tui.requestRender(),
         categories,
-        () => Math.max(8, Math.min(26, Math.floor(((tui as any)?.terminal?.rows ?? process.stdout?.rows ?? 40) * 0.85) - 8)),
+        () => Math.max(6, Math.floor(((tui as any)?.terminal?.rows ?? process.stdout?.rows ?? 40) * 0.85) - 12),
       );
     },
   });

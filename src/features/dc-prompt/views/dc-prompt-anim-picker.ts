@@ -165,15 +165,15 @@ export async function openPromptAnimPicker(ctx: ExtensionContext): Promise<strin
   let activePanel: PromptAnimPickerPanel | undefined;
 
   return openDcModal<string>(ctx, {
-    title: "⛩  Dc Studio - Animación de Prompt",
-    glyph: "⚡",
+    title: "Dc Studio - Animación de Prompt",
+    glyph: "⚡ ",
     width: 58,
     maxHeight: 18,
     scrollable: false,
     showScrollbar: false,
     footer: (theme) => ({
-      left: ` ${theme.fg("accent", "↑↓")} ${theme.fg("muted", "elegir")}  ·  ${theme.fg("accent", "Enter")} ${theme.fg("muted", "usar")}  ·  ${theme.fg("accent", "Esc")} ${theme.fg("muted", "cerrar")}`,
-      right: theme.fg("accent", "[ Usar ]"),
+      left: ` [↑/↓] Elegir   [Enter] Usar`,
+      right: `[ Usar ] `,
     }),
     onFooterRightClick: () => {
       if (activePanel) {

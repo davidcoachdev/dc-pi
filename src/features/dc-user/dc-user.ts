@@ -20,12 +20,16 @@ export async function askUserName(
   const current = options?.initialValue ?? getUserName(options?.filePath);
 
   const res = await openDcModal<string>(ctx, {
-    title: "⛩  Dc Studio - Usuario",
-    glyph: "\u{1F464}",
+    title: "Dc Studio - Usuario",
+    glyph: "\u{1F464} ",
     width: "48%",
     maxHeight: 11,
     paddingX: 1,
     frame: "double",
+    footer: {
+      left: " [Enter] Guardar",
+      right: "[Esc Cancelar] ",
+    },
     content: (done, theme, tui) =>
       new DcPromptInputComponent(theme, tui, {
         label: options?.label ?? "¿Cómo te llamás? (para el chrome de tus mensajes):",

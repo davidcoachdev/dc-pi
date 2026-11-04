@@ -22,7 +22,10 @@ export async function openCaritasPicker(
     frame: "double",
     width: "34%",
     maxHeight: "75%",
-    footer: () => "↑/↓ / Clic elegir   Enter pegar   esc cerrar",
+    footer: {
+      left: " [↑/↓/Clic] Elegir   [Enter] Pegar",
+      right: "[Esc Cerrar] ",
+    },
     content: (done, theme, tui) =>
       new CaritasPanel(
         items,

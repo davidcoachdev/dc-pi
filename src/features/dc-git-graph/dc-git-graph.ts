@@ -8,6 +8,8 @@ import { dcNotifier } from "../../integrations/dc-notify/dc-notifier.ts";
  */
 export async function openGitGraphViewer(ctx: ExtensionContext, cwd?: string): Promise<void> {
   const targetCwd = cwd ?? ctx.cwd ?? process.cwd();
+  let panelRef: DcGitGraphPanel | undefined;
+  let doneRef: (() => void) | undefined;
 
   await openDcModal<void>(ctx, {
     title: "Dc Studio - Git Graph & Historial",
@@ -18,16 +20,24 @@ export async function openGitGraphViewer(ctx: ExtensionContext, cwd?: string): P
     maxHeight: "96%",
     scrollable: false,
     footer: (theme) => ({
-      left: `  ${theme.fg("accent", "↑↓/Clic")} elegir commit   ${theme.fg("accent", "Ctrl+←/→")} cambiar archivo   ${theme.fg("accent", "Ctrl+↑/↓/Rueda")} scroll diff   ${theme.fg("accent", "r")} refrescar   ${theme.fg("accent", "esc")} cerrar`,
-      right: `${theme.fg("accent", "[ Git Graph ]")}  `,
+      left: ` [↑/↓/Clic] Elegir   [Ctrl+←/→] Archivo   [Ctrl+↑/↓/Rueda] Diff   [r] Refrescar`,
+      right: `[Esc Cerrar] `,
     }),
-    content: (_done, theme, tui) => {
-      return new DcGitGraphPanel({
+    onFooterRightClick: () => {
+      doneRef?.();
+    },
+    onReload: () => {
+      panelRef?.refresh();
+    },
+    content: (done, theme, tui) => {
+      doneRef = done;
+      panelRef = new DcGitGraphPanel({
         cwd: targetCwd,
         theme,
         maxRows: () => Math.max(12, Math.floor((tui.terminal.rows || 40) * 0.94) - 8),
         requestRender: () => tui.requestRender(),
       });
+      return panelRef;
     },
   });
 }

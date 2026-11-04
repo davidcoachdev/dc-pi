@@ -9,16 +9,24 @@ export function openPlanViewer(ctx: ExtensionContext): void {
     return;
   }
 
+  let panelRef: DcPlanPanel | undefined;
+
   openDcModal(ctx, {
     title: "Planificación ODD y Tareas (DC Studio)",
     width: "82%",
     maxHeight: "78%",
     footer: {
-      left: " [Tab] Alternar  [↑/↓] Navegar  [r] Recargar ",
-      right: " [Esc/q] Salir ",
+      left: " [Tab] Alternar   [↑/↓] Navegar   [r] Recargar ",
+      right: "[Esc] Salir ",
     },
     frame: "double",
-    content: (done, theme) => new DcPlanPanel(theme, () => done(undefined), ctx),
+    content: (done, theme) => {
+      panelRef = new DcPlanPanel(theme, () => done(undefined), ctx);
+      return panelRef;
+    },
+    onReload: () => {
+      panelRef?.reloadData();
+    },
   });
 }
 

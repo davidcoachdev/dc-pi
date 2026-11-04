@@ -27,8 +27,10 @@ export async function openPreviewModal<T extends string>(
     maxHeight: 14,
     paddingX: 1,
     frame: "double",
-    footer: (theme) =>
-      `${theme.fg("accent", "↑/↓ / Clic")} elegir   ${theme.fg("accent", "Enter")} abrir   ${theme.fg("accent", "Esc")} cerrar`,
+    footer: {
+      left: " [↑/↓/Clic] Elegir   [Enter] Abrir",
+      right: "[Esc Cerrar] ",
+    },
     content: (done, theme, tui) =>
       new DcPreviewSelectPanel(
         items,

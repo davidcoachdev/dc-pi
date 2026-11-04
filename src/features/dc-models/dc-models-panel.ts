@@ -131,6 +131,14 @@ export class DcModelsPanel implements Component {
     this.syncEffortCursor();
   }
 
+  public applyCurrentSelection(): void {
+    const selectedModel = this.getSelectedModel();
+    if (selectedModel) {
+      const effort = this.getSelectedEffort();
+      this.onApply(selectedModel, effort);
+    }
+  }
+
   invalidate(): void {}
 
   getFocus(): FocusPanel {
@@ -450,7 +458,7 @@ export class DcModelsPanel implements Component {
 
     // Cantidad de filas visibles delimitadas por maxRows
     const contentMax = Math.max(visibleTabs.length, Math.max(models.length, currentLevels.length));
-    const rowCount = Math.max(12, Math.min(maxRows, contentMax));
+    const rowCount = Math.max(6, Math.min(maxRows, contentMax));
     this.lastRowCount = rowCount;
 
     // Autoscroll para asegurar que los cursores estén dentro del viewport

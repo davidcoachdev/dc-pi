@@ -5,7 +5,7 @@ import type {
   SizeValue,
   TUI,
 } from "@earendil-works/pi-tui";
-import { DcWindow, type DcFrame, type DcWindowContent } from "./dc-window.ts";
+import { DcWindow, type DcFrame, type DcWindowContent, type DcWindowLoadingOption } from "./dc-window.ts";
 
 export type DcModalContentFactory<T> = (
   done: (value?: T) => void,
@@ -42,6 +42,10 @@ export interface DcModalOptions<T = void> {
   onNonTui?: () => T | undefined;
   /** Optional callback fired when the modal closes. */
   onClose?: (result?: T) => void;
+  /** Loading state or getter. When active, an animated spinner is shown. */
+  loading?: DcWindowLoadingOption;
+  /** Optional callback fired when the user requests a reload. */
+  onReload?: () => void | Promise<void>;
 }
 
 /**
@@ -106,10 +110,16 @@ export async function openDcModal<T = void>(
             isAnyDcModalOpen = false;
             finalResult = val;
             try {
+              if (window && typeof window.dispose === "function") {
+                window.dispose();
+              }
+            } catch {
+              /* defensive */
+            }
+            try {
               if (resolvedContent && typeof (resolvedContent as any).destroy === "function") {
                 (resolvedContent as any).destroy();
-              }
-              if (resolvedContent && typeof (resolvedContent as any).dispose === "function") {
+              } else if (resolvedContent && typeof (resolvedContent as any).dispose === "function") {
                 (resolvedContent as any).dispose();
               }
             } catch {
@@ -143,6 +153,22 @@ export async function openDcModal<T = void>(
           ? () => (options.footer as Function)(theme)
           : options.footer;
 
+        if (resolvedContent && typeof (resolvedContent as any).requestRender !== "function") {
+          try {
+            if (Object.isExtensible(resolvedContent)) {
+              (resolvedContent as any).requestRender = () => tui.requestRender();
+            }
+          } catch {
+            /* defensive: do not mutate non-extensible objects */
+          }
+        }
+
+        const effectiveOnReload = options.onReload ?? (
+          typeof (resolvedContent as any)?.reload === "function"
+            ? () => (resolvedContent as any).reload()
+            : undefined
+        );
+
         const window = new DcWindow({
           title: options.title,
           glyph: options.glyph ?? "⛩ ",
@@ -164,6 +190,9 @@ export async function openDcModal<T = void>(
           maxHeight: dynamicHeight,
           scrollable: options.scrollable,
           showScrollbar: options.showScrollbar,
+          loading: options.loading,
+          onReload: effectiveOnReload,
+          requestRender: () => tui.requestRender(),
         });
 
         return {
