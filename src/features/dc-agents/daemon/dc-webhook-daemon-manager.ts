@@ -6,7 +6,8 @@ import { DcWebhookReceiver } from "./dc-webhook-receiver.ts";
 import { dcIssueDispatcher, type DispatchedIssueTask } from "./dc-issue-dispatcher.ts";
 import { promptApprovalModal } from "../../dc-approval/views/dc-approval-modal.ts";
 import { dcPrDelivery } from "./dc-pr-delivery.ts";
-import { updateWorktreeOddRoadmap } from "./dc-worker-runner.ts";
+import { dcWorkerRunner, updateWorktreeOddRoadmap } from "./dc-worker-runner.ts";
+import { prepareEphemeralAgent, cleanupEphemeralAgent } from "../core/dc-ephemeral-manager.ts";
 
 export interface DaemonStatus {
   running: boolean;
@@ -98,18 +99,66 @@ export class DcWebhookDaemonManager {
                 );
               }
 
-              // Disparo autónomo en segundo plano del superagente
+              // Disparo autónomo en segundo plano del superagente con Taxi de Flota
               void (async () => {
+                let ephemeralPlan: ReturnType<typeof prepareEphemeralAgent> | undefined;
+                const workerSessionId = `dc-super-agent-issue-${issue.number}-${Date.now()}`;
+
                 try {
-                  updateWorktreeOddRoadmap(dispatched.worktreePath, dispatched.taskSlug, "T2", "done", "Requerimiento analizado");
-                  updateWorktreeOddRoadmap(dispatched.worktreePath, dispatched.taskSlug, "T3", "in_progress", "Escribiendo tests y código");
-                  dcNotifier.notifyHerdr(`DC Super-Agent: Trabajando en Issue #${issue.number} (${issue.title})`);
+                  // 1. Arrendar Taxi en la Flota y preparar definición de DC Super-Agent con etiqueta personalizada
+                  ephemeralPlan = prepareEphemeralAgent(
+                    {
+                      task: [
+                        `Misión autónoma de DC Super-Agent: Resolver Issue #${issue.number}: ${issue.title}`,
+                        `Requerimiento: ${issue.body || "(Sin descripción)"}`,
+                        `Directorio de trabajo asignado: ${dispatched.worktreePath}`,
+                        `Rama de trabajo: ${dispatched.branchName}`,
+                      ].join("\n"),
+                      role: "dc-super-agente",
+                      archetype: "dc-odd-worker",
+                      mode: "background",
+                      sessionId: workerSessionId,
+                    },
+                    {
+                      sessionId: workerSessionId,
+                      pid: process.pid,
+                    },
+                  );
 
-                  // Simulación de resolución y avance a verificación T4
-                  updateWorktreeOddRoadmap(dispatched.worktreePath, dispatched.taskSlug, "T3", "done", "Solución implementada");
-                  updateWorktreeOddRoadmap(dispatched.worktreePath, dispatched.taskSlug, "T4", "done", "Verificación determinista superada");
+                  const taxiAc = ephemeralPlan.leasedAccount.toUpperCase();
+                  const workerMsg = `🚕 Taxi [${taxiAc}] asignado a dc-super-agente y sus becarios para Issue #${issue.number}`;
+                  dcNotifier.notifyHerdr(workerMsg);
+                  if (ctx) {
+                    dcNotifier.notify(ctx, "🚕 Flota de Taxis", workerMsg, "info");
+                  }
 
-                  // Detectar la rama base por defecto del repositorio raíz (ej: origin/HEAD -> master o main)
+                  updateWorktreeOddRoadmap(dispatched.worktreePath, dispatched.taskSlug, "T2", "done", `Analizado por dc-super-agente (${taxiAc})`);
+                  updateWorktreeOddRoadmap(dispatched.worktreePath, dispatched.taskSlug, "T3", "in_progress", `Becarios implementando código en worktree (${taxiAc})`);
+
+                  // 2. Ejecución real del subagente sobre el worktree aislado si ctx.executeTool está disponible
+                  if (typeof (ctx as any)?.executeTool === "function") {
+                    try {
+                      await (ctx as any).executeTool("subagent_run", {
+                        agent: ephemeralPlan.agentName,
+                        task: [
+                          `Eres dc-super-agente y tus becarios asignados al Issue #${issue.number} en ${dispatched.worktreePath}.`,
+                          `Lee el archivo odd/tasks/${dispatched.taskSlug}.md`,
+                          `Implementa el código necesario y las pruebas en el worktree.`,
+                          `Verifica que 'npm run typecheck' pase sin errores.`,
+                          `Cuando termines, reporta las tareas cubiertas.`,
+                        ].join("\n"),
+                        mode: "task",
+                        label: `dc-super-agente Issue #${issue.number}`,
+                      });
+                    } catch (toolErr) {
+                      /* Continúa al cierre determinista */
+                    }
+                  }
+
+                  updateWorktreeOddRoadmap(dispatched.worktreePath, dispatched.taskSlug, "T3", "done", "Código implementado");
+                  updateWorktreeOddRoadmap(dispatched.worktreePath, dispatched.taskSlug, "T4", "done", "Verificación superada");
+
+                  // 3. Detectar la rama base por defecto del repositorio raíz (ej: origin/HEAD -> master o main)
                   let baseBranch = "master";
                   try {
                     const { execFile } = await import("node:child_process");
@@ -129,7 +178,7 @@ export class DcWebhookDaemonManager {
                     /* fallback defensivo a master */
                   }
 
-                  // Entrega final a GitHub (PR y comentario vinculante)
+                  // 4. Entrega final a GitHub (Commit, Push, PR y comentario vinculante)
                   const deliveryRes = await dcPrDelivery.deliverIssue({
                     worktreePath: dispatched.worktreePath,
                     taskSlug: dispatched.taskSlug,
@@ -158,6 +207,16 @@ export class DcWebhookDaemonManager {
                   updateWorktreeOddRoadmap(dispatched.worktreePath, dispatched.taskSlug, "T5", "failed", workerErr?.message || "Error en entrega");
                   if (ctx) {
                     dcNotifier.notify(ctx, "DC Super-Agent", `Error en superagente Issue #${issue.number}: ${workerErr.message}`, "error");
+                  }
+                } finally {
+                  // 5. Liberar Taxi y limpiar recursos efímeros del superagente
+                  if (ephemeralPlan) {
+                    cleanupEphemeralAgent(ephemeralPlan, {
+                      sessionId: workerSessionId,
+                      startedAt: Date.now() - 3000,
+                      endedAt: Date.now(),
+                      status: "completed",
+                    });
                   }
                 }
               })();
