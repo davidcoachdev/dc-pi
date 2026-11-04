@@ -1,18 +1,32 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { fileURLToPath } from "node:url";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import type { DispatchedIssueTask } from "./dc-issue-dispatcher.ts";
 import { getCollaboratorsDatabase } from "./dc-collaborators-db.ts";
 
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
 const execFileAsync = promisify(execFile);
 
-export interface WorkerRunnerOptions {
+export interface AutonomousLlmSessionOptions {
   worktreePath: string;
   taskSlug: string;
   issueNumber: number;
   issueTitle: string;
-  branchName: string;
+  issueBody: string;
+  model: string;
+  askHumanCliPath?: string;
+}
+
+export interface AutonomousLlmSessionResult {
+  ok: boolean;
+  stdout: string;
+  stderr: string;
+  exitCode: number;
+  filesModified: string[];
 }
 
 export type OddTaskStatus = "done" | "in_progress" | "pending" | "failed";
@@ -148,6 +162,90 @@ L1: Issue capturado en vivo por el daemon y despachado a worktree autónomo.
       actor: "dc-super-agent",
       message: `Hoja de ruta ODD inicializada para Issue #${task.issueNumber}`,
     });
+  }
+
+  /**
+   * Ejecuta una sesión de LLM autónoma y desatendida mediante el CLI de Pi (`pi -p`).
+   * Corre dentro de `worktreePath` con el modelo del Taxi arrendado, herramientas completas
+   * (read, write, edit, bash, subagentes/becarios), y la capacidad de consultar al humano
+   * ante dudas mediante dc-ask-human.
+   */
+  public async executeAutonomousLlmSession(options: AutonomousLlmSessionOptions): Promise<AutonomousLlmSessionResult> {
+    const {
+      worktreePath,
+      taskSlug,
+      issueNumber,
+      issueTitle,
+      issueBody,
+      model,
+      askHumanCliPath,
+    } = options;
+
+    const askHelper = askHumanCliPath || path.resolve(__dirname, "dc-ask-human-cli.ts");
+
+    const promptInstructions = [
+      `Eres dc-super-agente, el superagente autónomo de DC Studio con acceso a tus becarios y herramientas.`,
+      `Tu misión es resolver de principio a fin el Issue #${issueNumber}: "${issueTitle}".`,
+      "",
+      `## Requerimiento original:`,
+      issueBody || "(Sin descripción)",
+      "",
+      `## Entorno de trabajo:`,
+      `- Estás en un Git Worktree aislado. Tu directorio actual es la raíz del proyecto.`,
+      `- Lee la especificación en 'odd/tasks/${taskSlug}.md'.`,
+      "",
+      `## Directivas obligatorias:`,
+      `1. Lee los archivos relevantes con 'read' antes de modificarlos.`,
+      `2. Implementa la solución editando o creando archivos de código real y tests con 'edit'/'write'.`,
+      `3. Si necesitas investigar bibliotecas o documentación, puedes desplegar a tus becarios con 'dc_research_swarm' o 'dc_ephemeral_agent_run'.`,
+      `4. Si tienes una DUDA DE DISEÑO o necesitas una DECISIÓN DEL HUMANO, NO ADIVINES: ejecuta con bash:`,
+      `   node "${askHelper}" --issue=${issueNumber} --context="Explica qué archivos viste y qué dudas tienes" --question="¿Pregunta?" --options="Opción A|Opción B"`,
+      `   El humano verá tu pregunta en una ventana modal interactiva y te enviará su respuesta o indicación de texto libre.`,
+      `5. Ejecuta las pruebas deterministas con bash ('npm test' o 'npm run typecheck').`,
+      `6. Cuando todo esté verificado con exit code 0, concluye tu turno resumiendo los archivos modificados.`,
+    ].join("\n");
+
+    const args = [
+      "-p",
+      promptInstructions,
+      `--model=${model}`,
+      "--no-session",
+    ];
+
+    updateWorktreeOddRoadmap(worktreePath, taskSlug, "T3", "in_progress", "dc-super-agente programando en worktree");
+
+    const { stdout, stderr, exitCode } = await this.runInWorktree(worktreePath, "pi", args);
+
+    // Comprobar archivos modificados mediante git status en el worktree
+    const statusRes = await this.runInWorktree(worktreePath, "git", ["status", "--porcelain"]);
+    const filesModified = statusRes.stdout
+      ? statusRes.stdout.split("\n").map((l) => l.slice(3).trim()).filter(Boolean)
+      : [];
+
+    const isSuccess = exitCode === 0;
+
+    if (isSuccess) {
+      updateWorktreeOddRoadmap(worktreePath, taskSlug, "T3", "done", `${filesModified.length} archivos modificados`);
+      updateWorktreeOddRoadmap(worktreePath, taskSlug, "T4", "done", "Verificación determinista superada");
+    } else {
+      updateWorktreeOddRoadmap(worktreePath, taskSlug, "T3", "failed", `Fallo en ejecución: exit ${exitCode}`);
+    }
+
+    this.collabDb.log({
+      level: isSuccess ? "INFO" : "ERROR",
+      category: "DISPATCH",
+      actor: "dc-super-agent",
+      message: `Sesión LLM autónoma terminada con código ${exitCode} (${filesModified.length} archivos)`,
+      metadata: JSON.stringify({ exitCode, filesModified }),
+    });
+
+    return {
+      ok: isSuccess,
+      stdout,
+      stderr,
+      exitCode,
+      filesModified,
+    };
   }
 }
 

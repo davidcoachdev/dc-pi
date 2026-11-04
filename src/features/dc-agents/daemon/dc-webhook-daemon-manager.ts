@@ -140,30 +140,21 @@ export class DcWebhookDaemonManager {
                   }
 
                   updateWorktreeOddRoadmap(dispatched.worktreePath, dispatched.taskSlug, "T2", "done", `Analizado por dc-super-agente (${taxiAc})`);
-                  updateWorktreeOddRoadmap(dispatched.worktreePath, dispatched.taskSlug, "T3", "in_progress", `Becarios implementando código en worktree (${taxiAc})`);
+                  updateWorktreeOddRoadmap(dispatched.worktreePath, dispatched.taskSlug, "T3", "in_progress", `dc-super-agente programando en worktree (${taxiAc})`);
 
-                  // 2. Ejecución real del subagente sobre el worktree aislado si ctx.executeTool está disponible
-                  if (typeof (ctx as any)?.executeTool === "function") {
-                    try {
-                      await (ctx as any).executeTool("subagent_run", {
-                        agent: ephemeralPlan.agentName,
-                        task: [
-                          `Eres dc-super-agente y tus becarios asignados al Issue #${issue.number} en ${dispatched.worktreePath}.`,
-                          `Lee el archivo odd/tasks/${dispatched.taskSlug}.md`,
-                          `Implementa el código necesario y las pruebas en el worktree.`,
-                          `Verifica que 'npm run typecheck' pase sin errores.`,
-                          `Cuando termines, reporta las tareas cubiertas.`,
-                        ].join("\n"),
-                        mode: "task",
-                        label: `dc-super-agente Issue #${issue.number}`,
-                      });
-                    } catch (toolErr) {
-                      /* Continúa al cierre determinista */
-                    }
+                  // 2. Ejecución autónoma con LLM Real en worktree aislado
+                  const llmResult = await dcWorkerRunner.executeAutonomousLlmSession({
+                    worktreePath: dispatched.worktreePath,
+                    taskSlug: dispatched.taskSlug,
+                    issueNumber: dispatched.issueNumber,
+                    issueTitle: dispatched.issueTitle,
+                    issueBody: issue.body || "",
+                    model: ephemeralPlan.fullModelRef,
+                  });
+
+                  if (!llmResult.ok) {
+                    throw new Error(`El superagente no pudo completar la resolución (exit code ${llmResult.exitCode}): ${llmResult.stderr}`);
                   }
-
-                  updateWorktreeOddRoadmap(dispatched.worktreePath, dispatched.taskSlug, "T3", "done", "Código implementado");
-                  updateWorktreeOddRoadmap(dispatched.worktreePath, dispatched.taskSlug, "T4", "done", "Verificación superada");
 
                   // 3. Detectar la rama base por defecto del repositorio raíz (ej: origin/HEAD -> master o main)
                   let baseBranch = "master";
