@@ -435,4 +435,29 @@ test("footer hitbox is clamped when right action exceeds inner width", () => {
   assert.equal(res, undefined);
 });
 
+test("formatFooterText colorizes plain brackets and labels with theme colors", () => {
+  const customTheme: DcWindowOptions["theme"] = {
+    fg: (role, text) => `\x1b[38;role:${role}m${text}\x1b[39m`,
+    bg: (_color, text) => text,
+    bold: (text) => `\x1b[1m${text}\x1b[22m`,
+  };
+
+  const { window } = fixture({
+    theme: customTheme,
+    footer: { left: " [Tab] Alternar  [↑/↓] Navegar ", right: "[ Cerrar ]" },
+  });
+
+  const rawLines = window.render(45);
+  const footerRow = rawLines[rawLines.length - 2]!;
+
+  // Left bracket keys should be colored in accent
+  assert.ok(footerRow.includes("\x1b[38;role:accentm[Tab]\x1b[39m"));
+  assert.ok(footerRow.includes("\x1b[38;role:accentm[↑/↓]\x1b[39m"));
+  // Left labels should be colored in dim
+  assert.ok(footerRow.includes("\x1b[38;role:dimm Alternar  \x1b[39m"));
+  // Right button should be styled with bold accent
+  assert.ok(footerRow.includes("\x1b[1m\x1b[38;role:accentm[ Cerrar ]\x1b[39m\x1b[22m"));
+});
+
+
 
