@@ -4,6 +4,8 @@ import { dcWebhookDaemonManager } from "./dc-webhook-daemon-manager.ts";
 import { dcConflictGuard } from "./dc-conflict-guard.ts";
 import { openControlCenterModal } from "../views/dc-control-center-modal.ts";
 import { isSessionChangeReason } from "../../dc-exit/dc-exit.ts";
+import { dcRemoteQuestionManager } from "./dc-remote-question.ts";
+import { promptAgentQuestionModal } from "../views/dc-agent-question-modal.ts";
 
 export function registerWebhookDaemonCommands(pi: ExtensionAPI): void {
   pi.registerCommand("dc-webhook", {
@@ -62,8 +64,31 @@ export function registerWebhookDaemonCommands(pi: ExtensionAPI): void {
     },
   });
 
+  // Supervisor pasivo de preguntas remotas pendientes emitidas por workers en background
+  let isCheckingQuestion = false;
+  const questionCheckInterval = setInterval(async () => {
+    if (isCheckingQuestion) return;
+    isCheckingQuestion = true;
+    try {
+      const pending = dcRemoteQuestionManager.getPendingQuestions();
+      if (pending.length > 0) {
+        const activeCtx = (globalThis as any)[Symbol.for("dc.sidebar.active-ctx")];
+        if (activeCtx && activeCtx.hasUI && activeCtx.mode === "tui") {
+          const q = pending[0]!;
+          await promptAgentQuestionModal(activeCtx, q);
+        }
+      }
+    } catch {
+      /* defensive */
+    } finally {
+      isCheckingQuestion = false;
+    }
+  }, 1500);
+  questionCheckInterval.unref?.();
+
   // Limpieza al cerrar sesión REAL (no en /reload o cambios suaves de sesión)
   pi.on("session_shutdown", async (event) => {
+    clearInterval(questionCheckInterval);
     const reason = (event as { reason?: string } | undefined)?.reason;
     if (isSessionChangeReason(reason)) {
       // Es un /reload o fork de sesión: el daemon y el túnel deben PERMANECER VIVOS
