@@ -14,7 +14,7 @@ export interface AutonomousLlmSessionOptions {
   issueNumber: number;
   issueTitle: string;
   issueBody: string;
-  model: string;
+  model?: string; // Opcional: si se omite, Pi resuelve automáticamente su modelo de taxi o configuración
   askHumanCliPath?: string;
 }
 
@@ -228,12 +228,11 @@ L1: Issue capturado en vivo por el daemon y despachado a worktree autónomo.
       `6. Cuando todo esté verificado con exit code 0, concluye tu turno resumiendo los archivos modificados.`,
     ].join("\n");
 
-    const args = [
-      "-p",
-      promptInstructions,
-      `--model=${model}`,
-      "--no-session",
-    ];
+    const args: string[] = [];
+    if (model) {
+      args.push("--model", model);
+    }
+    args.push("-p", promptInstructions, "--no-session");
 
     updateWorktreeOddRoadmap(worktreePath, taskSlug, "T3", "in_progress", "dc-super-agente programando en worktree");
 
