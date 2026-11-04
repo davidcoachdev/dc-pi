@@ -90,6 +90,35 @@ function cell(text: string, width: number): string {
   return clipped + " ".repeat(Math.max(0, width - visibleWidth(clipped)));
 }
 
+/** Formats plain footer text applying DC theme colors if not already ANSI styled. */
+export function formatFooterText(
+  text: string,
+  theme: Pick<Theme, "fg" | "bg" | "bold">,
+  isButton = false,
+): string {
+  if (!text) return text;
+  // Si ya contiene códigos de escape ANSI (SGR), preservamos el estilo original
+  if (text.includes("\x1b[")) {
+    return text;
+  }
+
+  if (isButton) {
+    // Para botones como "[ Cerrar ]" o "[Enter Aplicar]"
+    return theme.bold(theme.fg("accent", text));
+  }
+
+  // Colorea patrones [Tecla] en accent y el resto del texto descriptivo en dim
+  return text.replace(/(\[[^\]]+\])|([^[\]]+)/g, (match, keyBracket, plainLabel) => {
+    if (keyBracket) {
+      return theme.fg("accent", keyBracket);
+    }
+    if (plainLabel) {
+      return theme.fg("dim", plainLabel);
+    }
+    return match;
+  });
+}
+
 /** Win 3.1-style chrome. Importing this module registers nothing with Pi. */
 export class DcWindow implements Component {
   private readonly options: DcWindowOptions;
@@ -344,10 +373,13 @@ export class DcWindow implements Component {
     if (footer !== undefined) {
       const resolved = typeof footer === "function" ? footer() : footer;
       if (typeof resolved === "string") {
-        footerLine = cell(" " + resolved, inner);
+        const formatted = formatFooterText(resolved, theme, false);
+        footerLine = cell(" " + formatted, inner);
       } else if (resolved && typeof resolved === "object") {
-        const left = resolved.left ?? "";
-        const right = resolved.right ?? "";
+        const rawLeft = resolved.left ?? "";
+        const rawRight = resolved.right ?? "";
+        const left = formatFooterText(rawLeft, theme, false);
+        const right = formatFooterText(rawRight, theme, true);
         const leftW = visibleWidth(left);
         const rightW = visibleWidth(right);
         const minGap = 1;
