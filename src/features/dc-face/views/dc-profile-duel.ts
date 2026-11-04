@@ -116,20 +116,29 @@ export class ProfileDuel implements Component {
     ];
   }
 
-  handleInput(data: string): void {
+  public getSelectedProfileId(): string {
+    return this.profiles[this.selectedIndex]?.id ?? "dcdev";
+  }
+
+  handleInput(data: string): boolean {
     const N = this.profiles.length;
     if (matchesKey(data, Key.left) || matchesKey(data, Key.up)) {
       this.selectedIndex = (this.selectedIndex - 1 + N) % N;
+      return true;
     } else if (matchesKey(data, Key.right) || matchesKey(data, Key.down) || matchesKey(data, Key.tab)) {
       this.selectedIndex = (this.selectedIndex + 1) % N;
+      return true;
     } else if (matchesKey(data, Key.enter)) {
       const chosen = this.profiles[this.selectedIndex];
       if (chosen) {
         this.onPick?.(chosen.id);
       }
+      return true;
     } else if (matchesKey(data, Key.escape)) {
       this.onCancel?.();
+      return true;
     }
+    return false;
   }
 
   handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
@@ -169,6 +178,8 @@ export async function openProfileDuelModal(ctx: ExtensionContext): Promise<strin
   const prefs = readFacePrefs();
   let selectedId = prefs.profile ?? "dcdev";
   const profilesCount = listFaceProfiles().length;
+  let duelRef: ProfileDuel | undefined;
+  let doneRef: ((value?: string) => void) | undefined;
 
   const modalWidth = `${Math.min(94, Math.max(62, profilesCount * 24 + 6))}%`;
 
@@ -179,14 +190,17 @@ export async function openProfileDuelModal(ctx: ExtensionContext): Promise<strin
     paddingX: 0,
     width: modalWidth as any,
     footer: (theme) => ({
-      left: `  ${theme.fg("accent", "←→")} elegir   ${theme.fg("accent", "Enter")} usar   ${theme.fg("accent", "esc")} cerrar`,
-      right: `${theme.fg("accent", "[ Usar ]")}  `,
+      left: ` [←/→] Elegir   [Enter] Usar   [Esc] Cerrar`,
+      right: `[ Usar ] `,
     }),
     onFooterRightClick: () => {
-      writeFacePrefs({ profile: selectedId });
-      dcNotifier.notify(ctx, "Caritas", `Perfil seleccionado: ${selectedId}`, "info");
+      const activeId = duelRef ? duelRef.getSelectedProfileId() : selectedId;
+      writeFacePrefs({ profile: activeId });
+      dcNotifier.notify(ctx, "Caritas", `Perfil seleccionado: ${activeId}`, "info");
+      doneRef?.(activeId);
     },
     content: (done, theme, tui) => {
+      doneRef = done;
       const duel = new ProfileDuel(
         {
           fg: (role, text) => theme.fg(role as any, text),
@@ -194,6 +208,7 @@ export async function openProfileDuelModal(ctx: ExtensionContext): Promise<strin
         },
         selectedId,
       );
+      duelRef = duel;
 
       duel.onPick = (profileId) => {
         selectedId = profileId;

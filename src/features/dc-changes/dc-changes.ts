@@ -15,8 +15,10 @@ export async function openChangesViewer(ctx: ExtensionContext): Promise<void> {
   const multiWt = worktrees.length > 1;
 
   const footerLeft = multiWt
-    ? `  w/W alternar worktree   ↑/↓ elegir archivo   PgUp/Dn scroll   r refrescar   esc cerrar`
-    : `  ↑/↓ / Clic elegir archivo   Rueda/PgUp/Dn scroll diff   r refrescar   esc cerrar`;
+    ? ` [w] Worktree   [↑/↓] Archivo   [PgUp/Dn] Scroll diff   [r] Refrescar`
+    : ` [↑/↓] Archivo   [PgUp/Dn/Rueda] Scroll diff   [r] Refrescar`;
+
+  let panelRef: DcChangesPanel | undefined;
 
   await openDcModal<void>(ctx, {
     title: "Dc Studio - Cambios",
@@ -26,11 +28,17 @@ export async function openChangesViewer(ctx: ExtensionContext): Promise<void> {
     width: "86%",
     maxHeight: "86%",
     footer: (theme) => ({
-      left: theme.fg("accent", footerLeft),
-      right: `${theme.fg("accent", "[ o / Enter editar ]")}  `,
+      left: footerLeft,
+      right: `[Enter Editar] `,
     }),
+    onFooterRightClick: () => {
+      panelRef?.openCurrentSelected();
+    },
+    onReload: () => {
+      panelRef?.refresh();
+    },
     content: (_done, theme, tui) => {
-      return new DcChangesPanel({
+      panelRef = new DcChangesPanel({
         cwd,
         theme,
         getChanges: getGitChanges,
@@ -54,6 +62,7 @@ export async function openChangesViewer(ctx: ExtensionContext): Promise<void> {
         },
         requestRender: () => tui.requestRender(),
       });
+      return panelRef;
     },
   });
 }

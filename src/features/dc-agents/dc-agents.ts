@@ -1195,6 +1195,15 @@ export function openTaxisViewer(ctx: ExtensionContext): void {
         dcNotifier.notify(ctx, "Taxis", "Flota de Taxis sincronizada", "info");
       }
     },
+    onReload: async () => {
+      if (panelRef) {
+        panelRef.setLoading(true);
+        panelRef.reloadData();
+        await new Promise((r) => setTimeout(r, 600));
+        panelRef.setLoading(false);
+        dcNotifier.notify(ctx, "Taxis", "Flota de Taxis sincronizada", "info");
+      }
+    },
     onClose: () => {
       panelRef?.destroy();
     },
@@ -1225,16 +1234,24 @@ export function openAgentsViewer(ctx: ExtensionContext): void {
     return;
   }
 
+  let panelRef: DcAgentsPanel | undefined;
+
   openDcModal(ctx, {
     title: "Subagentes y Ejecuciones (DC Studio)",
     width: "86%",
     maxHeight: "80%",
     footer: {
-      left: " [Tab] Alternar  [↑/↓] Navegar  [r] Recargar ",
-      right: " [Esc/q] Salir ",
+      left: " [Tab] Alternar   [↑/↓] Navegar   [r] Recargar ",
+      right: "[Esc] Salir ",
     },
     frame: "double",
-    content: (done, theme) => new DcAgentsPanel(theme, () => done(undefined), ctx),
+    content: (done, theme) => {
+      panelRef = new DcAgentsPanel(theme, () => done(undefined), ctx);
+      return panelRef;
+    },
+    onReload: () => {
+      panelRef?.reloadData();
+    },
   });
 }
 

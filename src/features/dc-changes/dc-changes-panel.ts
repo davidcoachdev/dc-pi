@@ -105,6 +105,14 @@ export class DcChangesPanel implements Component {
     return this.files[this.selectedIndex];
   }
 
+  public openCurrentSelected(): void {
+    const selected = this.getSelectedFile();
+    const wt = this.getActiveWorktree();
+    if (selected && this.onOpenEditor) {
+      this.onOpenEditor(selected.file, wt.path);
+    }
+  }
+
   private loadDiff(): void {
     const file = this.getSelectedFile();
     const wt = this.getActiveWorktree();

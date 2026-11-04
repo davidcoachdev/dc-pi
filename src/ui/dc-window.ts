@@ -10,6 +10,20 @@ const FRAMES = {
   double: { tl: "╔", tr: "╗", bl: "╚", br: "╝", ml: "╠", mr: "╣", v: "║", h: "═" },
 };
 
+export const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+
+export interface DcWindowLoadingState {
+  loading: boolean;
+  message?: string;
+  progress?: number;
+}
+
+export type DcWindowLoadingOption =
+  | boolean
+  | string
+  | DcWindowLoadingState
+  | (() => boolean | string | DcWindowLoadingState);
+
 /** Standard solid dark coal background for DC Studio modals (#100a0d). */
 export const MODAL_BG = "\x1b[48;2;16;10;13m";
 export const MODAL_BG_RESET = "\x1b[49m";
@@ -55,6 +69,15 @@ export interface DcWindowOptions {
   showScrollbar?: boolean;
   /** Whether to apply a solid opaque background so the terminal behind never shows. Default true. */
   solidBackground?: boolean;
+  /**
+   * Loading state. When active, an animated spinner replaces the glyph in the title bar,
+   * an optional loading bar/card overlays an empty body, and animations tick smoothly.
+   */
+  loading?: DcWindowLoadingOption;
+  /** Optional callback fired when the user triggers reload (e.g. key 'r' or footer reload). */
+  onReload?: () => void | Promise<void>;
+  /** Optional callback to notify the host to repaint (used for spinner animation loop). */
+  requestRender?: () => void;
 }
 
 function cells(value: number): number {
@@ -87,9 +110,85 @@ export class DcWindow implements Component {
   private dragStartX = 0;
   private dragStartY = 0;
   private isDragging = false;
+  private loading = false;
+  private loadingExplicitlySet = false;
+  private loadingMessage?: string;
+  private spinnerIdx = 0;
+  private animTimer?: NodeJS.Timeout;
 
   constructor(options: DcWindowOptions) {
     this.options = options;
+    if (this.isLoading()) {
+      this.startAnimation();
+    }
+  }
+
+  public setLoading(loading: boolean, message?: string): void {
+    this.loadingExplicitlySet = true;
+    this.loading = loading;
+    this.loadingMessage = message;
+    if (loading) {
+      this.startAnimation();
+    } else {
+      this.stopAnimation();
+    }
+    this.options.requestRender?.();
+  }
+
+  public getLoadingState(): { loading: boolean; message?: string; progress?: number } {
+    if (this.loadingExplicitlySet) {
+      return { loading: this.loading, message: this.loadingMessage };
+    }
+    const opt = this.options.loading;
+    let res: boolean | string | DcWindowLoadingState | undefined;
+    if (typeof opt === "function") {
+      try { res = opt(); } catch { res = false; }
+    } else {
+      res = opt;
+    }
+
+    if (typeof res === "boolean") {
+      return { loading: res, message: this.loadingMessage };
+    }
+    if (typeof res === "string") {
+      return { loading: true, message: res };
+    }
+    if (res && typeof res === "object") {
+      return {
+        loading: !!res.loading,
+        message: res.message ?? this.loadingMessage,
+        progress: res.progress,
+      };
+    }
+    return { loading: false, message: this.loadingMessage };
+  }
+
+  public isLoading(): boolean {
+    return this.getLoadingState().loading;
+  }
+
+  private startAnimation(): void {
+    if (this.animTimer) return;
+    this.animTimer = setInterval(() => {
+      this.spinnerIdx = (this.spinnerIdx + 1) % SPINNER_FRAMES.length;
+      this.options.requestRender?.();
+    }, 80);
+    this.animTimer.unref?.();
+  }
+
+  private stopAnimation(): void {
+    if (this.animTimer) {
+      clearInterval(this.animTimer);
+      this.animTimer = undefined;
+    }
+  }
+
+  public destroy(): void {
+    this.stopAnimation();
+  }
+
+  public dispose(): void {
+    this.destroy();
   }
 
   invalidate(): void {
@@ -122,17 +221,27 @@ export class DcWindow implements Component {
     this.closeStart = this.closeEnd = -1;
     this.bodyWidth = this.bodyHeight = 0;
     this.footerY = this.footerRightStart = this.footerRightEnd = -1;
-    this.isDragging = false;
   }
 
   private titleBar(inner: number): string {
     const { theme, title, glyph = "", titleBarBackground = true } = this.options;
     const text = typeof title === "function" ? title() : title;
+    const loadingState = this.getLoadingState();
+    const effectiveGlyph = loadingState.loading
+      ? theme.fg("accent", SPINNER_FRAMES[this.spinnerIdx])
+      : (glyph ? theme.fg("accent", glyph) : "");
+
     // Reserve the control before clipping the title, never clip a live hitbox.
     const label = inner >= 5 ? "[ X ]" : inner >= 3 ? "[X]" : inner >= 1 ? "X" : "";
     const trailing = inner >= 6 ? " " : "";
     const leftWidth = inner - label.length - trailing.length;
-    const left = " " + (glyph ? theme.fg("accent", glyph) + " " : "") + theme.bold(theme.fg("text", text));
+
+    let loadingExtra = "";
+    if (loadingState.loading && loadingState.message) {
+      loadingExtra = ` ${theme.fg("dim", `(${loadingState.message})`)}`;
+    }
+
+    const left = " " + (effectiveGlyph ? effectiveGlyph + " " : "") + theme.bold(theme.fg("text", text)) + loadingExtra;
     const painted = cell(left, leftWidth) + theme.bold(theme.fg("error", label)) + trailing;
     if (label) {
       this.closeStart = 1 + leftWidth;
@@ -163,11 +272,32 @@ export class DcWindow implements Component {
     const bodyWidth = inner - padX * 2;
     const pad = " ".repeat(padX);
     const bodyBudget = budget - chromeRows;
+    const loadingState = this.getLoadingState();
+    if (loadingState.loading) {
+      this.startAnimation();
+    } else if (!this.loading) {
+      this.stopAnimation();
+    }
+
     let bodyLines: string[] = [];
     if (bodyWidth > 0 && bodyBudget > 0) {
       // Preserve the original empty-body fallback, including failed child renders.
       try { bodyLines = content.render(bodyWidth); } catch { bodyLines = []; }
-      if (bodyLines.length === 0) bodyLines = [""];
+      if (bodyLines.length === 0 || (bodyLines.length === 1 && bodyLines[0].trim() === "")) {
+        if (loadingState.loading) {
+          const spin = SPINNER_FRAMES[this.spinnerIdx];
+          const msg = loadingState.message ?? "Cargando...";
+          const animBar = "█".repeat((this.spinnerIdx % 5) + 1) + "░".repeat(5 - (this.spinnerIdx % 5));
+          const loadCard = `${theme.fg("accent", spin)} ${theme.bold(theme.fg("accent", msg))}  [${theme.fg("accent", animBar)}]`;
+          const vPad = Math.max(0, Math.floor((bodyBudget - 1) / 2));
+          bodyLines = [
+            ...Array(vPad).fill(""),
+            " ".repeat(Math.max(0, Math.floor((bodyWidth - visibleWidth(loadCard)) / 2))) + loadCard,
+          ];
+        } else {
+          bodyLines = [""];
+        }
+      }
       this.totalLines = bodyLines.length;
       this.bodyBudget = bodyBudget;
       this.maxScroll = Math.max(0, this.totalLines - bodyBudget);
@@ -220,12 +350,26 @@ export class DcWindow implements Component {
         const right = resolved.right ?? "";
         const leftW = visibleWidth(left);
         const rightW = visibleWidth(right);
-        const gap = Math.max(1, inner - leftW - rightW);
-        if (rightW > 0) {
-          this.footerRightStart = 1 + leftW + gap;
-          this.footerRightEnd = this.footerRightStart + rightW;
+        const minGap = 1;
+
+        let finalLeft = left;
+        let finalLeftW = leftW;
+        if (leftW + rightW + minGap > inner) {
+          const availableForLeft = Math.max(0, inner - rightW - minGap);
+          finalLeft = truncateToWidth(left, availableForLeft, "…");
+          finalLeftW = visibleWidth(finalLeft);
         }
-        footerLine = cell(left + " ".repeat(gap) + right, inner);
+        const gap = Math.max(minGap, inner - finalLeftW - rightW);
+        if (rightW > 0) {
+          if (rightW <= inner) {
+            this.footerRightStart = 1 + finalLeftW + gap;
+            this.footerRightEnd = Math.min(1 + inner, this.footerRightStart + rightW);
+          } else {
+            this.footerRightStart = 1;
+            this.footerRightEnd = 1 + inner;
+          }
+        }
+        footerLine = cell(finalLeft + " ".repeat(gap) + right, inner);
       }
     }
 
@@ -243,6 +387,22 @@ export class DcWindow implements Component {
     if (this.options.content.handleInput?.(data) === true) return true;
     if (matchesKey(data, Key.escape)) {
       this.options.onClose();
+      return true;
+    }
+    if (this.options.onReload && (data === "r" || data === "R")) {
+      try {
+        const res = this.options.onReload();
+        if (res && typeof (res as any).then === "function") {
+          this.setLoading(true, "Recargando...");
+          Promise.resolve(res)
+            .catch(() => { /* suppress unhandled rejection */ })
+            .finally(() => {
+              this.setLoading(false);
+            });
+        }
+      } catch {
+        /* suppress sync error */
+      }
       return true;
     }
     if (this.options.scrollable !== false && this.maxScroll > 0) {

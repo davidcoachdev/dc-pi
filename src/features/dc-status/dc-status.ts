@@ -11,6 +11,7 @@ import { DcStatusPanel } from "./dc-status-panel.ts";
 export async function openStatusViewer(ctx: ExtensionContext, pi: ExtensionAPI): Promise<void> {
   const status = await collectEnvStatus(ctx, pi);
   let panelRef: DcStatusPanel | undefined;
+  let doneRef: (() => void) | undefined;
 
   await openDcModal<void>(ctx, {
     title: "Dc Studio - Información",
@@ -20,19 +21,23 @@ export async function openStatusViewer(ctx: ExtensionContext, pi: ExtensionAPI):
     maxHeight: "75%",
     footer: (theme) => {
       const tab = panelRef?.getCurrentTab();
-      let leftHints = `  ${theme.fg("accent", "← / →")} pestaña   ${theme.fg("accent", "1..3")} saltar   ${theme.fg("accent", "esc")} cerrar`;
+      let leftHints = ` [←/→] Pestaña   [1..3] Saltar   [c] Copiar alertas`;
       if (tab === "alerts") {
-        leftHints = `  ${theme.fg("accent", "↑ / ↓")} alerta   ${theme.fg("accent", "← / →")} pestaña   ${theme.fg("accent", "c")} copiar`;
+        leftHints = ` [↑/↓] Alerta   [←/→] Pestaña   [c] Copiar`;
       } else if (tab === "changelog") {
-        leftHints = `  ${theme.fg("accent", "↑ / ↓")} scroll   ${theme.fg("accent", "← / →")} pestaña   ${theme.fg("accent", "esc")} cerrar`;
+        leftHints = ` [↑/↓] Scroll   [←/→] Pestaña`;
       }
 
       return {
         left: leftHints,
-        right: `${theme.fg("accent", "[ esc Cerrar ]")}  `,
+        right: `[Esc Cerrar] `,
       };
     },
+    onFooterRightClick: () => {
+      doneRef?.();
+    },
     content: (done, theme, tui) => {
+      doneRef = done;
       const panel = new DcStatusPanel({
         theme,
         status,

@@ -333,3 +333,106 @@ test("title bar drag captures mouse and reports deltas via onMove", () => {
   window.handleMouse(mouse(15, 3, { type: "drag", screenX: 60, screenY: 22 }));
   assert.equal(moves.length, 2);
 });
+
+test("drag state is preserved across render cycles", () => {
+  const moves: Array<{ dx: number; dy: number }> = [];
+  const { window } = fixture({ onMove: (dx, dy) => moves.push({ dx, dy }) });
+  window.render(30);
+
+  // Press
+  window.handleMouse(mouse(5, 1, { type: "press", screenX: 50, screenY: 20 }));
+
+  // First drag step
+  window.handleMouse(mouse(10, 3, { type: "drag", screenX: 55, screenY: 22 }));
+  assert.equal(moves.length, 1);
+
+  // Render between steps (as Pi TUI does on requestRender)
+  window.render(30);
+
+  // Second drag step should STILL be active
+  const drag2 = window.handleMouse(mouse(12, 3, { type: "drag", screenX: 57, screenY: 22 }));
+  assert.deepEqual(drag2, { handled: true, render: true });
+  assert.equal(moves.length, 2);
+  assert.deepEqual(moves[1], { dx: 2, dy: 0 });
+
+  window.handleMouse(mouse(12, 3, { type: "release", screenX: 57, screenY: 22 }));
+});
+
+test("footer truncation preserves right action and accurately records hitbox", () => {
+  let rightClicked = 0;
+  const { window } = fixture({
+    footer: { left: "Very very long navigation hint text that will overflow", right: "[ Cerrar ]" },
+    onFooterRightClick: () => rightClicked++,
+  });
+
+  const lines = window.render(35).map(plain);
+  const footerRow = lines[lines.length - 2];
+  // Right control must be present at the end
+  assert.ok(footerRow.includes("[ Cerrar ]"), `Footer should preserve right action: ${footerRow}`);
+
+  // Hitbox should trigger right click
+  const rightStart = footerRow.indexOf("[ Cerrar ]");
+  const res = window.handleMouse(mouse(rightStart + 2, lines.length - 2, { type: "click" }));
+  assert.deepEqual(res, { handled: true });
+  assert.equal(rightClicked, 1);
+});
+
+test("loading state displays animated spinner and onReload handles key 'r'", async () => {
+  let reloaded = 0;
+  let renderRequested = 0;
+  const { window } = fixture({
+    title: "Panel con Carga",
+    loading: true,
+    requestRender: () => renderRequested++,
+    onReload: () => { reloaded++; },
+  });
+
+  assert.equal(window.isLoading(), true);
+  const lines = window.render(40).map(plain);
+  // Title bar should show spinner frame
+  assert.match(lines[1], /[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]/);
+
+  // Key 'r' triggers onReload
+  const handledR = window.handleInput("r");
+  assert.equal(handledR, true);
+  assert.equal(reloaded, 1);
+
+  window.setLoading(false);
+  assert.equal(window.isLoading(), false);
+  window.dispose();
+});
+
+test("onReload handles async rejection without unhandled rejection crash", async () => {
+  let rejectCalled = false;
+  const { window } = fixture({
+    onReload: () => {
+      rejectCalled = true;
+      return Promise.reject(new Error("network error"));
+    },
+  });
+
+  assert.doesNotThrow(() => {
+    window.handleInput("r");
+  });
+  assert.equal(rejectCalled, true);
+  // Allow promise tick to settle
+  await new Promise((r) => setImmediate(r));
+  assert.equal(window.isLoading(), false);
+  window.dispose();
+});
+
+test("footer hitbox is clamped when right action exceeds inner width", () => {
+  const { window } = fixture({
+    footer: { left: "A", right: "[ Extremadamente Largo ]" },
+    onFooterRightClick: () => {},
+  });
+
+  // Render on very narrow window (width 10 -> inner 8)
+  const lines = window.render(10).map(plain);
+  assert.equal(lines.length > 0, true);
+  // Click on x = 11 (beyond width 10) should NOT trigger
+  const res = window.handleMouse(mouse(11, lines.length - 2, { type: "click" }));
+  assert.equal(res, undefined);
+});
+
+

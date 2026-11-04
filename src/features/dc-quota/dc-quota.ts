@@ -521,6 +521,13 @@ export async function openQuotaViewer(ctx: ExtensionContext): Promise<void> {
         dcNotifier.notify(ctx, "Cuotas", "Cuotas actualizadas en vivo", "info");
       }
     },
+    onReload: async () => {
+      if (panelRef) {
+        panelRef.setLoading(true);
+        await loadQuotas(panelRef, true);
+        dcNotifier.notify(ctx, "Cuotas", "Cuotas actualizadas en vivo", "info");
+      }
+    },
     onClose: () => {
       panelRef?.destroy();
     },

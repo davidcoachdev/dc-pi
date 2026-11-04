@@ -33,7 +33,9 @@ export class DcPlanPanel implements Component {
   private readonly theme: Theme;
   private readonly onDone: () => void;
   private readonly ctx?: any;
-  public invalidate: () => void = () => {};
+  public invalidate: () => void = () => {
+    (this as any).requestRender?.();
+  };
 
   constructor(theme: Theme, onDone: () => void, ctx?: any) {
     this.theme = theme;
@@ -49,21 +51,21 @@ export class DcPlanPanel implements Component {
     this.invalidate();
   }
 
-  public handleInput(data: string): void {
+  public handleInput(data: string): boolean {
     if (matchesKey(data, Key.escape) || data === "q" || data === "Q") {
       this.onDone();
-      return;
+      return true;
     }
 
     if (data === "r" || data === "R") {
       this.reloadData();
-      return;
+      return true;
     }
 
     if (matchesKey(data, Key.tab)) {
       this.activePanel = this.activePanel === "list" ? "detail" : "list";
       this.invalidate();
-      return;
+      return true;
     }
 
     const totalItems = 1 + this.oddPlans.length;
@@ -74,80 +76,81 @@ export class DcPlanPanel implements Component {
         this.detailScrollY = 0;
         this.ensureVisible();
         this.invalidate();
-        return;
+        return true;
       }
       if (matchesKey(data, Key.down) || data === "j") {
         this.selectedIndex = Math.min(totalItems - 1, this.selectedIndex + 1);
         this.detailScrollY = 0;
         this.ensureVisible();
         this.invalidate();
-        return;
+        return true;
       }
       if (matchesKey(data, Key.pageUp)) {
         this.selectedIndex = Math.max(0, this.selectedIndex - 8);
         this.detailScrollY = 0;
         this.ensureVisible();
         this.invalidate();
-        return;
+        return true;
       }
       if (matchesKey(data, Key.pageDown)) {
         this.selectedIndex = Math.min(totalItems - 1, this.selectedIndex + 8);
         this.detailScrollY = 0;
         this.ensureVisible();
         this.invalidate();
-        return;
+        return true;
       }
       if (matchesKey(data, Key.home)) {
         this.selectedIndex = 0;
         this.detailScrollY = 0;
         this.listScrollY = 0;
         this.invalidate();
-        return;
+        return true;
       }
       if (matchesKey(data, Key.end)) {
         this.selectedIndex = totalItems - 1;
         this.detailScrollY = 0;
         this.ensureVisible();
         this.invalidate();
-        return;
+        return true;
       }
       if (matchesKey(data, Key.right) || matchesKey(data, Key.enter)) {
         this.activePanel = "detail";
         this.invalidate();
-        return;
+        return true;
       }
     } else {
       if (matchesKey(data, Key.left)) {
         this.activePanel = "list";
         this.invalidate();
-        return;
+        return true;
       }
       if (matchesKey(data, Key.up) || data === "k") {
         this.detailScrollY = Math.max(0, this.detailScrollY - 1);
         this.invalidate();
-        return;
+        return true;
       }
       if (matchesKey(data, Key.down) || data === "j") {
         this.detailScrollY += 1;
         this.invalidate();
-        return;
+        return true;
       }
       if (matchesKey(data, Key.pageUp)) {
         this.detailScrollY = Math.max(0, this.detailScrollY - 8);
         this.invalidate();
-        return;
+        return true;
       }
       if (matchesKey(data, Key.pageDown)) {
         this.detailScrollY += 8;
         this.invalidate();
-        return;
+        return true;
       }
       if (matchesKey(data, Key.home)) {
         this.detailScrollY = 0;
         this.invalidate();
-        return;
+        return true;
       }
     }
+    return false;
   }
 
   private ensureVisible(): void {

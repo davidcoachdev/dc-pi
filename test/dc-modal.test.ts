@@ -152,3 +152,64 @@ test("openDcModal manages dynamic title bar drag to update overlay offsets", asy
   assert.equal(opts.offsetX, 8);
   assert.equal(opts.offsetY, 3);
 });
+
+test("openDcModal destroys content exactly once upon close", async () => {
+  let destroyCount = 0;
+  let doClose: (() => void) | undefined;
+  const content = {
+    render: () => ["content"],
+    invalidate() {},
+    destroy() { destroyCount++; },
+  };
+
+  const mockCtx = {
+    hasUI: true,
+    mode: "tui",
+    ui: {
+      custom: async (factory: any) => {
+        const mockTui = { requestRender() {} };
+        factory(mockTui, dummyTheme, {}, () => {});
+        doClose?.();
+        return undefined;
+      },
+    },
+  } as unknown as ExtensionContext;
+
+  await openDcModal(mockCtx, {
+    title: "Lifecycle Test",
+    content: (close) => {
+      doClose = close;
+      return content;
+    },
+  });
+
+  assert.equal(destroyCount, 1);
+});
+
+test("openDcModal does not throw when content is frozen or sealed", async () => {
+  const frozenContent = Object.freeze({
+    render: () => ["immutable"],
+    invalidate() {},
+  });
+
+  const mockCtx = {
+    hasUI: true,
+    mode: "tui",
+    ui: {
+      custom: async (factory: any) => {
+        const mockTui = { requestRender() {} };
+        const comp = factory(mockTui, dummyTheme, {}, () => {});
+        assert.ok(comp.render(30).length > 0);
+        return undefined;
+      },
+    },
+  } as unknown as ExtensionContext;
+
+  await assert.doesNotReject(async () => {
+    await openDcModal(mockCtx, {
+      title: "Frozen Content Test",
+      content: frozenContent,
+    });
+  });
+});
+

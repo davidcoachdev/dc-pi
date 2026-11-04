@@ -3,14 +3,52 @@
  */
 
 import type { ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
-import type { Component, TUI } from "@earendil-works/pi-tui";
+import {
+  Key, matchesKey, visibleWidth,
+  type Component, type TUI, type TuiMouseEvent, type TuiMouseEventResult,
+} from "@earendil-works/pi-tui";
 import { openDcModal } from "../../../ui/dc-modal.ts";
 import type { ApprovalOutcome, ApprovalRequest } from "../core/dc-approval-types.ts";
 import { dcApprovalCoordinator } from "../core/dc-approval-coordinator.ts";
 
+interface ButtonHitbox {
+  idx: number;
+  outcome: ApprovalOutcome;
+  startX: number;
+  endX: number;
+  y: number;
+}
+
+function wrapText(label: string, text: string, maxWidth: number, theme: Theme, colorRole: string = "text"): string[] {
+  const prefix = theme.bold(label) + " ";
+  const prefixWidth = visibleWidth(label) + 1;
+  const contentWidth = Math.max(10, maxWidth - prefixWidth);
+  const words = text.split(" ");
+  const lines: string[] = [];
+  let current = "";
+
+  for (const word of words) {
+    if (visibleWidth(current ? current + " " + word : word) <= contentWidth) {
+      current = current ? current + " " + word : word;
+    } else {
+      if (current) lines.push(current);
+      current = word;
+    }
+  }
+  if (current) lines.push(current);
+  if (lines.length === 0) lines.push("");
+
+  const indent = " ".repeat(prefixWidth);
+  return lines.map((line, i) => {
+    const formatted = theme.fg(colorRole as any, line);
+    return i === 0 ? prefix + formatted : indent + formatted;
+  });
+}
+
 export class DcApprovalPanel implements Component {
   private selectedIndex = 0; // 0: Aceptar una sola vez, 1: Rechazar, 2: Cancelar turno
   private readonly options: readonly ApprovalOutcome[] = ["allowed-once", "rejected", "cancelled"];
+  private buttonHitboxes: ButtonHitbox[] = [];
 
   constructor(
     private readonly request: ApprovalRequest,
@@ -21,30 +59,62 @@ export class DcApprovalPanel implements Component {
 
   invalidate(): void {}
 
+  private confirmSelection(): void {
+    const outcome = this.options[this.selectedIndex] ?? "rejected";
+    if (outcome === "allowed-once") {
+      dcApprovalCoordinator.grantOnce(this.request.id);
+    }
+    this.done(outcome);
+  }
+
   handleInput(key: string): boolean {
-    if (key === "left" || key === "up") {
+    if (matchesKey(key, Key.left) || matchesKey(key, Key.up) || key === "left" || key === "up") {
       this.selectedIndex = (this.selectedIndex - 1 + this.options.length) % this.options.length;
       this.requestRender?.();
       return true;
     }
-    if (key === "right" || key === "down" || key === "tab") {
+    if (matchesKey(key, Key.right) || matchesKey(key, Key.down) || matchesKey(key, Key.tab) || key === "right" || key === "down" || key === "tab") {
       this.selectedIndex = (this.selectedIndex + 1) % this.options.length;
       this.requestRender?.();
       return true;
     }
-    if (key === "enter" || key === "space") {
-      const outcome = this.options[this.selectedIndex] ?? "rejected";
-      if (outcome === "allowed-once") {
-        dcApprovalCoordinator.grantOnce(this.request.id);
-      }
-      this.done(outcome);
+    if (key === "1") {
+      this.selectedIndex = 0;
+      this.confirmSelection();
       return true;
     }
-    if (key === "escape") {
+    if (key === "2") {
+      this.selectedIndex = 1;
+      this.confirmSelection();
+      return true;
+    }
+    if (key === "3") {
+      this.selectedIndex = 2;
+      this.confirmSelection();
+      return true;
+    }
+    if (matchesKey(key, Key.enter) || matchesKey(key, Key.space) || key === "enter" || key === "space") {
+      this.confirmSelection();
+      return true;
+    }
+    if (matchesKey(key, Key.escape) || key === "escape") {
       this.done("cancelled");
       return true;
     }
     return false;
+  }
+
+  handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
+    if (event.type === "click" && event.button === "left") {
+      for (const box of this.buttonHitboxes) {
+        if (event.y === box.y && event.x >= box.startX && event.x < box.endX) {
+          this.selectedIndex = box.idx;
+          this.confirmSelection();
+          return { handled: true, render: true };
+        }
+      }
+    }
+    return undefined;
   }
 
   render(width: number): string[] {
@@ -53,25 +123,40 @@ export class DcApprovalPanel implements Component {
     lines.push(this.theme.fg("muted", "─".repeat(Math.max(10, width - 4))));
 
     lines.push(`${this.theme.bold("Herramienta:")}  ${this.theme.fg("accent", this.request.toolName)}`);
-    lines.push(`${this.theme.bold("Acción:")}       ${this.request.action}`);
+    lines.push(...wrapText("Acción:", this.request.action, width, this.theme, "text"));
     if (this.request.target) {
-      lines.push(`${this.theme.bold("Objetivo:")}     ${this.theme.fg("warning", this.request.target)}`);
+      lines.push(...wrapText("Objetivo:", this.request.target, width, this.theme, "warning"));
     }
-    lines.push(`${this.theme.bold("Motivo:")}       ${this.theme.fg("muted", this.request.reason)}`);
+    lines.push(...wrapText("Motivo:", this.request.reason, width, this.theme, "muted"));
     lines.push("");
 
     const buttons = [
-      { label: " [1] Aceptar una sola vez ", outcome: "allowed-once" as const },
-      { label: " [2] Rechazar ", outcome: "rejected" as const },
-      { label: " [3] Cancelar ", outcome: "cancelled" as const },
+      { label: "[1] Aceptar una sola vez", outcome: "allowed-once" as const },
+      { label: "[2] Rechazar", outcome: "rejected" as const },
+      { label: "[3] Cancelar", outcome: "cancelled" as const },
     ];
+
+    const buttonRowY = lines.length;
+    this.buttonHitboxes = [];
+    let currentX = 0;
 
     const renderedButtons = buttons.map((btn, idx) => {
       const isSelected = idx === this.selectedIndex;
+      const prefix = isSelected ? "▶ " : "  ";
+      const fullText = `${prefix}${btn.label} `;
+      const btnWidth = visibleWidth(fullText);
+      this.buttonHitboxes.push({
+        idx,
+        outcome: btn.outcome,
+        startX: currentX,
+        endX: currentX + btnWidth,
+        y: buttonRowY,
+      });
+      currentX += btnWidth + 1;
       if (isSelected) {
-        return this.theme.bold(this.theme.fg("accent", `▶ ${btn.label}`));
+        return this.theme.bold(this.theme.fg("accent", fullText));
       }
-      return this.theme.fg("muted", `  ${btn.label}`);
+      return this.theme.fg("muted", fullText);
     }).join(" ");
 
     lines.push(renderedButtons);
@@ -99,7 +184,10 @@ export async function promptApprovalModal(
         () => tui?.requestRender?.(),
       );
     },
-    footer: "← / → : Seleccionar   ·   Enter : Confirmar   ·   Esc : Cancelar",
+    footer: {
+      left: " [←/→] Seleccionar   [Enter] Confirmar   [1-3] Atajo rápido",
+      right: "[Esc] Cancelar ",
+    },
     onNonTui: () => "rejected", // Fail-closed en modo headless sin terminal interactiva
   });
 

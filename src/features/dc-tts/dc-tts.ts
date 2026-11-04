@@ -188,6 +188,8 @@ export default function dcTtsExtension(pi: ExtensionAPI): void {
     const initialVoices = await fetchTtsVoices();
     let liveSt: TtsStatus | null = initialSt;
 
+    let doneRef: (() => void) | undefined;
+
     await openDcModal<void>(ctx, {
       title: () => {
         const s = liveSt;
@@ -200,11 +202,15 @@ export default function dcTtsExtension(pi: ExtensionAPI): void {
       width: "68%",
       maxHeight: "82%",
       footer: (theme) => ({
-        left: `  ${theme.fg("accent", "Tab")} pestaña   ${theme.fg("accent", "↑↓")} navegar   ${theme.fg("accent", "←→")} ajustar   ${theme.fg("accent", "Enter")} ejecutar   ${theme.fg("accent", "[p]")} pausa   ${theme.fg("accent", "[t]")} auto-read`,
-        right: `${theme.fg("accent", "[ Esc Cerrar ]")}  `,
+        left: ` [Tab] Pestaña   [↑/↓] Navegar   [←/→] Ajustar   [Enter] Ejecutar   [p] Pausa   [t] Auto-read`,
+        right: `[Esc Cerrar] `,
       }),
-      content: (done, theme, tui) =>
-        new DcTtsPanel(
+      onFooterRightClick: () => {
+        doneRef?.();
+      },
+      content: (done, theme, tui) => {
+        doneRef = done;
+        return new DcTtsPanel(
           theme,
           ctx,
           {
@@ -252,7 +258,8 @@ export default function dcTtsExtension(pi: ExtensionAPI): void {
           () => tui.requestRender(),
           initialSt,
           initialVoices,
-        ),
+        );
+      },
     });
   };
 
