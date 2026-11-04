@@ -4,6 +4,7 @@ import { DcWorktreeManager, type WorktreeHandle } from "../core/dc-worktree-mana
 import { dcConflictGuard } from "./dc-conflict-guard.ts";
 import type { RepoIdentity } from "./dc-repo-resolver.ts";
 import { getCollaboratorsDatabase } from "./dc-collaborators-db.ts";
+import { dcWorkerRunner } from "./dc-worker-runner.ts";
 
 export interface GitHubIssuePayload {
   action: string;
@@ -136,32 +137,8 @@ export class DcIssueDispatcher {
     });
 
     // 2. Crear documento de especificación dentro del worktree (ODD/DeepSeek Ticket)
-    const taskDir = path.join(handle.worktreePath, "odd", "tasks");
-    if (!fs.existsSync(taskDir)) {
-      fs.mkdirSync(taskDir, { recursive: true });
-    }
-
-    const taskSpecPath = path.join(taskDir, `${taskSlug}.md`);
     const author = issue.user?.login ? `@${issue.user.login}` : "anónimo";
-    const bodyText = issue.body ? issue.body.trim() : "(Sin descripción proporcionada)";
-
-    const specContent = `# Issue #${issueNumber}: ${issueTitle}
-
-## Origen
-- Creado por: ${author}
-- URL: ${issue.html_url || ""}
-- Fecha: ${new Date().toISOString()}
-
-## Requerimiento original (Verbatim)
-${bodyText}
-
-## Estado
-- Modo: Background Autonomous Agent
-- Rama: ${handle.branchName}
-- Worktree: ${handle.worktreePath}
-`;
-
-    fs.writeFileSync(taskSpecPath, specContent, "utf8");
+    const bodyText = typeof issue.body === "string" ? issue.body : "(Sin descripción proporcionada)";
 
     // 3. Registrar conflicto preventivo para este issue
     dcConflictGuard.reserveFiles(
@@ -180,6 +157,9 @@ ${bodyText}
       dispatchedAt: Date.now(),
       handle,
     };
+
+    // 4. Inicializar tareas y roadmap ODD estructurado en el worktree preservando autor y requerimiento verbatim
+    dcWorkerRunner.initializeOddSpec(dispatched, author, bodyText);
 
     this.activeDispatches.set(dispatchKey, dispatched);
     return dispatched;
