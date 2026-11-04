@@ -4,6 +4,7 @@ import { dcNotifier } from "../../../integrations/dc-notify/dc-notifier.ts";
 import { resolveCurrentRepoIdentity, type RepoIdentity } from "./dc-repo-resolver.ts";
 import { DcWebhookReceiver } from "./dc-webhook-receiver.ts";
 import { dcIssueDispatcher, type DispatchedIssueTask } from "./dc-issue-dispatcher.ts";
+import { promptApprovalModal } from "../../dc-approval/views/dc-approval-modal.ts";
 
 export interface DaemonStatus {
   running: boolean;
@@ -61,11 +62,29 @@ export class DcWebhookDaemonManager {
           }
 
           try {
-            const dispatched = await dcIssueDispatcher.dispatchIssue(payload, repo, (progress) => {
-              if (ctx) {
-                dcNotifier.notify(ctx, "DC GitHub Sentinel", progress, "info");
-              }
-            });
+            const dispatched = await dcIssueDispatcher.dispatchIssue(
+              payload,
+              repo,
+              (progress) => {
+                if (ctx) {
+                  dcNotifier.notify(ctx, "DC GitHub Sentinel", progress, "info");
+                }
+              },
+              async (author, issueNum, title) => {
+                // Si la terminal no tiene UI interactiva, fail-closed
+                if (!ctx?.hasUI) return false;
+                // Abre el modal interactivo de aprobación
+                const outcome = await promptApprovalModal(ctx, {
+                  id: `collab-${author}-${issueNum}`,
+                  toolName: "GitHub Issue Webhook",
+                  action: `Autorizar a @${author} para despacho autónomo en Issue #${issueNum}`,
+                  target: title,
+                  reason: `Usuario en estado PENDING abrió el Issue #${issueNum}. Requiere reconocimiento humano para lista blanca.`,
+                  timestamp: Date.now(),
+                });
+                return outcome === "allowed-once";
+              },
+            );
 
             if (dispatched && ctx) {
               dcNotifier.notify(

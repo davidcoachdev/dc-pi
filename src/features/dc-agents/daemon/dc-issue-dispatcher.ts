@@ -3,6 +3,7 @@ import * as path from "node:path";
 import { DcWorktreeManager, type WorktreeHandle } from "../core/dc-worktree-manager.ts";
 import { dcConflictGuard } from "./dc-conflict-guard.ts";
 import type { RepoIdentity } from "./dc-repo-resolver.ts";
+import { getCollaboratorsDatabase } from "./dc-collaborators-db.ts";
 
 export interface GitHubIssuePayload {
   action: string;
@@ -58,6 +59,7 @@ export class DcIssueDispatcher {
     payload: GitHubIssuePayload,
     repoIdentity: RepoIdentity,
     onProgress?: (message: string) => void,
+    onPendingAuthorization?: (author: string, issueNumber: number, title: string) => Promise<boolean>,
   ): Promise<DispatchedIssueTask | null> {
     const issue = payload.issue;
     if (!issue || payload.action !== "opened") {
@@ -65,6 +67,48 @@ export class DcIssueDispatcher {
     }
 
     const issueNumber = issue.number;
+    const authorLogin = (issue.user?.login || "anónimo").replace(/^@/, "").toLowerCase().trim();
+    const collabDb = getCollaboratorsDatabase();
+
+    // ── Doble Validación Soberana de Seguridad ──
+    const record = collabDb.getCollaborator(authorLogin);
+    let isAllowed = record?.status === "ALLOW";
+
+    if (!record) {
+      // Usuario no registrado en la base de datos local
+      collabDb.setCollaborator(authorLogin, "PENDING", "EXTERNAL", `Detectado en Issue #${issueNumber}`);
+      collabDb.log({
+        level: "SECURITY",
+        category: "SECURITY",
+        actor: authorLogin,
+        message: `Nuevo colaborador @${authorLogin} detectado en Issue #${issueNumber} -> Estado PENDING`,
+      });
+
+      if (onPendingAuthorization) {
+        onProgress?.(`Solicitando autorización interactiva para @${authorLogin}...`);
+        isAllowed = await onPendingAuthorization(authorLogin, issueNumber, issue.title);
+        if (isAllowed) {
+          collabDb.setCollaborator(authorLogin, "ALLOW", "CONTRIBUTOR", "Aprobado interactivamente por el usuario");
+        }
+      }
+    } else if (record.status === "PENDING" && onPendingAuthorization) {
+      isAllowed = await onPendingAuthorization(authorLogin, issueNumber, issue.title);
+      if (isAllowed) {
+        collabDb.setCollaborator(authorLogin, "ALLOW", record.role, "Aprobado interactivamente por el usuario");
+      }
+    }
+
+    if (!isAllowed) {
+      collabDb.log({
+        level: "WARN",
+        category: "SECURITY",
+        actor: authorLogin,
+        message: `Despacho autónomo rechazado para @${authorLogin} en Issue #${issueNumber} (Estado: ${record?.status || "PENDING"})`,
+      });
+      onProgress?.(`⚠️ Despacho autónomo bloqueado: @${authorLogin} no tiene permiso de ejecución (Estado: ${record?.status || "PENDING"}).`);
+      return null;
+    }
+
     const dispatchKey = `${repoIdentity.fullNwo}:${issueNumber}`;
     if (this.activeDispatches.has(dispatchKey)) {
       return this.activeDispatches.get(dispatchKey)!;
@@ -72,6 +116,13 @@ export class DcIssueDispatcher {
 
     const issueTitle = issue.title ? issue.title.trim() : `issue-${issueNumber}`;
     const taskSlug = `issue-${issueNumber}`;
+
+    collabDb.log({
+      level: "INFO",
+      category: "DISPATCH",
+      actor: authorLogin,
+      message: `Iniciando despacho autónomo para Issue #${issueNumber} (${issueTitle})`,
+    });
 
     onProgress?.(`Creando worktree aislado para Issue #${issueNumber}...`);
 
@@ -149,6 +200,15 @@ ${bodyText}
       dcConflictGuard.releaseTask(`issue-${issueNumber}`);
       await task.handle.dispose();
       this.activeDispatches.delete(key);
+      try {
+        // Eliminar rama efímera creada para la tarea
+        const { execFile } = await import("node:child_process");
+        const { promisify } = await import("node:util");
+        const execAsync = promisify(execFile);
+        await execAsync("git", ["branch", "-D", task.branchName]);
+      } catch {
+        /* best-effort */
+      }
     }
   }
 }
