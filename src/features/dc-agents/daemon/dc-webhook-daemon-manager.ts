@@ -8,6 +8,7 @@ import { dcIssueDispatcher, type GitHubIssuePayload, type DispatchedIssueTask } 
 import { promptApprovalModal } from "../../dc-approval/views/dc-approval-modal.ts";
 import { dcPrDelivery } from "./dc-pr-delivery.ts";
 import { dcWorkerRunner, updateWorktreeOddRoadmap } from "./dc-worker-runner.ts";
+import { dcIssueNotifier } from "./dc-issue-notifier.ts";
 import { prepareEphemeralAgent, cleanupEphemeralAgent } from "../core/dc-ephemeral-manager.ts";
 
 export interface DaemonStatus {
@@ -159,8 +160,20 @@ export class DcWebhookDaemonManager {
                     dcNotifier.notify(ctx, "🚕 Flota de Taxis", workerMsg, "info");
                   }
 
+                  // Notificar inmediatamente al Issue en GitHub la asignación del Taxi y el inicio de análisis
+                  await dcIssueNotifier.notifyIssue(
+                    { repoRoot: dispatched.worktreePath, repoNwo: repo.fullNwo, issueNumber: dispatched.issueNumber },
+                    `🤖 **DC Super-Agent**: Taxi [${taxiAc}] asignado. Iniciando análisis de especificación ODD y pruebas RED...`,
+                  );
+
                   updateWorktreeOddRoadmap(dispatched.worktreePath, dispatched.taskSlug, "T2", "done", `Analizado por dc-super-agente (${taxiAc})`);
                   updateWorktreeOddRoadmap(dispatched.worktreePath, dispatched.taskSlug, "T3", "in_progress", `dc-super-agente programando en worktree (${taxiAc})`);
+
+                  // Notificar inicio de implementación de código
+                  await dcIssueNotifier.notifyIssue(
+                    { repoRoot: dispatched.worktreePath, repoNwo: repo.fullNwo, issueNumber: dispatched.issueNumber },
+                    `🤖 **DC Super-Agent**: 🔨 Iniciando implementación de código de la solución en worktree...`,
+                  );
 
                   // 2. Ejecución autónoma con LLM Real en worktree aislado
                   const llmResult = await dcWorkerRunner.executeAutonomousLlmSession({
@@ -183,7 +196,11 @@ export class DcWebhookDaemonManager {
                     throw new Error(`Verificación fallida: ${reason}`);
                   }
 
-                  // Creation and delivery share the issue's resolved base, never the user's feature branch.
+                  // Notificar que la verificación determinista fue superada
+                  await dcIssueNotifier.notifyIssue(
+                    { repoRoot: dispatched.worktreePath, repoNwo: repo.fullNwo, issueNumber: dispatched.issueNumber },
+                    `🤖 **DC Super-Agent**: ✅ Verificación determinista superada con éxito (exit code 0). Preparando entrega de Pull Request...`,
+                  );
 
                   // 4. Entrega final a GitHub (Commit, Push, PR y comentario vinculante)
                   const deliveryRes = await dcPrDelivery.deliverIssue({
@@ -210,6 +227,12 @@ export class DcWebhookDaemonManager {
                   status = "failed";
                   error = errorMsg;
                   updateWorktreeOddRoadmap(dispatched.worktreePath, dispatched.taskSlug, "T5", "failed", errorMsg);
+                  // Notificar el fallo en el Issue de GitHub
+                  await dcIssueNotifier.notifyIssue(
+                    { repoRoot: dispatched.worktreePath, repoNwo: repo.fullNwo, issueNumber: dispatched.issueNumber },
+                    `🤖 **DC Super-Agent**: ❌ Se detuvo la ejecución autónoma: ${errorMsg}. Se requiere intervención en el Centro de Control.`,
+                    "DISPATCH",
+                  );
                   if (ctx) {
                     dcNotifier.notify(ctx, "DC Super-Agent", `Error en superagente Issue #${issue.number}: ${errorMsg}`, "error");
                     // Elevación interactiva mediante modal visual si hay UI activa

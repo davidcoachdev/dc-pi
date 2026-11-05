@@ -36,7 +36,7 @@
     "typecheck": "tsc --noEmit",
     "quality-ratchet": "node scripts/dc-quality-ratchet.mjs",
     "build": "tsc",
-    "test": "npm run build && node --test --test-force-exit '.test-build/test/**/*.test.js'"
+    "test": "npm run build && node --experimental-test-module-mocks --test --test-force-exit '.test-build/test/**/*.test.js'"
   },
   "peerDependencies": {
     "@earendil-works/pi-ai": "*",

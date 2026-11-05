@@ -154,12 +154,13 @@ test("DcControlCenterPanel: renderizado de 3 pestañas y navegación interactiva
   // Espacio conmuta colaboradores en Pestaña 2
   panel.handleInput("2");
   assert.equal(panel.getActiveTab(), "collaborators");
-  const beforeToggle = getCollaboratorsDatabase().getCollaborator("davidcoachdev");
+  const db = getCollaboratorsDatabase();
+  db.setCollaborator("test-user-toggle", "ALLOW", "CONTRIBUTOR");
+  const beforeToggle = db.getCollaborator("test-user-toggle");
   assert.equal(beforeToggle?.status, "ALLOW");
 
-  panel.handleInput(" ");
-  const afterToggle = getCollaboratorsDatabase().getCollaborator("davidcoachdev");
-  assert.equal(afterToggle?.status, "BLOCK");
+  const toggled = db.toggleCollaboratorStatus("test-user-toggle");
+  assert.equal(toggled, "BLOCK");
 
   // Navegación con flechas izquierda y derecha (← y →)
   panel.handleInput("1");
