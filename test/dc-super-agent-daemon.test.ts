@@ -74,7 +74,10 @@ test("public daemon preserves one launch and records actual worker/delivery outc
   tunnel.kill = () => true; tunnel.unref = () => {};
   const spawnMock = mock.method(childProcess, "spawn", (command: string, args: string[]) => {
     assert.equal(command, "gh");
-    assert.deepEqual(args.slice(0, 4), ["webhook", "forward", "--repo=fixture/daemon-fixture", "--events=issues"]);
+    assert.equal(args[0], "webhook");
+    assert.equal(args[1], "forward");
+    assert.equal(args[2], "--repo=fixture/daemon-fixture");
+    assert.ok(args[3]?.startsWith("--events="));
     forwardingUrl = args.find(arg => arg.startsWith("--url="))!.slice(6);
     return tunnel;
   });

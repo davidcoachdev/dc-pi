@@ -1,5 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
+import * as os from "node:os";
 import { getCollaboratorsDatabase } from "./dc-collaborators-db.ts";
 import { dcIssueDispatcher } from "./dc-issue-dispatcher.ts";
 import { dcIssueNotifier } from "./dc-issue-notifier.ts";
@@ -61,9 +62,21 @@ export class DcIssueCommentRouter {
       message: `Comentario recibido del OWNER en Issue #${issueNumber}: "${commentBody.slice(0, 80)}"`,
     });
 
-    const dispatch = dcIssueDispatcher.getDispatch(repoNwo, issueNumber);
+    let dispatch = dcIssueDispatcher.getDispatch(repoNwo, issueNumber);
+    let worktreePath = dispatch?.worktreePath;
+    let branchName = dispatch?.branchName || `feat/issue-${issueNumber}-ghissue1`;
+    let taskSlug = dispatch?.taskSlug || `issue-${issueNumber}`;
+
+    // Si el mapa en memoria se reinició o no lo encuentra, buscar en disco en la ruta canónica de worktrees
+    if (!worktreePath) {
+      const candidatePath = path.join(os.homedir(), ".pi", "agent", "dc-studio", "worktrees", "dc-pi", `issue-${issueNumber}-ghissue1`);
+      if (fs.existsSync(candidatePath)) {
+        worktreePath = candidatePath;
+      }
+    }
+
     const target = {
-      repoRoot: dispatch?.worktreePath || process.cwd(),
+      repoRoot: worktreePath || process.cwd(),
       repoNwo,
       issueNumber,
     };
@@ -88,8 +101,8 @@ export class DcIssueCommentRouter {
     // ── 3. Comando de Estado: "¿Cómo vamos?" / "/dc status" / "estado" ──
     if (cleanMsg.includes("como vamos") || cleanMsg.includes("cómo vamos") || cleanMsg.startsWith("/dc status") || cleanMsg === "estado") {
       let statusDetails = "No hay un worktree activo para este issue en este momento.";
-      if (dispatch) {
-        const specFile = path.join(dispatch.worktreePath, "odd", "tasks", `${dispatch.taskSlug}.md`);
+      if (worktreePath) {
+        const specFile = path.join(worktreePath, "odd", "tasks", `${taskSlug}.md`);
         let roadmapProgress = "Inicializando...";
         if (fs.existsSync(specFile)) {
           const content = fs.readFileSync(specFile, "utf8");
@@ -99,13 +112,13 @@ export class DcIssueCommentRouter {
           }
         }
 
-        const gitStatus = await dcWorkerRunner.runInWorktree(dispatch.worktreePath, "git", ["status", "--porcelain"], { timeoutMs: 5000 });
+        const gitStatus = await dcWorkerRunner.runInWorktree(worktreePath, "git", ["status", "--porcelain"], { timeoutMs: 5000 });
         const modifiedFiles = gitStatus.stdout
           ? gitStatus.stdout.split("\n").map(l => l.trim()).filter(Boolean)
           : [];
 
         statusDetails = [
-          `**Rama de trabajo**: \`${dispatch.branchName}\``,
+          `**Rama de trabajo**: \`${branchName}\``,
           `**Progreso de Hoja de Ruta ODD**:`,
           `- ${roadmapProgress}`,
           `**Archivos tocados hasta ahora (${modifiedFiles.length})**:`,
@@ -121,8 +134,8 @@ export class DcIssueCommentRouter {
     // ── 4. Comando de Diff: "¿Qué archivos has tocado?" / "/dc diff" ──
     if (cleanMsg.includes("que archivos") || cleanMsg.includes("qué archivos") || cleanMsg.startsWith("/dc diff")) {
       let diffDetails = "Sin worktree activo.";
-      if (dispatch) {
-        const stat = await dcWorkerRunner.runInWorktree(dispatch.worktreePath, "git", ["status", "--short"], { timeoutMs: 5000 });
+      if (worktreePath) {
+        const stat = await dcWorkerRunner.runInWorktree(worktreePath, "git", ["status", "--short"], { timeoutMs: 5000 });
         diffDetails = stat.stdout ? `\`\`\`text\n${stat.stdout}\n\`\`\`` : "El árbol de trabajo está limpio actualmente.";
       }
       const reply = `🤖 **DC Super-Agent**: Archivos modificados en el worktree:\n\n${diffDetails}`;
@@ -133,8 +146,8 @@ export class DcIssueCommentRouter {
     // ── 5. Directiva de Alcance: Añadir requerimiento al ODD ──
     if (cleanMsg.startsWith("añade") || cleanMsg.startsWith("anade") || cleanMsg.startsWith("agrega") || cleanMsg.startsWith("/dc add")) {
       const instruction = commentBody.replace(/^(?:añade|anade|agrega|\/dc add)[:\s]*/i, "").trim();
-      if (dispatch && instruction) {
-        const specFile = path.join(dispatch.worktreePath, "odd", "tasks", `${dispatch.taskSlug}.md`);
+      if (worktreePath && instruction) {
+        const specFile = path.join(worktreePath, "odd", "tasks", `${taskSlug}.md`);
         if (fs.existsSync(specFile)) {
           fs.appendFileSync(specFile, `\n- Directiva adicional del OWNER (@${authorLogin}): "${instruction}"\n`, "utf8");
         }
