@@ -1,6 +1,7 @@
 import * as http from "node:http";
 import { timingSafeEqual } from "node:crypto";
 import type { GitHubIssuePayload } from "./dc-issue-dispatcher.ts";
+import type { GitHubIssueCommentPayload } from "./dc-issue-comment-types.ts";
 
 export interface WebhookReceiverOptions {
   port?: number;
@@ -8,6 +9,7 @@ export interface WebhookReceiverOptions {
   host?: string;
   expectedRepoNwo?: string; // ej: "davidcoachdev/dc-pi"
   onIssueOpened?: (payload: GitHubIssuePayload) => void | Promise<void>;
+  onIssueCommentCreated?: (payload: GitHubIssueCommentPayload) => void | Promise<void>;
   onError?: (err: Error) => void;
   onLog?: (msg: string) => void;
 }
@@ -178,6 +180,31 @@ export class DcWebhookReceiver {
               status: "accepted",
               issue: payload.issue?.number,
               title: payload.issue?.title,
+            }));
+            return;
+          }
+        }
+
+        // Evento de Comentarios en Issues (Full-Duplex Router)
+        if (eventType === "issue_comment" && payload.comment && payload.issue) {
+          const action = payload.action;
+          if (action === "created") {
+            try {
+              const resCallback = this.options.onIssueCommentCreated?.(payload as GitHubIssueCommentPayload);
+              if (resCallback && typeof (resCallback as any).catch === "function") {
+                (resCallback as Promise<void>).catch((cbErr) => {
+                  this.options.onError?.(cbErr);
+                });
+              }
+            } catch (syncErr: any) {
+              this.options.onError?.(syncErr);
+            }
+
+            res.writeHead(202, { "Content-Type": "application/json" });
+            res.end(JSON.stringify({
+              status: "accepted_comment",
+              issue: payload.issue?.number,
+              commentId: payload.comment?.id,
             }));
             return;
           }
