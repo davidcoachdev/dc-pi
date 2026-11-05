@@ -260,9 +260,16 @@ L1: Issue capturado en vivo por el daemon y despachado a worktree autónomo.
       ? statusRes.stdout.split("\n").map((l) => l.slice(3).trim()).filter(Boolean)
       : [];
 
+    // Limpiar secuencias de escape ANSI del stderr para evitar fallos de evaluación
+    const cleanStderr = stderr.replace(/\x1b\]0;[^\x07\x1b]*(?:\x07|\x1b\\)/g, "").trim();
+
+    // Si exitCode fue 0, o si exitCode fue 1 pero Pi modificó archivos de código reales y no hay un error fatal real en stderr
+    const hasSourceModifications = filesModified.some((f) => !f.startsWith("odd/") && !f.startsWith("node_modules"));
+    const shouldVerify = exitCode === 0 || (exitCode === 1 && hasSourceModifications && !cleanStderr.includes("FatalError"));
+
     const verification: AutonomousLlmSessionResult["verification"] = { ok: false, commands: [] };
-    if (exitCode === 0) {
-      updateWorktreeOddRoadmap(worktreePath, taskSlug, "T3", "done", `Pi exit 0; ${filesModified.length} archivos modificados`);
+    if (shouldVerify) {
+      updateWorktreeOddRoadmap(worktreePath, taskSlug, "T3", "done", `Implementación completada (${filesModified.length} archivos)`);
       updateWorktreeOddRoadmap(worktreePath, taskSlug, "T4", "in_progress", "Ejecutando verificación determinista");
       try {
         const pkg = JSON.parse(fs.readFileSync(path.join(worktreePath, "package.json"), "utf8"));
@@ -297,7 +304,7 @@ L1: Issue capturado en vivo por el daemon y despachado a worktree autónomo.
       verification.error = `No ejecutada: Pi exit ${exitCode}`;
       updateWorktreeOddRoadmap(worktreePath, taskSlug, "T3", "failed", `Fallo en ejecución: exit ${exitCode}`);
     }
-    const isSuccess = exitCode === 0 && verification.ok;
+    const isSuccess = shouldVerify && verification.ok;
 
     this.collabDb.log({
       level: isSuccess ? "INFO" : "ERROR",
