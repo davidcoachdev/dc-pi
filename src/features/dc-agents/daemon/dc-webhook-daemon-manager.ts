@@ -9,6 +9,7 @@ import { promptApprovalModal } from "../../dc-approval/views/dc-approval-modal.t
 import { dcPrDelivery } from "./dc-pr-delivery.ts";
 import { dcWorkerRunner, updateWorktreeOddRoadmap } from "./dc-worker-runner.ts";
 import { dcIssueNotifier } from "./dc-issue-notifier.ts";
+import { dcIssueCommentRouter } from "./dc-issue-comment-router.ts";
 import { prepareEphemeralAgent, cleanupEphemeralAgent } from "../core/dc-ephemeral-manager.ts";
 
 export interface DaemonStatus {
@@ -60,6 +61,9 @@ export class DcWebhookDaemonManager {
         capability,
         expectedRepoNwo: repo.fullNwo,
         onIssueOpened: (payload) => this.executeIssue(payload, repo, ctx),
+        onIssueCommentCreated: async (payload) => {
+          await dcIssueCommentRouter.handleComment(payload);
+        },
         onError: (err) => {
           if (ctx) {
             dcNotifier.notify(ctx, "DC Webhook Daemon", `Error receptor: ${err.message}`, "error");
@@ -270,7 +274,7 @@ export class DcWebhookDaemonManager {
 
   private startTunnel(repoNwo: string, port: number, capability: string, ctx?: ExtensionContext): void {
     const url = `http://127.0.0.1:${port}/github-webhook?capability=${capability}`;
-    const args = ["webhook", "forward", `--repo=${repoNwo}`, "--events=issues", `--url=${url}`];
+    const args = ["webhook", "forward", `--repo=${repoNwo}`, "--events=issues,issue_comment", `--url=${url}`];
 
     try {
       const child = spawn("gh", args, {
