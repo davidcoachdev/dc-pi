@@ -1,5 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import {
   EngramPanel,
@@ -11,13 +14,38 @@ import {
   openEngramExplorer,
 } from "../src/features/dc-engram/index.ts";
 
-test("dc-engram: resolveEngramProjectName prioritizes explicit parameter, env var, git identity and fallback", () => {
-  assert.equal(resolveEngramProjectName("custom-proj"), "custom-proj");
+test("dc-engram: resolveEngramProjectName prioritizes explicit parameter, env var, git identity and fallback", (t) => {
+  const fixture = fs.mkdtempSync(path.join(os.tmpdir(), "dc-engram-identity-"));
+  t.after(() => fs.rmSync(fixture, { recursive: true, force: true }));
+  const repo = path.join(fixture, "fixture-repository");
+  const nested = path.join(repo, "src", "nested");
+  const gitDir = path.join(repo, ".git");
+  const identity = path.join(gitDir, "engram-project-identity.json");
+  const plain = path.join(fixture, "plain-directory");
+  fs.mkdirSync(nested, { recursive: true });
+  fs.mkdirSync(gitDir);
+  fs.mkdirSync(plain);
+  fs.writeFileSync(identity, JSON.stringify({ project: "identity-project" }));
+  fs.mkdirSync(path.join(repo, ".engram"));
+  const config = path.join(repo, ".engram", "config.json");
+  fs.writeFileSync(config, JSON.stringify({ project: "config-project" }));
 
   const origEnv = process.env.ENGRAM_PROJECT;
+  let repoFallback: string;
+  let configFallback: string;
+  let plainFallback: string;
   try {
     process.env.ENGRAM_PROJECT = "env-proj";
-    assert.equal(resolveEngramProjectName(), "env-proj");
+    assert.equal(resolveEngramProjectName("custom-proj", nested), "custom-proj");
+    assert.equal(resolveEngramProjectName(undefined, nested), "env-proj");
+    delete process.env.ENGRAM_PROJECT;
+    assert.equal(resolveEngramProjectName(undefined, nested), "identity-project");
+
+    fs.unlinkSync(identity);
+    configFallback = resolveEngramProjectName(undefined, nested);
+    fs.unlinkSync(config);
+    repoFallback = resolveEngramProjectName(undefined, nested);
+    plainFallback = resolveEngramProjectName(undefined, plain);
   } finally {
     if (origEnv !== undefined) {
       process.env.ENGRAM_PROJECT = origEnv;
@@ -26,9 +54,10 @@ test("dc-engram: resolveEngramProjectName prioritizes explicit parameter, env va
     }
   }
 
-  // En el directorio actual (dc-pi), detecta .git/engram-project-identity.json o git root
-  const detected = resolveEngramProjectName(undefined, process.cwd());
-  assert.equal(detected, "dc-pi");
+  assert.equal(process.env.ENGRAM_PROJECT, origEnv);
+  assert.equal(configFallback, "config-project");
+  assert.equal(repoFallback, path.basename(repo));
+  assert.equal(plainFallback, path.basename(plain));
 });
 
 test("dc-engram: getProjectObservations reads observations with optional project filter", () => {

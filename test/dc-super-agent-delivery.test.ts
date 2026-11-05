@@ -3,11 +3,17 @@ import assert from "node:assert/strict";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import {
-  dcWorkerRunner,
-  updateWorktreeOddRoadmap,
-} from "../src/features/dc-agents/daemon/dc-worker-runner.ts";
-import { DcPrDelivery } from "../src/features/dc-agents/daemon/dc-pr-delivery.ts";
+const home = fs.mkdtempSync(path.join(os.tmpdir(), "dc-delivery-home-"));
+process.env.HOME = home;
+process.env.XDG_CONFIG_HOME = path.join(home, "xdg");
+process.env.PI_CODING_AGENT_DIR = path.join(home, "pi");
+const { dcWorkerRunner, updateWorktreeOddRoadmap } = await import("../src/features/dc-agents/daemon/dc-worker-runner.ts");
+const { DcPrDelivery } = await import("../src/features/dc-agents/daemon/dc-pr-delivery.ts");
+const { getCollaboratorsDatabase } = await import("../src/features/dc-agents/daemon/dc-collaborators-db.ts");
+test.after(() => {
+  getCollaboratorsDatabase().close();
+  fs.rmSync(home, { recursive: true, force: true });
+});
 
 test("dc-worker-runner: runInWorktree ejecuta comandos y captura salida con código 0", async () => {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "dc-worktree-test-"));
@@ -93,8 +99,13 @@ test("dc-pr-delivery: deliverIssue estructura y ejecuta el ciclo de entrega a Gi
   const delivery = new DcPrDelivery();
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "dc-delivery-test-"));
 
+  const originalRun = dcWorkerRunner.runInWorktree;
+  const calls: string[] = [];
+  dcWorkerRunner.runInWorktree = async (_cwd, command, args) => {
+    calls.push(`${command} ${args.join(" ")}`);
+    return { stdout: "", stderr: "isolated git failure", exitCode: 1 };
+  };
   try {
-    // Si no es un repo git con remote origin, falla limpiamente sin lanzar excepciones no controladas
     const res = await delivery.deliverIssue({
       worktreePath: tmpDir,
       taskSlug: "issue-123",
@@ -107,7 +118,9 @@ test("dc-pr-delivery: deliverIssue estructura y ejecuta el ciclo de entrega a Gi
     assert.equal(res.ok, false);
     assert.ok(res.error);
     assert.ok(res.error?.includes("git"));
+    assert.deepEqual(calls, ["git add ."]);
   } finally {
+    dcWorkerRunner.runInWorktree = originalRun;
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
 });

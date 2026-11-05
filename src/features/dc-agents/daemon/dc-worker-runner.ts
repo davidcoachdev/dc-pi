@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
+import type { EphemeralAgentLaunchPlan } from "../core/dc-ephemeral-manager.ts";
 import type { DispatchedIssueTask } from "./dc-issue-dispatcher.ts";
 import { getCollaboratorsDatabase } from "./dc-collaborators-db.ts";
 
@@ -16,6 +17,7 @@ export interface AutonomousLlmSessionOptions {
   issueBody: string;
   model?: string; // Opcional: si se omite, Pi resuelve automáticamente su modelo de taxi o configuración
   askHumanCliPath?: string;
+  preparedAgent?: Pick<EphemeralAgentLaunchPlan, "agentFilePath" | "tools" | "effectiveEffort" | "fullModelRef">;
 }
 
 export interface AutonomousLlmSessionResult {
@@ -24,6 +26,11 @@ export interface AutonomousLlmSessionResult {
   stderr: string;
   exitCode: number;
   filesModified: string[];
+  verification: {
+    ok: boolean;
+    commands: { command: string; args: string[]; stdout: string; stderr: string; exitCode: number }[];
+    error?: string;
+  };
 }
 
 export type OddTaskStatus = "done" | "in_progress" | "pending" | "failed";
@@ -189,9 +196,8 @@ L1: Issue capturado en vivo por el daemon y despachado a worktree autónomo.
 
   /**
    * Ejecuta una sesión de LLM autónoma y desatendida mediante el CLI de Pi (`pi -p`).
-   * Corre dentro de `worktreePath` con el modelo del Taxi arrendado, herramientas completas
-   * (read, write, edit, bash, subagentes/becarios), y la capacidad de consultar al humano
-   * ante dudas mediante dc-ask-human.
+   * Corre dentro de `worktreePath` con el modelo del Taxi y la configuración preparada.
+   * Un turno exitoso de Pi no sustituye la verificación determinista posterior.
    */
   public async executeAutonomousLlmSession(options: AutonomousLlmSessionOptions): Promise<AutonomousLlmSessionResult> {
     const {
@@ -207,7 +213,7 @@ L1: Issue capturado en vivo por el daemon y despachado a worktree autónomo.
     const askHelper = askHumanCliPath || path.resolve(__dirname, "dc-ask-human-cli.ts");
 
     const promptInstructions = [
-      `Eres dc-super-agente, el superagente autónomo de DC Studio con acceso a tus becarios y herramientas.`,
+      `Eres dc-super-agente, el superagente autónomo de DC Studio. Usa exclusivamente tus herramientas asignadas.`,
       `Tu misión es resolver de principio a fin el Issue #${issueNumber}: "${issueTitle}".`,
       "",
       `## Requerimiento original:`,
@@ -220,19 +226,28 @@ L1: Issue capturado en vivo por el daemon y despachado a worktree autónomo.
       `## Directivas obligatorias:`,
       `1. Lee los archivos relevantes con 'read' antes de modificarlos.`,
       `2. Implementa la solución editando o creando archivos de código real y tests con 'edit'/'write'.`,
-      `3. Si necesitas investigar bibliotecas o documentación, puedes desplegar a tus becarios con 'dc_research_swarm' o 'dc_ephemeral_agent_run'.`,
+      `3. Investiga únicamente con las herramientas asignadas; no supongas acceso a otras herramientas.`,
       `4. Si tienes una DUDA DE DISEÑO o necesitas una DECISIÓN DEL HUMANO, NO ADIVINES: ejecuta con bash:`,
       `   node "${askHelper}" --issue=${issueNumber} --context="Explica qué archivos viste y qué dudas tienes" --question="¿Pregunta?" --options="Opción A|Opción B"`,
       `   El humano verá tu pregunta en una ventana modal interactiva y te enviará su respuesta o indicación de texto libre.`,
-      `5. Ejecuta las pruebas deterministas con bash ('npm test' o 'npm run typecheck').`,
+      `5. Ejecuta las pruebas deterministas disponibles usando el gestor del lockfile del proyecto.`,
       `6. Cuando todo esté verificado con exit code 0, concluye tu turno resumiendo los archivos modificados.`,
     ].join("\n");
 
     const args: string[] = [];
-    if (model) {
-      args.push("--model", model);
+    const prepared = options.preparedAgent;
+    const executionModel = prepared?.fullModelRef || model;
+    if (executionModel) args.push("--model", executionModel);
+    if (prepared) {
+      const definition = fs.readFileSync(prepared.agentFilePath, "utf8");
+      const body = definition.replace(/^---\r?\n[\s\S]*?\r?\n---(?:\r?\n|$)/, "").trim();
+      if (!body || body === definition.trim()) throw new Error("Invalid prepared agent definition: missing frontmatter or system body");
+      args.push("--append-system-prompt", body, "--thinking", prepared.effectiveEffort);
+      if (prepared.tools.length) args.push("--tools", prepared.tools.join(","));
+      else args.push("--no-tools");
     }
     args.push("-p", promptInstructions, "--no-session");
+    updateWorktreeOddRoadmap(worktreePath, taskSlug, "T4", "pending", "Esperando ejecución y verificación real");
 
     updateWorktreeOddRoadmap(worktreePath, taskSlug, "T3", "in_progress", "dc-super-agente programando en worktree");
 
@@ -244,21 +259,51 @@ L1: Issue capturado en vivo por el daemon y despachado a worktree autónomo.
       ? statusRes.stdout.split("\n").map((l) => l.slice(3).trim()).filter(Boolean)
       : [];
 
-    const isSuccess = exitCode === 0;
-
-    if (isSuccess) {
-      updateWorktreeOddRoadmap(worktreePath, taskSlug, "T3", "done", `${filesModified.length} archivos modificados`);
-      updateWorktreeOddRoadmap(worktreePath, taskSlug, "T4", "done", "Verificación determinista superada");
+    const verification: AutonomousLlmSessionResult["verification"] = { ok: false, commands: [] };
+    if (exitCode === 0) {
+      updateWorktreeOddRoadmap(worktreePath, taskSlug, "T3", "done", `Pi exit 0; ${filesModified.length} archivos modificados`);
+      updateWorktreeOddRoadmap(worktreePath, taskSlug, "T4", "in_progress", "Ejecutando verificación determinista");
+      try {
+        const pkg = JSON.parse(fs.readFileSync(path.join(worktreePath, "package.json"), "utf8"));
+        const managers = [
+          { command: "pnpm", locks: ["pnpm-lock.yaml"] },
+          { command: "bun", locks: ["bun.lock", "bun.lockb"] },
+          { command: "yarn", locks: ["yarn.lock"] },
+          { command: "npm", locks: ["package-lock.json", "npm-shrinkwrap.json"] },
+        ].filter(m => m.locks.some(lock => fs.existsSync(path.join(worktreePath, lock))));
+        if (managers.length > 1) throw new Error("Lockfiles de distintos gestores: verificación ambigua");
+        const command = managers[0]?.command || "npm";
+        const scripts = pkg.scripts || {};
+        const names = ["typecheck", scripts.test ? "test" : "test:unit"].filter(name => {
+          const script = scripts[name];
+          return typeof script === "string" && script.trim() &&
+            !/no test specified/i.test(script) && !/^(?:echo\b|true\b|exit\b|:)/.test(script.trim());
+        });
+        if (!names.length) throw new Error("Sin comandos de verificación aplicables (typecheck/test/test:unit)");
+        for (const name of names) {
+          const args = ["run", name];
+          const result = await this.runInWorktree(worktreePath, command, args);
+          verification.commands.push({ command, args, ...result });
+          if (result.exitCode !== 0) break;
+        }
+        verification.ok = verification.commands.every(result => result.exitCode === 0);
+      } catch (error) {
+        verification.error = error instanceof Error ? error.message : String(error);
+      }
+      const evidence = verification.commands.map(r => `${r.command} ${r.args.join(" ")}: exit ${r.exitCode}`).join("; ");
+      updateWorktreeOddRoadmap(worktreePath, taskSlug, "T4", verification.ok ? "done" : "failed", evidence || verification.error);
     } else {
+      verification.error = `No ejecutada: Pi exit ${exitCode}`;
       updateWorktreeOddRoadmap(worktreePath, taskSlug, "T3", "failed", `Fallo en ejecución: exit ${exitCode}`);
     }
+    const isSuccess = exitCode === 0 && verification.ok;
 
     this.collabDb.log({
       level: isSuccess ? "INFO" : "ERROR",
       category: "DISPATCH",
       actor: "dc-super-agent",
-      message: `Sesión LLM autónoma terminada con código ${exitCode} (${filesModified.length} archivos)`,
-      metadata: JSON.stringify({ exitCode, filesModified }),
+      message: `Sesión LLM: Pi exit ${exitCode}; verificación ${verification.ok ? "superada" : "no superada"} (${filesModified.length} archivos)`,
+      metadata: JSON.stringify({ exitCode, filesModified, verification }),
     });
 
     return {
@@ -267,6 +312,7 @@ L1: Issue capturado en vivo por el daemon y despachado a worktree autónomo.
       stderr,
       exitCode,
       filesModified,
+      verification,
     };
   }
 }

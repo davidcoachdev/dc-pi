@@ -72,7 +72,7 @@ export function registerWebhookDaemonCommands(pi: ExtensionAPI): void {
     try {
       const pending = dcRemoteQuestionManager.getPendingQuestions();
       if (pending.length > 0) {
-        const activeCtx = (globalThis as any)[Symbol.for("dc.sidebar.active-ctx")];
+        const activeCtx = (globalThis as any)[Symbol.for("dc.sidebar.ctx")];
         if (activeCtx && activeCtx.hasUI && activeCtx.mode === "tui") {
           const q = pending[0]!;
           await promptAgentQuestionModal(activeCtx, q);

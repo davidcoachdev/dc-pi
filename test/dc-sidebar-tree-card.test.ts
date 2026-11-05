@@ -56,6 +56,7 @@ test("DcProjectTreeCard renders tree lines connecting parent with children and i
 
   // Verificar título de tarjeta
   const card = createProjectTreeCard(cwd);
-  const cardLines = card.render(60).map((l) => l.replace(/\x1b\[[0-9;]*m/g, ""));
-  assert.ok(cardLines.some((l) => l.includes("PROYECTO - dc-pi")), "Must render PROYECTO - <name> card title");
+  const title = `PROYECTO - ${path.basename(cwd) || "workspace"}`;
+  const cardLines = card.render(Math.max(60, title.length + 20)).map((l) => l.replace(/\x1b\[[0-9;]*m/g, ""));
+  assert.ok(cardLines.some((l) => l.includes(title)), "Must render PROYECTO - <name> card title");
 });

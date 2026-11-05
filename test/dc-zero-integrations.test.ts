@@ -40,7 +40,7 @@ test("classifyNativeToolScan and handleToolCall block root scans on grep and fin
   // 2. handleToolCall hook en pi
   const eventGrepBlocked = handleToolCall({
     toolName: "grep",
-    input: { path: "/home/dc-studio", pattern: "cmd/gentle-ai" },
+    input: { path: os.homedir(), pattern: "cmd/gentle-ai" },
   });
   assert.ok(eventGrepBlocked?.block);
   assert.match(eventGrepBlocked.reason, /dc-scan-guard/);
@@ -116,8 +116,23 @@ test("classifyShellCommand blocks destructive rm -rf on roots and global wildcar
   const rmSlashStarStar = classifyShellCommand("rm -fr /**");
   assert.equal(rmSlashStarStar.block, true);
 
-  const rmWildcardRoot = classifyShellCommand("rm -rf /home/dc-studio");
-  assert.equal(rmWildcardRoot.block, true);
+  // Classify strings only: no shell command is executed. Keep HOME whitespace-free
+  // because the current classifier splits shell tokens on whitespace.
+  const originalHome = process.env.HOME;
+  let rmConcreteHome: ReturnType<typeof classifyShellCommand>;
+  try {
+    process.env.HOME = "/dc-scan-guard-fixture-home";
+    rmConcreteHome = classifyShellCommand(`rm -rf ${os.homedir()}`);
+  } finally {
+    if (originalHome === undefined) {
+      delete process.env.HOME;
+    } else {
+      process.env.HOME = originalHome;
+    }
+  }
+  assert.equal(process.env.HOME, originalHome);
+  assert.equal(rmConcreteHome.block, true);
+  assert.match(rmConcreteHome.reason!, /destructivo/);
 
   // Safe scoped removals
   const safeRmBuild = classifyShellCommand("rm -rf .test-build");

@@ -145,6 +145,7 @@ export function syncDcAgents(
         }
 
         if (needsWrite) {
+          fs.mkdirSync(path.dirname(targetSubagentsJson), { recursive: true });
           fs.writeFileSync(targetSubagentsJson, srcContent, "utf8");
           result.synced.push("subagents.json");
         } else {

@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import { spawn, type ChildProcess } from "node:child_process";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { dcNotifier } from "../../../integrations/dc-notify/dc-notifier.ts";
@@ -51,9 +52,11 @@ export class DcWebhookDaemonManager {
     // 1. Detener instancias previas si existían
     await this.stop();
 
+    const capability = randomBytes(32).toString("hex");
     // 2. Iniciar el receptor HTTP local
       this.receiver = new DcWebhookReceiver({
         port: 4545,
+        capability,
         expectedRepoNwo: repo.fullNwo,
         onIssueOpened: async (payload) => {
           const issue = payload.issue;
@@ -102,7 +105,10 @@ export class DcWebhookDaemonManager {
               // Disparo autónomo en segundo plano del superagente con Taxi de Flota
               void (async () => {
                 let ephemeralPlan: ReturnType<typeof prepareEphemeralAgent> | undefined;
-                const workerSessionId = `dc-super-agent-issue-${issue.number}-${Date.now()}`;
+                const startedAt = Date.now();
+                const workerSessionId = `dc-super-agent-issue-${issue.number}-${startedAt}`;
+                let status: "completed" | "failed" = "failed";
+                let error: string | undefined;
 
                 try {
                   // 1. Arrendar Taxi en la Flota y preparar definición de DC Super-Agent con contrato estricto de Allowed edit surfaces
@@ -133,7 +139,7 @@ export class DcWebhookDaemonManager {
                   );
 
                   const taxiAc = ephemeralPlan.leasedAccount.toUpperCase();
-                  const workerMsg = `🚕 Taxi [${taxiAc}] asignado a dc-super-agente y sus becarios para Issue #${issue.number}`;
+                  const workerMsg = `🚕 Taxi [${taxiAc}] asignado a dc-super-agente para Issue #${issue.number}`;
                   dcNotifier.notifyHerdr(workerMsg);
                   if (ctx) {
                     dcNotifier.notify(ctx, "🚕 Flota de Taxis", workerMsg, "info");
@@ -149,32 +155,21 @@ export class DcWebhookDaemonManager {
                     issueNumber: dispatched.issueNumber,
                     issueTitle: dispatched.issueTitle,
                     issueBody: issue.body || "",
-                    model: ephemeralPlan.fullModelRef,
+                    preparedAgent: ephemeralPlan,
                   });
 
                   if (!llmResult.ok) {
-                    throw new Error(`El superagente no pudo completar la resolución (exit code ${llmResult.exitCode}): ${llmResult.stderr}`);
+                    if (llmResult.exitCode !== 0) {
+                      throw new Error(`Pi exit ${llmResult.exitCode}: ${llmResult.stderr}`);
+                    }
+                    const failedCommand = llmResult.verification.commands.find(result => result.exitCode !== 0);
+                    const reason = failedCommand
+                      ? `${failedCommand.command} ${failedCommand.args.join(" ")}: exit ${failedCommand.exitCode}; ${failedCommand.stderr || failedCommand.stdout}`
+                      : llmResult.verification.error || "Sin verificación determinista aprobada";
+                    throw new Error(`Verificación fallida: ${reason}`);
                   }
 
-                  // 3. Detectar la rama base por defecto del repositorio raíz (ej: origin/HEAD -> master o main)
-                  let baseBranch = "master";
-                  try {
-                    const { execFile } = await import("node:child_process");
-                    const { promisify } = await import("node:util");
-                    const execAsync = promisify(execFile);
-                    // 1. Intentar resolver la rama por defecto desde origin/HEAD
-                    const { stdout: symRef } = await execAsync("git", ["-C", repo.repoRoot, "symbolic-ref", "refs/remotes/origin/HEAD"]).catch(() => ({ stdout: "" }));
-                    const cleanRef = symRef.trim().replace(/^refs\/remotes\/origin\//, "");
-                    if (cleanRef) {
-                      baseBranch = cleanRef;
-                    } else {
-                      // 2. Fallback a la rama activa en el repo raíz
-                      const { stdout: rootBranch } = await execAsync("git", ["-C", repo.repoRoot, "branch", "--show-current"]).catch(() => ({ stdout: "" }));
-                      if (rootBranch.trim()) baseBranch = rootBranch.trim();
-                    }
-                  } catch {
-                    /* fallback defensivo a master */
-                  }
+                  // Creation and delivery share the issue's resolved base, never the user's feature branch.
 
                   // 4. Entrega final a GitHub (Commit, Push, PR y comentario vinculante)
                   const deliveryRes = await dcPrDelivery.deliverIssue({
@@ -183,26 +178,23 @@ export class DcWebhookDaemonManager {
                     issueNumber: dispatched.issueNumber,
                     issueTitle: dispatched.issueTitle,
                     branchName: dispatched.branchName,
-                    baseBranch,
+                    baseBranch: dispatched.baseBranch,
                   });
 
-                  if (deliveryRes.ok && ctx) {
+                  if (!deliveryRes.ok) throw new Error(deliveryRes.error || "Entrega de PR fallida");
+                  status = "completed";
+                  if (ctx) {
                     dcNotifier.notify(
                       ctx,
                       "DC Super-Agent",
                       `🎉 Pull Request lista para Issue #${issue.number}: ${deliveryRes.prUrl}`,
                       "info",
                     );
-                  } else if (!deliveryRes.ok && ctx) {
-                    dcNotifier.notify(
-                      ctx,
-                      "DC Super-Agent",
-                      `⚠️ Fallo en entrega de PR para Issue #${issue.number}: ${deliveryRes.error}`,
-                      "warning",
-                    );
                   }
                 } catch (workerErr: any) {
-                  const errorMsg = workerErr?.message || "Error en entrega";
+                  const errorMsg = workerErr?.message || String(workerErr);
+                  status = "failed";
+                  error = errorMsg;
                   updateWorktreeOddRoadmap(dispatched.worktreePath, dispatched.taskSlug, "T5", "failed", errorMsg);
                   if (ctx) {
                     dcNotifier.notify(ctx, "DC Super-Agent", `Error en superagente Issue #${issue.number}: ${errorMsg}`, "error");
@@ -213,7 +205,7 @@ export class DcWebhookDaemonManager {
                         toolName: "DC Super-Agent Runner",
                         action: `Atender bloqueo/fallo en Issue #${issue.number}`,
                         target: issue.title,
-                        reason: `El subagente se detuvo: ${errorMsg}. ¿Reintentar o continuar manualmente?`,
+                        reason: `El subagente se detuvo: ${errorMsg}. Continúa manualmente; este aviso no reintenta la ejecución.`,
                         timestamp: Date.now(),
                       }).catch(() => {});
                     }
@@ -223,9 +215,10 @@ export class DcWebhookDaemonManager {
                   if (ephemeralPlan) {
                     cleanupEphemeralAgent(ephemeralPlan, {
                       sessionId: workerSessionId,
-                      startedAt: Date.now() - 3000,
+                      startedAt,
                       endedAt: Date.now(),
-                      status: "completed",
+                      status,
+                      error,
                     });
                   }
                 }
@@ -247,13 +240,13 @@ export class DcWebhookDaemonManager {
     const activePort = await this.receiver.start();
 
     // 3. Iniciar el túnel oficial con gh webhook forward
-    this.startTunnel(repo.fullNwo, activePort, ctx);
+    this.startTunnel(repo.fullNwo, activePort, capability, ctx);
 
     return this.getStatus();
   }
 
-  private startTunnel(repoNwo: string, port: number, ctx?: ExtensionContext): void {
-    const url = `http://127.0.0.1:${port}/github-webhook`;
+  private startTunnel(repoNwo: string, port: number, capability: string, ctx?: ExtensionContext): void {
+    const url = `http://127.0.0.1:${port}/github-webhook?capability=${capability}`;
     const args = ["webhook", "forward", `--repo=${repoNwo}`, "--events=issues", `--url=${url}`];
 
     try {
@@ -268,7 +261,7 @@ export class DcWebhookDaemonManager {
           this.isTunnelRunning = false;
         }
         if (ctx) {
-          dcNotifier.notify(ctx, "DC Webhook Tunnel", `Fallo túnel gh: ${err.message}`, "error");
+          dcNotifier.notify(ctx, "DC Webhook Tunnel", "Fallo túnel gh", "error");
         }
       });
 
@@ -285,7 +278,7 @@ export class DcWebhookDaemonManager {
     } catch (err: any) {
       this.isTunnelRunning = false;
       if (ctx) {
-        dcNotifier.notify(ctx, "DC Webhook Tunnel", `No se pudo iniciar gh webhook: ${err.message}`, "error");
+        dcNotifier.notify(ctx, "DC Webhook Tunnel", "No se pudo iniciar gh webhook", "error");
       }
     }
   }
