@@ -186,14 +186,14 @@ export class DcWebhookDaemonManager {
                   });
 
                   if (!llmResult.ok) {
-                    if (llmResult.exitCode !== 0) {
-                      throw new Error(`Pi exit ${llmResult.exitCode}: ${llmResult.stderr}`);
+                    if (!llmResult.verification.ok) {
+                      const failedCommand = llmResult.verification.commands.find(result => result.exitCode !== 0);
+                      const reason = failedCommand
+                        ? `${failedCommand.command} ${failedCommand.args.join(" ")}: exit ${failedCommand.exitCode}; ${failedCommand.stderr || failedCommand.stdout}`
+                        : llmResult.verification.error || "Sin verificación determinista aprobada";
+                      throw new Error(`Verificación fallida: ${reason}`);
                     }
-                    const failedCommand = llmResult.verification.commands.find(result => result.exitCode !== 0);
-                    const reason = failedCommand
-                      ? `${failedCommand.command} ${failedCommand.args.join(" ")}: exit ${failedCommand.exitCode}; ${failedCommand.stderr || failedCommand.stdout}`
-                      : llmResult.verification.error || "Sin verificación determinista aprobada";
-                    throw new Error(`Verificación fallida: ${reason}`);
+                    throw new Error(`Pi exit ${llmResult.exitCode}: ${llmResult.stderr}`);
                   }
 
                   // Notificar que la verificación determinista fue superada
