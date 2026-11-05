@@ -1,8 +1,10 @@
 import * as http from "node:http";
+import { timingSafeEqual } from "node:crypto";
 import type { GitHubIssuePayload } from "./dc-issue-dispatcher.ts";
 
 export interface WebhookReceiverOptions {
   port?: number;
+  capability?: string;
   host?: string;
   expectedRepoNwo?: string; // ej: "davidcoachdev/dc-pi"
   onIssueOpened?: (payload: GitHubIssuePayload) => void | Promise<void>;
@@ -20,7 +22,7 @@ export class DcWebhookReceiver {
 
   constructor(private options: WebhookReceiverOptions = {}) {
     this.port = options.port ?? 4545;
-    this.host = options.host ?? "127.0.0.1";
+    this.host = "127.0.0.1";
     this.expectedRepoNwo = options.expectedRepoNwo?.toLowerCase();
   }
 
@@ -65,6 +67,7 @@ export class DcWebhookReceiver {
 
       this.server.listen(this.port, this.host, () => {
         this.isListening = true;
+        this.port = (this.server!.address() as import("node:net").AddressInfo).port;
         this.options.onLog?.(`Receptor de Webhooks escuchando en http://${this.host}:${this.port}/github-webhook`);
         resolve(this.port);
       });
@@ -89,20 +92,28 @@ export class DcWebhookReceiver {
 
   private handleRequest(req: http.IncomingMessage, res: http.ServerResponse): void {
     // Solo aceptamos POST a /github-webhook o /
-    const url = req.url ?? "/";
-    if (req.method !== "POST" || (url !== "/github-webhook" && url !== "/")) {
+    let url: URL;
+    try {
+      url = new URL(req.url ?? "/", "http://127.0.0.1");
+    } catch {
+      res.writeHead(400);
+      res.end("Bad Request");
+      return;
+    }
+    if (req.method !== "POST" || (url.pathname !== "/github-webhook" && url.pathname !== "/")) {
       res.writeHead(404, { "Content-Type": "text/plain" });
       res.end("Not Found");
       return;
     }
 
-    const deliveryId = (req.headers["x-github-delivery"] as string) || "";
-    if (deliveryId && this.processedDeliveries.has(deliveryId)) {
-      // Idempotencia: Ya procesado
-      res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ status: "ignored_duplicate" }));
+    const supplied = Buffer.from(url.searchParams.get("capability") ?? "");
+    const expected = Buffer.from(this.options.capability ?? "");
+    if (!expected.length || supplied.length !== expected.length || !timingSafeEqual(supplied, expected)) {
+      res.writeHead(401);
+      res.end("Unauthorized");
       return;
     }
+    const deliveryId = (req.headers["x-github-delivery"] as string) || "";
 
     const eventType = req.headers["x-github-event"] as string;
 
@@ -121,23 +132,12 @@ export class DcWebhookReceiver {
       try {
         const payload = JSON.parse(body);
 
-        if (deliveryId) {
-          this.processedDeliveries.add(deliveryId);
-          // Mantener tamaño de Set acotado a últimas 500 entregas
-          if (this.processedDeliveries.size > 500) {
-            const first = this.processedDeliveries.values().next().value;
-            if (first) this.processedDeliveries.delete(first);
-          }
-        }
-
         // Validar repositorio si está restringido
-        if (this.expectedRepoNwo) {
-          const incomingRepo = payload.repository?.full_name ? String(payload.repository.full_name).toLowerCase() : "";
-          if (incomingRepo && incomingRepo !== this.expectedRepoNwo) {
-            res.writeHead(200, { "Content-Type": "application/json" });
-            res.end(JSON.stringify({ status: "ignored_foreign_repo", repo: incomingRepo }));
-            return;
-          }
+        const incomingRepo = typeof payload?.repository?.full_name === "string" ? payload.repository.full_name.toLowerCase() : "";
+        if (!this.expectedRepoNwo || incomingRepo !== this.expectedRepoNwo) {
+          res.writeHead(403);
+          res.end("Repository mismatch");
+          return;
         }
 
         // Ping de GitHub Webhook
@@ -148,9 +148,20 @@ export class DcWebhookReceiver {
         }
 
         // Evento de Issues
-        if (eventType === "issues" || payload.issue) {
+        if (eventType === "issues" && payload.issue) {
           const action = payload.action;
           if (action === "opened") {
+            if (deliveryId && this.processedDeliveries.has(deliveryId)) {
+              res.writeHead(200, { "Content-Type": "application/json" });
+              res.end(JSON.stringify({ status: "ignored_duplicate" }));
+              return;
+            }
+            if (deliveryId) {
+              this.processedDeliveries.add(deliveryId);
+              if (this.processedDeliveries.size > 500) {
+                this.processedDeliveries.delete(this.processedDeliveries.values().next().value!);
+              }
+            }
             try {
               const resCallback = this.options.onIssueOpened?.(payload as GitHubIssuePayload);
               if (resCallback && typeof (resCallback as any).catch === "function") {
@@ -177,7 +188,7 @@ export class DcWebhookReceiver {
         res.end(JSON.stringify({ status: "ignored_event", event: eventType }));
       } catch (err: any) {
         res.writeHead(400, { "Content-Type": "text/plain" });
-        res.end(`Bad Request: ${err.message}`);
+        res.end("Bad Request");
       }
     });
   }

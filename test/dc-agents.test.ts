@@ -3,14 +3,26 @@ import * as assert from "node:assert/strict";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
-import {
+const isolatedHome = fs.mkdtempSync(path.join(os.tmpdir(), "dc-agents-home-"));
+const previousEnv = { ...process.env };
+process.env.HOME = isolatedHome;
+process.env.XDG_CONFIG_HOME = path.join(isolatedHome, ".config");
+process.env.PI_CODING_AGENT_DIR = path.join(isolatedHome, ".pi", "agent");
+
+const {
   syncDcAgents,
   syncDcSkills,
   getDcBundledAgentsDir,
   getDcBundledSkillsDir,
-} from "../src/features/dc-agents/core/dc-agents-sync.ts";
-import { loadSubagentsData } from "../src/features/dc-agents/core/dc-agents-tasks.ts";
-import { DcAgentsPanel } from "../src/features/dc-agents/views/dc-agents-panel.ts";
+  getPiTargetSubagentsJson,
+} = await import("../src/features/dc-agents/core/dc-agents-sync.ts");
+const { loadSubagentsData } = await import("../src/features/dc-agents/core/dc-agents-tasks.ts");
+const { DcAgentsPanel } = await import("../src/features/dc-agents/views/dc-agents-panel.ts");
+
+test.after(() => {
+  process.env = previousEnv;
+  fs.rmSync(isolatedHome, { recursive: true, force: true });
+});
 
 test("dc-agents: bundled agents directory exists and contains markdown agents", () => {
   const bundledDir = getDcBundledAgentsDir();
@@ -32,6 +44,36 @@ test("dc-agents: bundled agents directory exists and contains markdown agents", 
   for (const agent of expectedAgents) {
     assert.ok(files.includes(agent), `Should contain ${agent}`);
   }
+});
+
+test("dc-agents: fresh-home sync initializes global config with a separate agents target", (t) => {
+  const targetConfig = getPiTargetSubagentsJson();
+  const targetDir = path.join(isolatedHome, "custom-agents");
+  assert.deepEqual(fs.readdirSync(isolatedHome), []);
+  assert.equal(fs.existsSync(path.dirname(targetConfig)), false);
+
+  const firstRun = syncDcAgents(getDcBundledAgentsDir(), targetDir);
+  t.diagnostic(`fresh-home result.errors: ${JSON.stringify(firstRun.errors)}`);
+  assert.deepEqual(firstRun.errors, [], `Fresh-home sync failed: ${firstRun.errors.join("; ")}`);
+  assert.ok(firstRun.synced.includes("subagents.json"));
+  const configContent = fs.readFileSync(targetConfig, "utf8");
+  assert.equal(JSON.parse(configContent).default_model, undefined);
+  assert.ok(fs.existsSync(path.join(targetDir, "dc-smoke-subagent.md")));
+
+  const customAgent = path.join(targetDir, "user-custom.md");
+  const settings = path.join(path.dirname(targetConfig), "settings.json");
+  const customContent = "# User agent\nKeep my instructions.\n";
+  const settingsContent = '{"theme":"user-custom","custom":{"enabled":true}}\n';
+  fs.writeFileSync(customAgent, customContent);
+  fs.writeFileSync(settings, settingsContent);
+
+  const secondRun = syncDcAgents(getDcBundledAgentsDir(), targetDir);
+  assert.deepEqual(secondRun.errors, []);
+  assert.deepEqual(secondRun.synced, []);
+  assert.ok(secondRun.skipped.includes("subagents.json"));
+  assert.equal(fs.readFileSync(targetConfig, "utf8"), configContent);
+  assert.equal(fs.readFileSync(customAgent, "utf8"), customContent);
+  assert.equal(fs.readFileSync(settings, "utf8"), settingsContent);
 });
 
 test("dc-agents: syncDcAgents copies bundled agents idempotently to target directory", () => {

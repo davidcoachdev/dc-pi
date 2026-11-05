@@ -24,6 +24,7 @@ export interface CreateWorktreeOptions {
   prefixBranch?: string;
   useSymlinkNodeModules?: boolean;
   customWorktreeDir?: string;
+  reuseExisting?: boolean;
 }
 
 /**
@@ -92,11 +93,41 @@ export class DcWorktreeManager {
       customWorktreeDir ||
       path.join(getDcStudioDir(), "worktrees", repoName, `${safeSlug}-${shortId}`);
 
+    let retained = false;
+    if (options.reuseExisting) {
+      const listing = await this.runGit(canonicalRoot, ["worktree", "list", "--porcelain"]);
+      const entries = listing.split(/\n\n/).map(block => ({
+        directory: block.match(/^worktree (.+)$/m)?.[1],
+        branch: block.match(/^branch (.+)$/m)?.[1],
+        locked: /^locked(?: |$)/m.test(block),
+        prunable: /^prunable(?: |$)/m.test(block),
+      }));
+      const occupied = entries.filter(entry => entry.directory === worktreePath || entry.branch === `refs/heads/${branchName}`);
+      if (occupied.length) {
+        const entry = occupied[0];
+        if (occupied.length !== 1 || entry.directory !== worktreePath || entry.branch !== `refs/heads/${branchName}` || entry.locked || entry.prunable) {
+          throw new Error("Worktree ownership/occupancy mismatch; retained data was not changed");
+        }
+        const actualRoot = await this.runGit(worktreePath, ["rev-parse", "--show-toplevel"]);
+        const common = await this.runGit(worktreePath, ["rev-parse", "--path-format=absolute", "--git-common-dir"]);
+        const expectedCommon = await this.runGit(canonicalRoot, ["rev-parse", "--path-format=absolute", "--git-common-dir"]);
+        if (actualRoot !== worktreePath || common !== expectedCommon) {
+          throw new Error("Worktree ownership mismatch; retained data was not changed");
+        }
+        retained = true;
+      } else {
+        const branchExists = await this.runGit(canonicalRoot, ["branch", "--list", branchName]);
+        if (fs.existsSync(worktreePath) || branchExists) {
+          throw new Error("Worktree occupancy mismatch; retained data was not changed");
+        }
+      }
+    }
+
     // Asegurar directorio padre
     await fs.promises.mkdir(path.dirname(worktreePath), { recursive: true });
 
     // 4. Crear el worktree en Git
-    await this.runGit(canonicalRoot, [
+    if (!retained) await this.runGit(canonicalRoot, [
       "worktree",
       "add",
       "-b",
@@ -106,7 +137,7 @@ export class DcWorktreeManager {
     ]);
 
     // 5. Vincular node_modules mediante symlink para velocidad instantánea
-    if (useSymlinkNodeModules) {
+    if (useSymlinkNodeModules && !retained) {
       const parentNodeModules = path.join(canonicalRoot, "node_modules");
       const targetNodeModules = path.join(worktreePath, "node_modules");
 

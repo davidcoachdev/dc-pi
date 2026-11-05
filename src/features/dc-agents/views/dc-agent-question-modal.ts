@@ -1,11 +1,13 @@
 import type { ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
 import {
-  Key, matchesKey, truncateToWidth, visibleWidth,
+  Key, matchesKey, decodeKittyPrintable, truncateToWidth, visibleWidth,
   type Component, type TUI, type TuiMouseEvent, type TuiMouseEventResult,
 } from "@earendil-works/pi-tui";
 import { openDcModal } from "../../../ui/dc-modal.ts";
 import type { AgentQuestionPacket, AgentAnswerPacket } from "../daemon/dc-remote-question.ts";
 import { dcRemoteQuestionManager } from "../daemon/dc-remote-question.ts";
+
+const graphemeSegmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" });
 
 export class DcAgentQuestionPanel implements Component {
   private selectedOptionIndex = 0;
@@ -53,7 +55,43 @@ export class DcAgentQuestionPanel implements Component {
     this.onDone(answer);
   }
 
+  private previousCursorBoundary(): number {
+    const segments = graphemeSegmenter.segment(this.customText);
+    return segments.containing(this.cursorPos - 1)?.index ?? 0;
+  }
+
+  private nextCursorBoundary(): number {
+    const segment = graphemeSegmenter.segment(this.customText).containing(this.cursorPos);
+    return segment ? segment.index + segment.segment.length : this.customText.length;
+  }
+
+  private alignCursor(): void {
+    // An insertion/deletion can join adjacent clusters. Never leave the cursor
+    // inside the resulting grapheme (e.g. a base inserted before a combining mark).
+    const segment = graphemeSegmenter.segment(this.customText).containing(this.cursorPos);
+    if (segment && segment.index < this.cursorPos) {
+      this.cursorPos = segment.index + segment.segment.length;
+    }
+  }
+
+  private insertText(text: string): boolean {
+    // Match Pi's printable-input policy: no C0, DEL, C1 or terminal escapes.
+    if (!text || /[\x00-\x1f\x7f-\x9f]/u.test(text) || this.packet.allowCustomText === false) return false;
+    this.isEditingCustomText = true;
+    this.customText = this.customText.slice(0, this.cursorPos) + text + this.customText.slice(this.cursorPos);
+    this.cursorPos += text.length;
+    this.alignCursor();
+    this.requestRender?.();
+    return true;
+  }
+
   handleInput(data: string): boolean {
+    // Pi's terminal delivers complete pastes wrapped in these markers. Pasted
+    // digits/commands are text, never option shortcuts or submission keys.
+    if (data.startsWith("\x1b[200~") && data.endsWith("\x1b[201~")) {
+      return this.insertText(data.slice(6, -6));
+    }
+    const printable = decodeKittyPrintable(data) ?? data;
     if (matchesKey(data, Key.escape)) {
       const dismiss: AgentAnswerPacket = {
         questionId: this.packet.id,
@@ -80,41 +118,42 @@ export class DcAgentQuestionPanel implements Component {
 
       if (matchesKey(data, Key.backspace) || data === "\x7f" || data === "\b") {
         if (this.cursorPos > 0) {
-          this.customText = this.customText.slice(0, this.cursorPos - 1) + this.customText.slice(this.cursorPos);
-          this.cursorPos--;
+          const previous = this.previousCursorBoundary();
+          this.customText = this.customText.slice(0, previous) + this.customText.slice(this.cursorPos);
+          this.cursorPos = previous;
+          this.alignCursor();
           this.requestRender?.();
         }
         return true;
       }
 
+      if (matchesKey(data, Key.delete)) {
+        this.customText = this.customText.slice(0, this.cursorPos) + this.customText.slice(this.nextCursorBoundary());
+        this.alignCursor();
+        this.requestRender?.();
+        return true;
+      }
+
       if (matchesKey(data, Key.left)) {
-        this.cursorPos = Math.max(0, this.cursorPos - 1);
+        this.cursorPos = this.previousCursorBoundary();
         this.requestRender?.();
         return true;
       }
 
       if (matchesKey(data, Key.right)) {
-        this.cursorPos = Math.min(this.customText.length, this.cursorPos + 1);
+        this.cursorPos = this.nextCursorBoundary();
         this.requestRender?.();
         return true;
       }
 
-      // Caracteres imprimibles ordinarios
-      if (data.length === 1 && data >= " " && data <= "~") {
-        this.customText = this.customText.slice(0, this.cursorPos) + data + this.customText.slice(this.cursorPos);
-        this.cursorPos++;
-        this.requestRender?.();
-        return true;
-      }
-
-      return false;
+      return this.insertText(printable);
     }
 
     // Modo selección de opciones rápidas:
     const optsCount = this.packet.options?.length || 0;
 
     // Atajos numéricos 1..N
-    const num = parseInt(data, 10);
+    const num = /^[1-9]$/.test(printable) ? Number(printable) : NaN;
     if (!isNaN(num) && num >= 1 && num <= optsCount) {
       this.submitOption(num - 1);
       return true;
@@ -145,16 +184,7 @@ export class DcAgentQuestionPanel implements Component {
       return true;
     }
 
-    // Si presiona cualquier tecla alfanumérica, salta a edición de texto libre
-    if (this.packet.allowCustomText !== false && data.length === 1 && data >= " " && data <= "~") {
-      this.isEditingCustomText = true;
-      this.customText += data;
-      this.cursorPos = this.customText.length;
-      this.requestRender?.();
-      return true;
-    }
-
-    return false;
+    return this.insertText(printable);
   }
 
   handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {

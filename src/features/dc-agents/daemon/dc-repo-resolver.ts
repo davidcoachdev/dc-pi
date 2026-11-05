@@ -1,6 +1,21 @@
 import { execFileSync } from "node:child_process";
 import * as path from "node:path";
 
+export function resolveIssueBaseBranch(repoRoot: string): string {
+  const git = (...args: string[]) => execFileSync("git", ["-C", repoRoot, ...args], {
+    encoding: "utf8", stdio: ["ignore", "pipe", "ignore"],
+  }).trim();
+  try {
+    const branch = git("symbolic-ref", "refs/remotes/origin/HEAD").replace(/^refs\/remotes\/origin\//, "");
+    git("rev-parse", "--verify", branch);
+    return branch;
+  } catch { /* Offline repositories may not have origin/HEAD. */ }
+  for (const branch of ["main", "master"]) {
+    try { git("rev-parse", "--verify", `refs/heads/${branch}`); return branch; } catch { /* try next */ }
+  }
+  throw new Error("Cannot determine issue base branch; configure origin/HEAD or a main/master branch");
+}
+
 export interface RepoIdentity {
   owner: string;
   repo: string;
