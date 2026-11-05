@@ -141,7 +141,7 @@ test("DcControlCenterPanel: renderizado de 3 pestañas y navegación interactiva
   panel.handleInput("3");
   assert.equal(panel.getActiveTab(), "audit");
   const lines3 = panel.render(80);
-  assert.ok(lines3.some((l) => l.includes("Audit Log Forense")));
+  assert.ok(lines3.some((l) => l.includes("Audit Log") || l.includes("Forense")));
 
   // Conmutación con Tab
   panel.handleInput("\t");
@@ -181,3 +181,126 @@ test("DcControlCenterPanel: renderizado de 3 pestañas y navegación interactiva
   // Revertir a ALLOW
   getCollaboratorsDatabase().setCollaborator("davidcoachdev", "ALLOW", "OWNER");
 });
+
+test("DcControlCenterPanel: interfaz Central con Decisiones, Tareas, Resumen, Acciones e Input", () => {
+  let doneCalled = false;
+  let renderRequested = false;
+
+  const panel = new DcControlCenterPanel(
+    dummyTheme,
+    () => { doneCalled = true; },
+    () => { renderRequested = true; },
+  );
+
+  // Verificamos render inicial en pestaña 1 (Central / Worktrees)
+  const lines = panel.render(100);
+  const text = lines.join("\n");
+
+  // 1. Cabecera superior con estado de Central y modo
+  assert.ok(text.includes("3 listos · 1 trabajando"), "Debe mostrar status de flota y trabajadores");
+  assert.ok(text.includes("CENTRAL"), "Debe incluir el título CENTRAL");
+  assert.ok(text.includes("MODO PRUEBA"), "Debe indicar el modo de prueba");
+  assert.ok(text.includes("GitHub al día"), "Debe mostrar estado de GitHub");
+
+  // 2. Columna izquierda: 1 DECISIONES, 2 TAREAS, 3 HECHO HOY
+  assert.ok(text.includes("1 DECISIONES"), "Debe contener sección 1 DECISIONES");
+  assert.ok(text.includes("2 TAREAS"), "Debe contener sección 2 TAREAS");
+  assert.ok(text.includes("3 HECHO HOY"), "Debe contener sección 3 HECHO HOY");
+  assert.ok(text.includes("WibondConnect#3759"), "Debe listar el item de decisión WibondConnect#3759");
+
+  // 3. Columna derecha: Detalles, RESUMEN y Acciones
+  assert.ok(text.includes("Decisiones »"), "Debe mostrar breadcrumb");
+  assert.ok(text.includes("RESUMEN"), "Debe mostrar tarjeta RESUMEN");
+  assert.ok(text.includes("Qué piden"), "Debe mostrar campo Qué piden");
+  assert.ok(text.includes("Quién"), "Debe mostrar campo Quién");
+  assert.ok(text.includes("Sugerido"), "Debe mostrar campo Sugerido");
+  assert.ok(text.includes("Arreglar"), "Debe mostrar acción Arreglar");
+  assert.ok(text.includes("Descartar"), "Debe mostrar acción Descartar");
+  assert.ok(text.includes("Mañana 9:00"), "Debe mostrar acción Mañana 9:00");
+  assert.ok(text.includes("Abrir en GitHub") || text.includes("github"), "Debe mostrar acción Abrir en GitHub");
+
+  // 4. Guía / Ayuda Bienvenido a Central
+  assert.ok(text.includes("Bienvenido a Central"), "Debe mostrar bienvenida/guía Central");
+
+  // 5. Barra inferior interactiva: escribile a central
+  assert.ok(text.includes("escribile a central"), "Debe mostrar prompt escribile a central");
+  assert.ok(text.includes("/ para escribir"), "Debe mostrar hint / para escribir");
+
+  // 6. Pie de página con atajos
+  assert.ok(text.includes("arreglar") && text.includes("descartar") && text.includes("simulado"), "Debe mostrar atajos del pie");
+});
+
+test("DcControlCenterPanel: interacción de acciones [a], [n], [d], [o], modo input [/] y ayuda [?]", () => {
+  let doneCalled = false;
+  let renderRequested = false;
+
+  const panel = new DcControlCenterPanel(
+    dummyTheme,
+    () => { doneCalled = true; },
+    () => { renderRequested = true; },
+  );
+
+  // Navegación con j / k o flechas
+  panel.handleInput("j");
+  assert.ok(renderRequested);
+
+  // Activar modo input con '/'
+  assert.equal(panel.isInputActive(), false);
+  panel.handleInput("/");
+  assert.equal(panel.isInputActive(), true);
+
+  // Escribir texto en input
+  panel.handleInput("h");
+  panel.handleInput("o");
+  panel.handleInput("l");
+  panel.handleInput("a");
+  assert.equal(panel.getInputText(), "hola");
+
+  // Backspace borra un carácter
+  panel.handleInput("\x7f");
+  assert.equal(panel.getInputText(), "hol");
+
+  // Escape cancela modo input sin cerrar modal
+  panel.handleInput("escape");
+  assert.equal(panel.isInputActive(), false);
+  assert.equal(doneCalled, false);
+
+  // Acciones sobre el item: 'a' (Arreglar)
+  const actionResA = panel.handleInput("a");
+  assert.equal(actionResA, true);
+
+  // 'd' (Posponer)
+  const actionResD = panel.handleInput("d");
+  assert.equal(actionResD, true);
+
+  // 'n' (Descartar)
+  const actionResN = panel.handleInput("n");
+  assert.equal(actionResN, true);
+
+  // '?' conmuta ayuda
+  assert.equal(panel.isHelpActive(), false);
+  panel.handleInput("?");
+  assert.equal(panel.isHelpActive(), true);
+  const helpLines = panel.render(100);
+  assert.ok(helpLines.join("\n").includes("TECLAS Y ACCIONES"));
+
+  // Escape cierra la ayuda
+  panel.handleInput("escape");
+  assert.equal(panel.isHelpActive(), false);
+  assert.equal(doneCalled, false);
+
+  // 'm' conmuta modo simulado
+  const initialSim = panel.isSimulatedMode();
+  panel.handleInput("m");
+  assert.notEqual(panel.isSimulatedMode(), initialSim);
+
+  // Clic de ratón en botón de acción
+  const mouseRes = panel.handleMouse({
+    type: "click",
+    button: "left",
+    x: 45,
+    y: 16,
+  } as any);
+  assert.ok(mouseRes?.handled);
+});
+

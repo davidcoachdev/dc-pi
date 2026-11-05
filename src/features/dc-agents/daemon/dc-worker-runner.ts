@@ -282,15 +282,24 @@ L1: Issue capturado en vivo por el daemon y despachado a worktree autónomo.
             }
           }
 
-          // 2. Detección de edición de código fuente (Fase GREEN)
-          if (!notifiedStages.has("source_green")) {
-            const status = await this.runInWorktree(worktreePath, "git", ["status", "--porcelain"], { timeoutMs: 5000 });
-            if (status.stdout && status.stdout.split("\n").some((l) => l.includes("src/"))) {
-              notifiedStages.add("source_green");
-              void dcIssueNotifier.notifyIssue(
-                { repoRoot: worktreePath, issueNumber },
-                `🤖 **DC Super-Agent**: ✏️ Fase GREEN: Implementando modificaciones de código fuente en \`src/\`...`,
-              );
+          // 2. Detección de edición de código fuente y archivos modificados individualmente
+          const status = await this.runInWorktree(worktreePath, "git", ["status", "--porcelain"], { timeoutMs: 5000 });
+          if (status.stdout) {
+            const rawLines = status.stdout.split("\n").map(l => l.trim()).filter(Boolean);
+            for (const line of rawLines) {
+              const filePath = line.slice(3).trim();
+              if (filePath && !filePath.startsWith("odd/") && !filePath.startsWith("node_modules")) {
+                const stageKey = `file_${filePath}`;
+                if (!notifiedStages.has(stageKey)) {
+                  notifiedStages.add(stageKey);
+                  const isCreated = line.startsWith("??") || line.startsWith("A");
+                  const verb = isCreated ? "📄 Creando nuevo archivo" : "✏️ Modificando archivo";
+                  void dcIssueNotifier.notifyIssue(
+                    { repoRoot: worktreePath, issueNumber },
+                    `🤖 **DC Super-Agent**: ${verb}: \`${filePath}\``,
+                  );
+                }
+              }
             }
           }
 
