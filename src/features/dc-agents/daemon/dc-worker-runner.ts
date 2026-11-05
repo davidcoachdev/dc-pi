@@ -227,11 +227,12 @@ L1: Issue capturado en vivo por el daemon y despachado a worktree autónomo.
       `1. Lee los archivos relevantes con 'read' antes de modificarlos.`,
       `2. Implementa la solución editando o creando archivos de código real y tests con 'edit'/'write'.`,
       `3. Investiga únicamente con las herramientas asignadas; no supongas acceso a otras herramientas.`,
-      `4. Si tienes una DUDA DE DISEÑO o necesitas una DECISIÓN DEL HUMANO, NO ADIVINES: ejecuta con bash:`,
+      `4. Si tienes una DUDA DE DISEÑO o necesitas una DECISIÓN DEL HUMANO, NO ADIVINES NI TE DETENGAS: ejecuta con bash:`,
       `   node "${askHelper}" --issue=${issueNumber} --context="Explica qué archivos viste y qué dudas tienes" --question="¿Pregunta?" --options="Opción A|Opción B"`,
-      `   El humano verá tu pregunta en una ventana modal interactiva y te enviará su respuesta o indicación de texto libre.`,
+      `   El humano verá tu pregunta en una ventana modal interactiva y este comando esperará pacientemente su respuesta en stdout. Continúa tu trabajo según lo que responda el humano; NUNCA cierres la sesión mientras falte la respuesta.`,
       `5. Ejecuta las pruebas deterministas disponibles usando el gestor del lockfile del proyecto.`,
-      `6. Cuando todo esté verificado con exit code 0, concluye tu turno resumiendo los archivos modificados.`,
+      `6. IMPORTANTE: NO intentes ejecutar git commit, git push ni gh pr create; el sistema supervisor de DC Studio se encarga automáticamente de commitear, pushear la rama y abrir la Pull Request una vez verificado tu código.`,
+      `7. Cuando todo esté implementado y verificado con exit code 0 en los tests, concluye tu turno con un resumen de los archivos modificados.`,
     ].join("\n");
 
     const args: string[] = [];

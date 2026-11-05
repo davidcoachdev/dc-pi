@@ -15,11 +15,13 @@ export interface CollaboratorRecord {
   notes?: string;
 }
 
+export type AuditLogCategory = "WEBHOOK" | "WORKTREE" | "DISPATCH" | "SECURITY" | "TESTS" | "CONFLICT";
+
 export interface AuditLogRecord {
   id?: number;
   timestamp: number;
   level: "INFO" | "WARN" | "ERROR" | "SECURITY";
-  category: "WEBHOOK" | "WORKTREE" | "DISPATCH" | "SECURITY" | "TESTS" | "CONFLICT";
+  category: AuditLogCategory;
   actor: string;
   message: string;
   metadata?: string; // JSON string
@@ -63,6 +65,7 @@ export class CollaboratorsDatabase {
     this.db.exec(`
       PRAGMA foreign_keys = ON;
       PRAGMA journal_mode = WAL;
+      PRAGMA busy_timeout = 5000;
 
       CREATE TABLE IF NOT EXISTS collaborators (
         login TEXT PRIMARY KEY,
@@ -134,6 +137,15 @@ export class CollaboratorsDatabase {
     notes?: string,
   ): void {
     const clean = login.replace(/^@/, "").toLowerCase().trim();
+    if (clean === "davidcoachdev" && status !== "ALLOW") {
+      this.log({
+        level: "SECURITY",
+        category: "SECURITY",
+        actor: "system",
+        message: `Intento de alterar estado de @davidcoachdev a ${status} bloqueado: el OWNER no puede ser bloqueado ni puesto en pending`,
+      });
+      return;
+    }
     const now = Date.now();
     const existing = this.getCollaborator(clean);
 
@@ -161,6 +173,10 @@ export class CollaboratorsDatabase {
   }
 
   public toggleCollaboratorStatus(login: string): CollaboratorStatus {
+    const clean = login.replace(/^@/, "").toLowerCase().trim();
+    if (clean === "davidcoachdev") {
+      return "ALLOW";
+    }
     const current = this.getCollaborator(login);
     if (!current) {
       this.setCollaborator(login, "ALLOW");
@@ -175,6 +191,28 @@ export class CollaboratorsDatabase {
 
     this.setCollaborator(login, next, current.role, current.notes);
     return next;
+  }
+
+  public deleteCollaborator(login: string): boolean {
+    const clean = login.replace(/^@/, "").toLowerCase().trim();
+    if (clean === "davidcoachdev") {
+      this.log({
+        level: "SECURITY",
+        category: "SECURITY",
+        actor: "system",
+        message: "Intento de eliminar al OWNER @davidcoachdev bloqueado",
+      });
+      return false;
+    }
+    const stmt = this.db.prepare("DELETE FROM collaborators WHERE login = ?");
+    stmt.run(clean);
+    this.log({
+      level: "SECURITY",
+      category: "SECURITY",
+      actor: "user",
+      message: `Colaborador @${clean} eliminado de la base de datos de colaboradores`,
+    });
+    return true;
   }
 
   public listCollaborators(): CollaboratorRecord[] {

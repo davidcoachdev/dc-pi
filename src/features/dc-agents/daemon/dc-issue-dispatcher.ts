@@ -5,6 +5,7 @@ import { dcConflictGuard } from "./dc-conflict-guard.ts";
 import { resolveIssueBaseBranch, type RepoIdentity } from "./dc-repo-resolver.ts";
 import { getCollaboratorsDatabase } from "./dc-collaborators-db.ts";
 import { dcWorkerRunner } from "./dc-worker-runner.ts";
+import { dcIssueNotifier } from "./dc-issue-notifier.ts";
 
 export interface GitHubIssuePayload {
   action: string;
@@ -80,6 +81,12 @@ export class DcIssueDispatcher {
       const authorLogin = (issue.user?.login || "anónimo").replace(/^@/, "").toLowerCase().trim();
       const collabDb = getCollaboratorsDatabase();
 
+      // Notificación 1: Issue Recibido (solo si no es un test sintético con autor fixture)
+      void dcIssueNotifier.notifyIssue(
+        { repoRoot: repoIdentity.repoRoot, repoNwo: repoIdentity.fullNwo, issueNumber },
+        `🤖 **DC Super-Agent**: Issue recibido. Verificando identidad de @${authorLogin} y permisos de ejecución autónoma...`,
+      );
+
       // ── Doble Validación Soberana de Seguridad ──
       const record = collabDb.getCollaborator(authorLogin);
       let isAllowed = record?.status === "ALLOW";
@@ -96,12 +103,20 @@ export class DcIssueDispatcher {
 
         if (onPendingAuthorization) {
           onProgress?.(`Solicitando autorización interactiva para @${authorLogin}...`);
+          void dcIssueNotifier.notifyIssue(
+            { repoRoot: repoIdentity.repoRoot, repoNwo: repoIdentity.fullNwo, issueNumber },
+            `🤖 **DC Super-Agent**: ⏳ Autorización pendiente. El autor @${authorLogin} requiere aprobación interactiva en el Centro de Control de DC Studio.`,
+          );
           isAllowed = await onPendingAuthorization(authorLogin, issueNumber, issue.title);
           if (isAllowed) {
             collabDb.setCollaborator(authorLogin, "ALLOW", "CONTRIBUTOR", "Aprobado interactivamente por el usuario");
           }
         }
       } else if (record.status === "PENDING" && onPendingAuthorization) {
+        void dcIssueNotifier.notifyIssue(
+          { repoRoot: repoIdentity.repoRoot, repoNwo: repoIdentity.fullNwo, issueNumber },
+          `🤖 **DC Super-Agent**: ⏳ Autorización pendiente. El autor @${authorLogin} requiere aprobación interactiva en el Centro de Control de DC Studio.`,
+        );
         isAllowed = await onPendingAuthorization(authorLogin, issueNumber, issue.title);
         if (isAllowed) {
           collabDb.setCollaborator(authorLogin, "ALLOW", record.role, "Aprobado interactivamente por el usuario");
@@ -115,9 +130,20 @@ export class DcIssueDispatcher {
           actor: authorLogin,
           message: `Despacho autónomo rechazado para @${authorLogin} en Issue #${issueNumber} (Estado: ${record?.status || "PENDING"})`,
         });
+        void dcIssueNotifier.notifyIssue(
+          { repoRoot: repoIdentity.repoRoot, repoNwo: repoIdentity.fullNwo, issueNumber },
+          `🤖 **DC Super-Agent**: ⛔ Ejecución no autorizada para @${authorLogin} (Estado: ${record?.status || "PENDING"}). El issue no procederá a resolución autónoma.`,
+          "SECURITY",
+        );
         onProgress?.(`⚠️ Despacho autónomo bloqueado: @${authorLogin} no tiene permiso de ejecución (Estado: ${record?.status || "PENDING"}).`);
         return null;
       }
+
+      // Notificación 2: Autorizado y aceptado
+      void dcIssueNotifier.notifyIssue(
+        { repoRoot: repoIdentity.repoRoot, repoNwo: repoIdentity.fullNwo, issueNumber },
+        `🤖 **DC Super-Agent**: ✅ Autorizado. Autor @${authorLogin} validado. Procediendo a crear rama Git y worktree aislado...`,
+      );
 
       const issueTitle = issue.title ? issue.title.trim() : `issue-${issueNumber}`;
       const taskSlug = `issue-${issueNumber}`;
@@ -171,6 +197,12 @@ export class DcIssueDispatcher {
       if (!fs.existsSync(path.join(handle.worktreePath, "odd", "tasks", `${taskSlug}.md`))) {
         dcWorkerRunner.initializeOddSpec(dispatched, author, bodyText);
       }
+
+      // Notificación 3: Rama creada y entorno aislado montado
+      void dcIssueNotifier.notifyIssue(
+        { repoRoot: handle.worktreePath, repoNwo: repoIdentity.fullNwo, issueNumber },
+        `🤖 **DC Super-Agent**: 🌿 Rama creada: \`${handle.branchName}\`. Worktree aislado montado. Especificación inicial ODD asentada.`,
+      );
 
       this.activeDispatches.set(dispatchKey, dispatched);
       return dispatched;

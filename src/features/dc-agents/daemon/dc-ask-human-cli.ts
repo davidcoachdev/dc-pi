@@ -9,6 +9,7 @@
  */
 
 import { dcRemoteQuestionManager } from "./dc-remote-question.ts";
+import { dcIssueNotifier } from "./dc-issue-notifier.ts";
 
 function parseArgs(): Record<string, string> {
   const args = process.argv.slice(2);
@@ -46,8 +47,26 @@ async function main() {
 
   process.stderr.write(`[dc-ask-human] Pregunta ${packet.id} enviada al usuario. Esperando respuesta...\n`);
 
+  // Notificar al issue de GitHub que el subagente pausó para consultar al humano
+  if (issueNumber > 0) {
+    await dcIssueNotifier.notifyIssue(
+      { repoRoot: process.cwd(), issueNumber },
+      `🤖 **DC Super-Agent**: ❓ Consulta enviada al usuario humano: "${question}" (Opciones: ${options.join(", ")}). Esperando respuesta interactiva...`,
+      "DISPATCH",
+    );
+  }
+
   // Esperar respuesta humana
   const answer = await dcRemoteQuestionManager.waitForAnswer(packet.id);
+
+  if (issueNumber > 0) {
+    const outcomeText = answer.customText ? `Texto: "${answer.customText}"` : (answer.chosenOption ? `Opción: "${answer.chosenOption}"` : "Descartada");
+    await dcIssueNotifier.notifyIssue(
+      { repoRoot: process.cwd(), issueNumber },
+      `🤖 **DC Super-Agent**: 💬 Respuesta humana recibida: ${outcomeText}. Reanudando trabajo...`,
+      "DISPATCH",
+    );
+  }
 
   if (answer.customText) {
     process.stdout.write(`RESPUESTA_HUMANA: ${answer.customText}\n`);
