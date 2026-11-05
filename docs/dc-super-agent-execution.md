@@ -2,6 +2,18 @@
 
 Un turno de Pi con `exit 0` solo completa T3. El runner ejecuta después la verificación determinista en el worktree, sin interpretar afirmaciones del LLM. Solo devuelve `ok: true` y completa T4 si los comandos aplicables terminan con código cero.
 
+## Revisar issues pendientes manualmente
+
+En una sesión TUI interactiva, ejecuta `/dc-webhook check` desde el repositorio deseado. Se consulta GitHub con `gh issue list --state open --limit 50`, usando el `origin` del directorio actual y mostrando el repositorio y el límite en el selector nativo. **Como máximo se muestran 50 issues abiertos; no es un listado completo del backlog.** No inicia el listener, no hace polling y funciona con el daemon detenido. Si el listener atiende otro repositorio, permanece intacto.
+
+Seleccionar un issue no autoriza ejecución por sí solo: la confirmación posterior identifica repositorio/número y advierte sobre modificación de archivos, pruebas, commit, push, PR y comentario en GitHub. Cancelar el selector o rechazar la confirmación no crea worktrees, no arrienda Taxi ni publica. Sin UI TUI se rechaza antes de consultar GitHub.
+
+Después de confirmar se vuelve a consultar **solo el issue elegido** con `gh issue view`. Se valida número, estado OPEN, URL HTTPS de github.com y coincidencia de propietario/repositorio/issue, autor, título, cuerpo y etiquetas. Datos inválidos, issues cerrados/eliminados, errores de autenticación o respuestas de otro repositorio no entran al dispatcher. Los mensajes indican cómo volver a consultar o revisar acceso con `gh auth status`; una consulta vacía no equivale a ejecución exitosa.
+
+El texto de GitHub sigue siendo datos no confiables, nunca instrucciones ni autorización. La ejecución usa exactamente `executeIssue(payload, repo, ctx)`, la misma entrada que el webhook: conserva controles ALLOW/PENDING/BLOCK, claim previo al primer await por repositorio/issue, base por defecto, worktree propio, plan Taxi preparado, verificación determinista, entrega e historial/cleanup. Repetir la selección o recibir simultáneamente el webhook no crea otro worker para el mismo claim. La confirmación manual **no** concede permiso a un autor bloqueado.
+
+Los comandos existentes siguen disponibles: `/dc-webhook start`, `stop`, `status` (también sin argumentos) y `/dc-control`. `check` no sustituye la supervisión de preguntas ni el ciclo de shutdown.
+
 ## Selección de comandos
 
 - Lee `package.json` del worktree después del turno.

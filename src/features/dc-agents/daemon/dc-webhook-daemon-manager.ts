@@ -4,7 +4,7 @@ import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { dcNotifier } from "../../../integrations/dc-notify/dc-notifier.ts";
 import { resolveCurrentRepoIdentity, type RepoIdentity } from "./dc-repo-resolver.ts";
 import { DcWebhookReceiver } from "./dc-webhook-receiver.ts";
-import { dcIssueDispatcher, type DispatchedIssueTask } from "./dc-issue-dispatcher.ts";
+import { dcIssueDispatcher, type GitHubIssuePayload, type DispatchedIssueTask } from "./dc-issue-dispatcher.ts";
 import { promptApprovalModal } from "../../dc-approval/views/dc-approval-modal.ts";
 import { dcPrDelivery } from "./dc-pr-delivery.ts";
 import { dcWorkerRunner, updateWorktreeOddRoadmap } from "./dc-worker-runner.ts";
@@ -58,7 +58,21 @@ export class DcWebhookDaemonManager {
         port: 4545,
         capability,
         expectedRepoNwo: repo.fullNwo,
-        onIssueOpened: async (payload) => {
+        onIssueOpened: (payload) => this.executeIssue(payload, repo, ctx),
+        onError: (err) => {
+          if (ctx) {
+            dcNotifier.notify(ctx, "DC Webhook Daemon", `Error receptor: ${err.message}`, "error");
+          }
+        },
+      });
+
+    const activePort = await this.receiver.start();
+    this.startTunnel(repo.fullNwo, activePort, capability, ctx);
+    return this.getStatus();
+  }
+
+  /** Shared dispatch/Taxi/worker/delivery lifecycle; independent of listener state. */
+  public async executeIssue(payload: GitHubIssuePayload, repo: RepoIdentity, ctx?: ExtensionContext): Promise<void> {
           const issue = payload.issue;
           if (!issue) return;
           const userLogin = issue.user?.login ?? "anónimo";
@@ -229,20 +243,6 @@ export class DcWebhookDaemonManager {
               dcNotifier.notify(ctx, "DC GitHub Sentinel", `Error aislando Issue #${issue.number}: ${err.message}`, "error");
             }
           }
-        },
-        onError: (err) => {
-          if (ctx) {
-            dcNotifier.notify(ctx, "DC Webhook Daemon", `Error receptor: ${err.message}`, "error");
-          }
-        },
-      });
-
-    const activePort = await this.receiver.start();
-
-    // 3. Iniciar el túnel oficial con gh webhook forward
-    this.startTunnel(repo.fullNwo, activePort, capability, ctx);
-
-    return this.getStatus();
   }
 
   private startTunnel(repoNwo: string, port: number, capability: string, ctx?: ExtensionContext): void {
