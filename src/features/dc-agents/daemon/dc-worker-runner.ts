@@ -5,6 +5,7 @@ import { spawn } from "node:child_process";
 import type { EphemeralAgentLaunchPlan } from "../core/dc-ephemeral-manager.ts";
 import type { DispatchedIssueTask } from "./dc-issue-dispatcher.ts";
 import { getCollaboratorsDatabase } from "./dc-collaborators-db.ts";
+import { dcIssueNotifier } from "./dc-issue-notifier.ts";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -252,7 +253,81 @@ L1: Issue capturado en vivo por el daemon y despachado a worktree autónomo.
 
     updateWorktreeOddRoadmap(worktreePath, taskSlug, "T3", "in_progress", "dc-super-agente programando en worktree");
 
-    const { stdout, stderr, exitCode } = await this.runInWorktree(worktreePath, "pi", args);
+    // Iniciar vigilante activo de progreso de codificación (Worktree Progress Watcher)
+    let watcherActive = true;
+    const notifiedStages = new Set<string>();
+
+    const progressWatcher = (async () => {
+      const specFile = path.join(worktreePath, "odd", "tasks", `${taskSlug}.md`);
+      let previousMtime = 0;
+
+      while (watcherActive) {
+        await new Promise((r) => setTimeout(r, 6000));
+        if (!watcherActive) break;
+
+        try {
+          // 1. Detección de creación de tests (Fase RED)
+          if (!notifiedStages.has("red_tests")) {
+            const testDir = path.join(worktreePath, "test");
+            if (fs.existsSync(testDir)) {
+              const testFiles = fs.readdirSync(testDir);
+              const hasNewTest = testFiles.some((f) => f.includes(taskSlug) || f.endsWith(".test.ts"));
+              if (hasNewTest) {
+                notifiedStages.add("red_tests");
+                void dcIssueNotifier.notifyIssue(
+                  { repoRoot: worktreePath, issueNumber },
+                  `🤖 **DC Super-Agent**: 🔴 Fase RED: Escribiendo y estructurando pruebas deterministas previas en \`test/\`...`,
+                );
+              }
+            }
+          }
+
+          // 2. Detección de edición de código fuente (Fase GREEN)
+          if (!notifiedStages.has("source_green")) {
+            const status = await this.runInWorktree(worktreePath, "git", ["status", "--porcelain"], { timeoutMs: 5000 });
+            if (status.stdout && status.stdout.split("\n").some((l) => l.includes("src/"))) {
+              notifiedStages.add("source_green");
+              void dcIssueNotifier.notifyIssue(
+                { repoRoot: worktreePath, issueNumber },
+                `🤖 **DC Super-Agent**: ✏️ Fase GREEN: Implementando modificaciones de código fuente en \`src/\`...`,
+              );
+            }
+          }
+
+          // 3. Detección de cambios en la hoja de ruta ODD viva
+          if (fs.existsSync(specFile)) {
+            const mtime = fs.statSync(specFile).mtimeMs;
+            if (mtime > previousMtime && previousMtime > 0) {
+              previousMtime = mtime;
+              const content = fs.readFileSync(specFile, "utf8");
+              const tasks = content.split("\n").filter((l) => /^[✔▶○✖]\s+T\d+:/.test(l.trim()));
+              const summaryLine = tasks.map((t) => t.trim().slice(0, 30)).join(" · ");
+              if (summaryLine && !notifiedStages.has(`roadmap_${summaryLine}`)) {
+                notifiedStages.add(`roadmap_${summaryLine}`);
+                void dcIssueNotifier.notifyIssue(
+                  { repoRoot: worktreePath, issueNumber },
+                  `🤖 **DC Super-Agent**: 📊 Hoja de ruta ODD actualizada: ${summaryLine}`,
+                );
+              }
+            } else if (previousMtime === 0) {
+              previousMtime = mtime;
+            }
+          }
+        } catch {
+          /* best-effort */
+        }
+      }
+    })();
+
+    let runResult: { stdout: string; stderr: string; exitCode: number };
+    try {
+      runResult = await this.runInWorktree(worktreePath, "pi", args);
+    } finally {
+      watcherActive = false;
+      await progressWatcher.catch(() => {});
+    }
+
+    const { stdout, stderr, exitCode } = runResult;
 
     // Comprobar archivos modificados mediante git status en el worktree
     const statusRes = await this.runInWorktree(worktreePath, "git", ["status", "--porcelain"]);

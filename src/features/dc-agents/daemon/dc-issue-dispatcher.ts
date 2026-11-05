@@ -169,6 +169,15 @@ export class DcIssueDispatcher {
         reuseExisting: true,
       });
 
+      // 1b. Publicar la rama inmediatamente en el repositorio remoto de GitHub (push inicial de tracking)
+      try {
+        await dcWorkerRunner.runInWorktree(handle.worktreePath, "git", [
+          "push", "-u", "origin", handle.branchName,
+        ], { timeoutMs: 15000 });
+      } catch {
+        /* best-effort en entornos desconectados o pruebas sintéticas */
+      }
+
       // 2. Crear documento de especificación dentro del worktree (ODD/DeepSeek Ticket)
       const author = issue.user?.login ? `@${issue.user.login}` : "anónimo";
       const bodyText = typeof issue.body === "string" ? issue.body : "(Sin descripción proporcionada)";
@@ -198,10 +207,10 @@ export class DcIssueDispatcher {
         dcWorkerRunner.initializeOddSpec(dispatched, author, bodyText);
       }
 
-      // Notificación 3: Rama creada y entorno aislado montado
+      // Notificación 3: Rama creada, publicada en remoto y entorno aislado montado
       void dcIssueNotifier.notifyIssue(
         { repoRoot: handle.worktreePath, repoNwo: repoIdentity.fullNwo, issueNumber },
-        `🤖 **DC Super-Agent**: 🌿 Rama creada: \`${handle.branchName}\`. Worktree aislado montado. Especificación inicial ODD asentada.`,
+        `🤖 **DC Super-Agent**: 🌿 Rama creada y publicada en GitHub: \`${handle.branchName}\`. Worktree aislado montado. Especificación inicial ODD asentada.`,
       );
 
       this.activeDispatches.set(dispatchKey, dispatched);
