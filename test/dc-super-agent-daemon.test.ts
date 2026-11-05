@@ -8,7 +8,7 @@ import childProcess from "node:child_process";
 import { syncBuiltinESMExports } from "node:module";
 
 // Isolate before any singleton import, including parallel focused-suite runs.
-const home = fs.mkdtempSync(path.join(os.tmpdir(), "dc-daemon-home-"));
+const home = fs.mkdtempSync(path.join(os.homedir(), "dc-daemon-home-"));
 process.env.HOME = home;
 process.env.XDG_CONFIG_HOME = path.join(home, "xdg");
 process.env.PI_CODING_AGENT_DIR = path.join(home, "pi");
@@ -82,8 +82,36 @@ test("public daemon preserves one launch and records actual worker/delivery outc
   const { getCollaboratorsDatabase } = await import("../src/features/dc-agents/daemon/dc-collaborators-db.ts");
   getCollaboratorsDatabase().setCollaborator("fixture-author", "ALLOW", "CONTRIBUTOR", "fixture");
   const { DcWebhookDaemonManager } = await import("../src/features/dc-agents/daemon/dc-webhook-daemon-manager.ts");
-  const manager = new DcWebhookDaemonManager();
+  const manager = DcWebhookDaemonManager.getInstance();
+  const { registerWebhookDaemonCommands } = await import("../src/features/dc-agents/daemon/dc-webhook-commands.ts");
+  const { dcIssueDispatcher } = await import("../src/features/dc-agents/daemon/dc-issue-dispatcher.ts");
+  const commands = new Map<string, any>();
+  let shutdown: any;
+  let manualNumber = 99;
+  let manualAuthor = "fixture-author";
+  let manualRepo = "fixture/daemon-fixture";
+  let manualDetail: unknown;
+  const ctx: any = { cwd: root, hasUI: true, mode: "tui", ui: {
+    select: async (_title: string, options: string[]) => options[0], confirm: async () => true,
+  } };
+  const detail = () => ({ number: manualNumber, title: "fixture", body: "body", author: { login: manualAuthor },
+    url: `https://github.com/${manualRepo}/issues/${manualNumber}`, state: "OPEN", labels: [] });
+  registerWebhookDaemonCommands({ registerCommand: (name: string, command: any) => commands.set(name, command), registerShortcut: () => {},
+    on: (name: string, handler: any) => { if (name === "session_shutdown") shutdown = handler; },
+    exec: async (_command: string, args: string[], options: { cwd: string }) => {
+      assert.equal(options.cwd, ctx.cwd);
+      assert.equal(args[args.indexOf("--repo") + 1], manualRepo);
+      return { code: 0, stdout: JSON.stringify(args[1] === "list" ? [detail()] : manualDetail ?? detail()), stderr: "", killed: false };
+    },
+  } as any);
+  const check = () => commands.get("dc-webhook").handler("check", ctx);
   try {
+    // Manual dispatch works before any receiver/tunnel exists, using the actual singleton dispatcher.
+    assert.equal(manager.getStatus().running, false);
+    await check(); await started;
+    assert.equal(prepares, 1); assert.equal(workers, 1);
+    assert.equal(manager.getStatus().running, false);
+    await check(); assert.equal(prepares, 1);
     await manager.start({ cwd: root, hasUI: false } as Parameters<typeof manager.start>[0]);
     const url = new URL(forwardingUrl);
     const secret = url.searchParams.get("capability")!;
@@ -110,6 +138,46 @@ test("public daemon preserves one launch and records actual worker/delivery outc
     });
     assert.equal(await send("fifth"), 202);
     assert.equal(prepares, 1); assert.equal(workers, 1); assert.equal(deliveries, 1);
+    await t.test("rejected manual details and BLOCK author preserve actual dispatcher state", async () => {
+      const before = dcIssueDispatcher.getActiveDispatches();
+      const counts = [prepares, workers, deliveries, cleanups];
+      manualNumber = 220;
+      manualDetail = { ...detail(), state: "CLOSED" };
+      await check();
+      assert.deepEqual(dcIssueDispatcher.getActiveDispatches(), before);
+      assert.deepEqual([prepares, workers, deliveries, cleanups], counts);
+      manualDetail = undefined;
+      manualAuthor = "blocked-author";
+      getCollaboratorsDatabase().setCollaborator(manualAuthor, "BLOCK", "EXTERNAL", "fixture");
+      await check();
+      assert.deepEqual(dcIssueDispatcher.getActiveDispatches(), before);
+      assert.deepEqual([prepares, workers, deliveries, cleanups], counts);
+      assert.ok(logs.some(log => log.includes("bloqueado")));
+      manualAuthor = "fixture-author";
+    });
+    await t.test("manual B leaves listener A unchanged and concurrent webhook/manual share one claim", async () => {
+      const other = path.join(home, "repo-b"); fs.mkdirSync(other);
+      const gitB = (...args: string[]) => childProcess.execFileSync("git", ["-C", other, ...args], { stdio: "ignore" });
+      gitB("init", "-b", "main"); gitB("config", "user.name", "Fixture"); gitB("config", "user.email", "fixture@example.invalid");
+      fs.writeFileSync(path.join(other, "tracked"), "base"); gitB("add", "."); gitB("commit", "-m", "fixture");
+      gitB("remote", "add", "origin", "https://github.com/fixture/other.git");
+      const previous = manager.getStatus();
+      ctx.cwd = other; manualRepo = "fixture/other"; manualNumber = 230;
+      const done = new Promise<void>(resolve => { cleaned = resolve; });
+      await check(); await done;
+      assert.equal(manager.getStatus().repo, previous.repo);
+      assert.equal(manager.getStatus().port, previous.port);
+      assert.equal(manager.getStatus().running, true);
+      assert.equal(manager.getStatus().tunnelActive, previous.tunnelActive);
+      ctx.cwd = root; manualRepo = "fixture/daemon-fixture"; manualNumber = 231;
+      payload.issue.number = manualNumber;
+      const counts = [prepares, workers, deliveries, cleanups];
+      const concurrentDone = new Promise<void>(resolve => { cleaned = resolve; });
+      await Promise.all([check(), send("concurrent-one"), send("concurrent-two")]);
+      await concurrentDone;
+      assert.deepEqual([prepares, workers, deliveries, cleanups], counts.map(count => count + 1));
+      await check(); assert.equal(prepares, counts[0] + 1);
+    });
     for (const [scenario, expectedError, duration, deliveryCount] of [
       ["verification-failed", /pnpm run test.*exit 7.*assertion failed/, 100, 0],
       ["delivery-failed", /push rejected/, 350, 1],
@@ -140,6 +208,6 @@ test("public daemon preserves one launch and records actual worker/delivery outc
     assert.ok(!JSON.stringify(manager.getStatus()).includes(secret));
     assert.ok(!logs.join("\n").includes(secret));
   } finally {
-    releaseWorker(); await manager.stop(); spawnMock.mock.restore(); clock.mock.restore(); syncBuiltinESMExports(); mock.restoreAll();
+    releaseWorker(); await shutdown({ reason: "reload" }); await manager.stop(); spawnMock.mock.restore(); clock.mock.restore(); syncBuiltinESMExports(); mock.restoreAll();
   }
 });

@@ -6,12 +6,18 @@ import { openControlCenterModal } from "../views/dc-control-center-modal.ts";
 import { isSessionChangeReason } from "../../dc-exit/dc-exit.ts";
 import { dcRemoteQuestionManager } from "./dc-remote-question.ts";
 import { promptAgentQuestionModal } from "../views/dc-agent-question-modal.ts";
+import { checkPendingIssues } from "./dc-pending-issues.ts";
 
 export function registerWebhookDaemonCommands(pi: ExtensionAPI): void {
   pi.registerCommand("dc-webhook", {
-    description: "Administra el daemon de Webhooks de GitHub para resolución autónoma de issues en segundo plano",
+    description: "Administra el daemon de GitHub: start | stop | status | check (revisar hasta 50 issues pendientes)",
     handler: async (args: string, ctx: ExtensionContext) => {
       const sub = args.trim().toLowerCase();
+
+      if (sub === "check") {
+        await checkPendingIssues(pi, ctx);
+        return;
+      }
 
       if (sub === "start") {
         try {
@@ -45,7 +51,9 @@ export function registerWebhookDaemonCommands(pi: ExtensionAPI): void {
 
         const info = `Repositorio: ${repo} | Receptor: ${runningText} | Túnel GitHub: ${tunnelText} | Issues en proceso: ${dispatches} | Archivos reservados: ${conflicts}`;
         dcNotifier.notify(ctx, "DC Webhook Status", info, "info");
+        return;
       }
+      dcNotifier.notify(ctx, "DC Webhook Daemon", "Uso: /dc-webhook start | stop | status | check", "warning");
     },
   });
 
