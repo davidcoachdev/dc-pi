@@ -4,6 +4,7 @@
 
 export * from "./types.ts";
 export * from "./ice-validator.ts";
+export * from "./core/dc-ice-double-blind.ts";
 export * from "./tools/dc-ice-tools.ts";
 export * from "./dc-ice-extension.ts";
 
