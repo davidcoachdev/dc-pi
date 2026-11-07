@@ -6,6 +6,7 @@ export * from "./types.ts";
 export * from "./ice-validator.ts";
 export * from "./core/dc-ice-double-blind.ts";
 export * from "./core/dc-ice-carry-debt.ts";
+export * from "./core/dc-ice-context-meter.ts";
 export * from "./tools/dc-ice-tools.ts";
 export * from "./dc-ice-extension.ts";
 
