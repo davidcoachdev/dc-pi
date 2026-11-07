@@ -72,6 +72,7 @@ import dcLazywebExtension from "./features/dc-lazyweb/index.ts";
 import dcStateMonitorExtension from "./core/dc-agent-state/index.ts";
 import dcPtcExtension from "./features/dc-ptc/index.ts";
 import dcApprovalExtension from "./features/dc-approval/index.ts";
+import dcIceExtension from "./features/dc-ice/index.ts";
 
 export const profileDuelExtension = dcFaceExtension;
 export const dcFacesExtension = dcFaceExtension;
@@ -128,6 +129,7 @@ export {
   dcStateMonitorExtension,
   dcPtcExtension,
   dcApprovalExtension,
+  dcIceExtension,
 };
 
 export * from "./features/dc-engram/index.ts";
@@ -154,6 +156,7 @@ export * from "./features/dc-owasp/index.ts";
 export * from "./features/dc-lazyweb/index.ts";
 export * from "./features/dc-ptc/index.ts";
 export * from "./features/dc-approval/index.ts";
+export * from "./features/dc-ice/index.ts";
 
 /**
  * Unified DC Studio Extension.
@@ -208,6 +211,7 @@ export function dcStudioExtension(pi: ExtensionAPI, ctx?: ExtensionContext): voi
   dcLazywebExtension(pi);
   dcPtcExtension(pi);
   dcApprovalExtension(pi);
+  dcIceExtension(pi);
   dcDialogsExtension(pi, ctx);
 }
 
