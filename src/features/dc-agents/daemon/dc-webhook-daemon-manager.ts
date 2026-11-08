@@ -207,6 +207,10 @@ export class DcWebhookDaemonManager {
                   );
 
                   // 4. Entrega final a GitHub (Commit, Push, PR y comentario vinculante)
+                  const verificationEvidence = llmResult.verification?.commands.length
+                    ? llmResult.verification.commands.map(c => `- \`${c.command} ${c.args.join(" ")}\`: exit ${c.exitCode}`).join("\n")
+                    : undefined;
+
                   const deliveryRes = await dcPrDelivery.deliverIssue({
                     worktreePath: dispatched.worktreePath,
                     taskSlug: dispatched.taskSlug,
@@ -214,6 +218,8 @@ export class DcWebhookDaemonManager {
                     issueTitle: dispatched.issueTitle,
                     branchName: dispatched.branchName,
                     baseBranch: dispatched.baseBranch,
+                    issueBody: issue.body || "",
+                    verificationEvidence,
                   });
 
                   if (!deliveryRes.ok) throw new Error(deliveryRes.error || "Entrega de PR fallida");

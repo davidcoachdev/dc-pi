@@ -124,3 +124,186 @@ test("dc-pr-delivery: deliverIssue estructura y ejecuta el ciclo de entrega a Gi
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
 });
+
+test("dc-pr-delivery: sincronización preventiva con origin/baseBranch y generación de PR enriquecido", async () => {
+  const delivery = new DcPrDelivery();
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "dc-delivery-test-"));
+
+  const originalRun = dcWorkerRunner.runInWorktree;
+  const calls: string[] = [];
+  let capturedPrBody = "";
+
+  dcWorkerRunner.runInWorktree = async (_cwd, command, args) => {
+    const fullCmd = `${command} ${args.join(" ")}`;
+    calls.push(fullCmd);
+
+    if (command === "git" && args[0] === "add") return { stdout: "", stderr: "", exitCode: 0 };
+    if (command === "git" && args[0] === "commit") return { stdout: "[feat 1234567] commit", stderr: "", exitCode: 0 };
+    if (command === "git" && args[0] === "fetch") return { stdout: "", stderr: "", exitCode: 0 };
+    if (command === "git" && args[0] === "merge") return { stdout: "Already up to date.", stderr: "", exitCode: 0 };
+    if (command === "git" && args[0] === "diff") return { stdout: " src/index.ts | 10 ++++++++++\n 1 file changed, 10 insertions(+)", stderr: "", exitCode: 0 };
+    if (command === "git" && args[0] === "rev-parse") return { stdout: "a1b2c3d4e5f6\n", stderr: "", exitCode: 0 };
+    if (command === "git" && args[0] === "push") return { stdout: "branch pushed", stderr: "", exitCode: 0 };
+    if (command === "gh" && args[0] === "pr" && args[1] === "create") {
+      const bodyIndex = args.indexOf("--body");
+      if (bodyIndex !== -1) capturedPrBody = args[bodyIndex + 1];
+      return { stdout: "https://github.com/davidcoachdev/dc-pi/pull/99\n", stderr: "", exitCode: 0 };
+    }
+    if (command === "gh" && args[0] === "issue" && args[1] === "comment") {
+      return { stdout: "", stderr: "", exitCode: 0 };
+    }
+
+    return { stdout: "", stderr: "", exitCode: 0 };
+  };
+
+  try {
+    const res = await delivery.deliverIssue({
+      worktreePath: tmpDir,
+      taskSlug: "issue-99",
+      issueNumber: 99,
+      issueTitle: "Implementar nuevo endpoint",
+      branchName: "feat/issue-99",
+      baseBranch: "master",
+      issueBody: "Por favor implementar endpoint /api/v1/metrics con tests.",
+      verificationEvidence: "- `npm run typecheck`: exit 0\n- `npm run test`: exit 0",
+    });
+
+    assert.equal(res.ok, true);
+    assert.equal(res.prUrl, "https://github.com/davidcoachdev/dc-pi/pull/99");
+    assert.equal(res.prNumber, 99);
+    assert.equal(res.commitHash, "a1b2c3d");
+
+    // Verificar que el flujo incluye fetch y merge de origin/master antes del push
+    assert.ok(calls.includes("git fetch origin master"));
+    assert.ok(calls.includes("git merge origin/master --no-edit"));
+    assert.ok(calls.includes("git push -u origin feat/issue-99"));
+
+    // Verificar que el cuerpo del PR usa la plantilla enriquecida
+    assert.ok(capturedPrBody.includes("# task/issue-99: Implementar nuevo endpoint"));
+    assert.ok(capturedPrBody.includes("Closes #99"));
+    assert.ok(capturedPrBody.includes("Contexto original del Issue"));
+    assert.ok(capturedPrBody.includes("Por favor implementar endpoint /api/v1/metrics"));
+    assert.ok(capturedPrBody.includes("src/index.ts | 10 ++++++++++"));
+    assert.ok(capturedPrBody.includes("Evidencia de Verificación Determinista"));
+    assert.ok(capturedPrBody.includes("npm run typecheck"));
+    assert.ok(capturedPrBody.includes("Estrategia de merge"));
+    assert.ok(capturedPrBody.includes("--no-ff"));
+  } finally {
+    dcWorkerRunner.runInWorktree = originalRun;
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test("dc-pr-delivery: aborta y detiene la entrega de forma segura ante conflictos en merge", async () => {
+  const delivery = new DcPrDelivery();
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "dc-delivery-conflict-test-"));
+
+  const originalRun = dcWorkerRunner.runInWorktree;
+  const calls: string[] = [];
+
+  dcWorkerRunner.runInWorktree = async (_cwd, command, args) => {
+    const fullCmd = `${command} ${args.join(" ")}`;
+    calls.push(fullCmd);
+
+    if (command === "git" && args[0] === "add") return { stdout: "", stderr: "", exitCode: 0 };
+    if (command === "git" && args[0] === "commit") return { stdout: "[feat 1234567] commit", stderr: "", exitCode: 0 };
+    if (command === "git" && args[0] === "fetch") return { stdout: "", stderr: "", exitCode: 0 };
+    if (command === "git" && args[0] === "merge" && args[1] === "origin/master") {
+      return { stdout: "Auto-merging file.ts\nCONFLICT (content): Merge conflict in file.ts", stderr: "", exitCode: 1 };
+    }
+    if (command === "git" && args[0] === "merge" && args[1] === "--abort") {
+      return { stdout: "", stderr: "", exitCode: 0 };
+    }
+
+    return { stdout: "", stderr: "", exitCode: 0 };
+  };
+
+  try {
+    const res = await delivery.deliverIssue({
+      worktreePath: tmpDir,
+      taskSlug: "issue-100",
+      issueNumber: 100,
+      issueTitle: "Tarea con conflicto de ramas",
+      branchName: "feat/issue-100",
+      baseBranch: "master",
+    });
+
+    assert.equal(res.ok, false);
+    assert.ok(res.error?.includes("Conflicto detectado con origin/master"));
+    assert.ok(calls.includes("git merge origin/master --no-edit"));
+    assert.ok(calls.includes("git merge --abort"));
+
+    // Prohibido hacer push o abrir PR si hubo conflicto
+    assert.equal(calls.some(c => c.startsWith("git push")), false);
+    assert.equal(calls.some(c => c.startsWith("gh pr create")), false);
+  } finally {
+    dcWorkerRunner.runInWorktree = originalRun;
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test("dc-pr-delivery: integración de upstream activa re-verificación y actualiza evidencia fresca", async () => {
+  const delivery = new DcPrDelivery();
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "dc-delivery-reverify-test-"));
+
+  const originalRun = dcWorkerRunner.runInWorktree;
+  const originalVerify = dcWorkerRunner.verifyWorktree;
+  let reverifyCalled = false;
+  let capturedPrBody = "";
+  let revParseCount = 0;
+
+  dcWorkerRunner.verifyWorktree = async () => {
+    reverifyCalled = true;
+    return {
+      ok: true,
+      commands: [
+        { command: "npm", args: ["run", "typecheck"], stdout: "", stderr: "", exitCode: 0 },
+        { command: "npm", args: ["run", "test"], stdout: "", stderr: "", exitCode: 0 },
+      ],
+    };
+  };
+
+  dcWorkerRunner.runInWorktree = async (_cwd, command, args) => {
+    if (command === "git" && args[0] === "add") return { stdout: "", stderr: "", exitCode: 0 };
+    if (command === "git" && args[0] === "commit") return { stdout: "[feat 1234567] commit", stderr: "", exitCode: 0 };
+    if (command === "git" && args[0] === "fetch") return { stdout: "", stderr: "", exitCode: 0 };
+    if (command === "git" && args[0] === "rev-parse" && args[1] === "HEAD") {
+      revParseCount++;
+      // Primer rev-parse antes del merge: hash A
+      if (revParseCount === 1) return { stdout: "1111111111111111111111111111111111111111\n", stderr: "", exitCode: 0 };
+      // Segundo rev-parse después del merge: hash B (upstream integrado)
+      return { stdout: "2222222222222222222222222222222222222222\n", stderr: "", exitCode: 0 };
+    }
+    if (command === "git" && args[0] === "merge") return { stdout: "Merge made by the 'ort' strategy.", stderr: "", exitCode: 0 };
+    if (command === "git" && args[0] === "diff") return { stdout: " src/index.ts | 2 +-\n", stderr: "", exitCode: 0 };
+    if (command === "git" && args[0] === "push") return { stdout: "", stderr: "", exitCode: 0 };
+    if (command === "gh" && args[0] === "pr" && args[1] === "create") {
+      const bodyIndex = args.indexOf("--body");
+      if (bodyIndex !== -1) capturedPrBody = args[bodyIndex + 1];
+      return { stdout: "https://github.com/davidcoachdev/dc-pi/pull/101\n", stderr: "", exitCode: 0 };
+    }
+    if (command === "gh" && args[0] === "issue") return { stdout: "", stderr: "", exitCode: 0 };
+    return { stdout: "", stderr: "", exitCode: 0 };
+  };
+
+  try {
+    const res = await delivery.deliverIssue({
+      worktreePath: tmpDir,
+      taskSlug: "issue-101",
+      issueNumber: 101,
+      issueTitle: "Tarea con cambios nuevos en master",
+      branchName: "feat/issue-101",
+      baseBranch: "master",
+      verificationEvidence: "- `npm run test`: exit 0 (pre-merge)",
+    });
+
+    assert.equal(res.ok, true);
+    assert.equal(reverifyCalled, true, "verifyWorktree debió haberse ejecutado al cambiar el hash de HEAD");
+    assert.ok(capturedPrBody.includes("post-merge"), "El cuerpo del PR debe reflejar la evidencia de la re-verificación post-merge");
+    assert.equal(res.commitHash, "2222222");
+  } finally {
+    dcWorkerRunner.runInWorktree = originalRun;
+    dcWorkerRunner.verifyWorktree = originalVerify;
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
