@@ -1,3 +1,5 @@
+import * as fs from "node:fs";
+import * as path from "node:path";
 import { randomBytes } from "node:crypto";
 import { spawn, type ChildProcess } from "node:child_process";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
@@ -33,6 +35,8 @@ export class DcWebhookDaemonManager {
   private tunnelProcess?: ChildProcess;
   private currentRepo?: RepoIdentity;
   private isTunnelRunning = false;
+  private inFlightWorkers = new Set<string>();
+  private pendingReruns = new Map<string, { dispatched: DispatchedIssueTask; repo: RepoIdentity; instruction?: string; ctx?: ExtensionContext }>();
 
   public static getInstance(): DcWebhookDaemonManager {
     if (!DcWebhookDaemonManager.instance) {
@@ -122,160 +126,233 @@ export class DcWebhookDaemonManager {
               }
 
               // Disparo autónomo en segundo plano del superagente con Taxi de Flota
-              void (async () => {
-                let ephemeralPlan: ReturnType<typeof prepareEphemeralAgent> | undefined;
-                const startedAt = Date.now();
-                const workerSessionId = `dc-super-agent-issue-${issue.number}-${startedAt}`;
-                let status: "completed" | "failed" = "failed";
-                let error: string | undefined;
-
-                try {
-                  // 1. Arrendar Taxi en la Flota y preparar definición de DC Super-Agent con contrato estricto de Allowed edit surfaces
-                  ephemeralPlan = prepareEphemeralAgent(
-                    {
-                      task: [
-                        `Misión autónoma de DC Super-Agent: Resolver Issue #${issue.number}: ${issue.title}`,
-                        `Requerimiento: ${issue.body || "(Sin descripción)"}`,
-                        `Directorio de trabajo asignado: ${dispatched.worktreePath}`,
-                        `Rama de trabajo: ${dispatched.branchName}`,
-                        "",
-                        "## Allowed edit surfaces",
-                        "src/**",
-                        "test/**",
-                        "odd/**",
-                        "package.json",
-                        "tsconfig.json",
-                      ].join("\n"),
-                      role: "dc-super-agente",
-                      archetype: "dc-odd-worker",
-                      mode: "background",
-                      sessionId: workerSessionId,
-                    },
-                    {
-                      sessionId: workerSessionId,
-                      pid: process.pid,
-                    },
-                  );
-
-                  const taxiAc = ephemeralPlan.leasedAccount.toUpperCase();
-                  const workerMsg = `🚕 Taxi [${taxiAc}] asignado a dc-super-agente para Issue #${issue.number}`;
-                  dcNotifier.notifyHerdr(workerMsg);
-                  if (ctx) {
-                    dcNotifier.notify(ctx, "🚕 Flota de Taxis", workerMsg, "info");
-                  }
-
-                  // Notificar inmediatamente al Issue en GitHub la asignación del Taxi y el inicio de análisis
-                  await dcIssueNotifier.notifyIssue(
-                    { repoRoot: dispatched.worktreePath, repoNwo: repo.fullNwo, issueNumber: dispatched.issueNumber },
-                    `🤖 **DC Super-Agent**: Taxi [${taxiAc}] asignado. Iniciando análisis de especificación ODD y pruebas RED...`,
-                  );
-
-                  updateWorktreeOddRoadmap(dispatched.worktreePath, dispatched.taskSlug, "T2", "done", `Analizado por dc-super-agente (${taxiAc})`);
-                  updateWorktreeOddRoadmap(dispatched.worktreePath, dispatched.taskSlug, "T3", "in_progress", `dc-super-agente programando en worktree (${taxiAc})`);
-
-                  // Notificar inicio de implementación de código
-                  await dcIssueNotifier.notifyIssue(
-                    { repoRoot: dispatched.worktreePath, repoNwo: repo.fullNwo, issueNumber: dispatched.issueNumber },
-                    `🤖 **DC Super-Agent**: 🔨 Iniciando implementación de código de la solución en worktree...`,
-                  );
-
-                  // 2. Ejecución autónoma con LLM Real en worktree aislado
-                  const llmResult = await dcWorkerRunner.executeAutonomousLlmSession({
-                    worktreePath: dispatched.worktreePath,
-                    taskSlug: dispatched.taskSlug,
-                    issueNumber: dispatched.issueNumber,
-                    issueTitle: dispatched.issueTitle,
-                    issueBody: issue.body || "",
-                    preparedAgent: ephemeralPlan,
-                  });
-
-                  if (!llmResult.ok) {
-                    if (!llmResult.verification.ok) {
-                      const failedCommand = llmResult.verification.commands.find(result => result.exitCode !== 0);
-                      const reason = failedCommand
-                        ? `${failedCommand.command} ${failedCommand.args.join(" ")}: exit ${failedCommand.exitCode}; ${failedCommand.stderr || failedCommand.stdout}`
-                        : llmResult.verification.error || "Sin verificación determinista aprobada";
-                      throw new Error(`Verificación fallida: ${reason}`);
-                    }
-                    throw new Error(`Pi exit ${llmResult.exitCode}: ${llmResult.stderr}`);
-                  }
-
-                  // Notificar que la verificación determinista fue superada
-                  await dcIssueNotifier.notifyIssue(
-                    { repoRoot: dispatched.worktreePath, repoNwo: repo.fullNwo, issueNumber: dispatched.issueNumber },
-                    `🤖 **DC Super-Agent**: ✅ Verificación determinista superada con éxito (exit code 0). Preparando entrega de Pull Request...`,
-                  );
-
-                  // 4. Entrega final a GitHub (Commit, Push, PR y comentario vinculante)
-                  const verificationEvidence = llmResult.verification?.commands.length
-                    ? llmResult.verification.commands.map(c => `- \`${c.command} ${c.args.join(" ")}\`: exit ${c.exitCode}`).join("\n")
-                    : undefined;
-
-                  const deliveryRes = await dcPrDelivery.deliverIssue({
-                    worktreePath: dispatched.worktreePath,
-                    taskSlug: dispatched.taskSlug,
-                    issueNumber: dispatched.issueNumber,
-                    issueTitle: dispatched.issueTitle,
-                    branchName: dispatched.branchName,
-                    baseBranch: dispatched.baseBranch,
-                    issueBody: issue.body || "",
-                    verificationEvidence,
-                  });
-
-                  if (!deliveryRes.ok) throw new Error(deliveryRes.error || "Entrega de PR fallida");
-                  status = "completed";
-                  if (ctx) {
-                    dcNotifier.notify(
-                      ctx,
-                      "DC Super-Agent",
-                      `🎉 Pull Request lista para Issue #${issue.number}: ${deliveryRes.prUrl}`,
-                      "info",
-                    );
-                  }
-                } catch (workerErr: any) {
-                  const errorMsg = workerErr?.message || String(workerErr);
-                  status = "failed";
-                  error = errorMsg;
-                  updateWorktreeOddRoadmap(dispatched.worktreePath, dispatched.taskSlug, "T5", "failed", errorMsg);
-                  // Notificar el fallo en el Issue de GitHub
-                  await dcIssueNotifier.notifyIssue(
-                    { repoRoot: dispatched.worktreePath, repoNwo: repo.fullNwo, issueNumber: dispatched.issueNumber },
-                    `🤖 **DC Super-Agent**: ❌ Se detuvo la ejecución autónoma: ${errorMsg}. Se requiere intervención en el Centro de Control.`,
-                    "DISPATCH",
-                  );
-                  if (ctx) {
-                    dcNotifier.notify(ctx, "DC Super-Agent", `Error en superagente Issue #${issue.number}: ${errorMsg}`, "error");
-                    // Elevación interactiva mediante modal visual si hay UI activa
-                    if (ctx.hasUI) {
-                      void promptApprovalModal(ctx, {
-                        id: `error-${issue.number}-${Date.now()}`,
-                        toolName: "DC Super-Agent Runner",
-                        action: `Atender bloqueo/fallo en Issue #${issue.number}`,
-                        target: issue.title,
-                        reason: `El subagente se detuvo: ${errorMsg}. Continúa manualmente; este aviso no reintenta la ejecución.`,
-                        timestamp: Date.now(),
-                      }).catch(() => {});
-                    }
-                  }
-                } finally {
-                  // 5. Liberar Taxi y limpiar recursos efímeros del superagente
-                  if (ephemeralPlan) {
-                    cleanupEphemeralAgent(ephemeralPlan, {
-                      sessionId: workerSessionId,
-                      startedAt,
-                      endedAt: Date.now(),
-                      status,
-                      error,
-                    });
-                  }
-                }
-              })();
+              void this.runAutonomousWorker(
+                dispatched,
+                repo,
+                { number: issue.number, title: issue.title, body: issue.body || "" },
+                ctx,
+              );
             }
           } catch (err: any) {
             if (ctx) {
               dcNotifier.notify(ctx, "DC GitHub Sentinel", `Error aislando Issue #${issue.number}: ${err.message}`, "error");
             }
           }
+  }
+
+  /**
+   * Ejecuta la sesión autónoma del LLM con cuenta arrendada de la Flota de Taxis,
+   * verificación determinista estricta en worktree y entrega continua de PR.
+   */
+  public async runAutonomousWorker(
+    dispatched: DispatchedIssueTask,
+    repo: RepoIdentity,
+    issueDetails: { number: number; title: string; body?: string },
+    ctx?: ExtensionContext,
+  ): Promise<void> {
+    const lockKey = `${repo.fullNwo.toLowerCase()}:${issueDetails.number}`;
+    if (this.inFlightWorkers.has(lockKey)) {
+      const busyMsg = `🤖 **DC Super-Agent 86**: ⏳ Ya hay una sesión de trabajo activa en progreso para el Issue #${issueDetails.number}. Las nuevas directivas se incorporarán al ciclo actual.`;
+      await dcIssueNotifier.notifyIssue(
+        { repoRoot: dispatched.worktreePath, repoNwo: repo.fullNwo, issueNumber: issueDetails.number },
+        busyMsg,
+      );
+      return;
+    }
+    this.inFlightWorkers.add(lockKey);
+
+    let ephemeralPlan: ReturnType<typeof prepareEphemeralAgent> | undefined;
+    const startedAt = Date.now();
+    const workerSessionId = `dc-super-agent-issue-${issueDetails.number}-${startedAt}`;
+    let status: "completed" | "failed" = "failed";
+    let error: string | undefined;
+
+    try {
+      // 1. Arrendar Taxi en la Flota y preparar definición de DC Super-Agent con contrato estricto de Allowed edit surfaces
+      ephemeralPlan = prepareEphemeralAgent(
+        {
+          task: [
+            `Misión autónoma de DC Super-Agent 86: Resolver Issue #${issueDetails.number}: ${issueDetails.title}`,
+            `Requerimiento: ${issueDetails.body || "(Sin descripción)"}`,
+            `Directorio de trabajo asignado: ${dispatched.worktreePath}`,
+            `Rama de trabajo: ${dispatched.branchName}`,
+            "",
+            "## Allowed edit surfaces",
+            "src/**",
+            "test/**",
+            "odd/**",
+            "package.json",
+            "tsconfig.json",
+          ].join("\n"),
+          role: "dc-super-agente-86",
+          archetype: "dc-odd-worker",
+          mode: "background",
+          sessionId: workerSessionId,
+        },
+        {
+          sessionId: workerSessionId,
+          pid: process.pid,
+        },
+      );
+
+      const taxiAc = ephemeralPlan.leasedAccount.toUpperCase();
+      const workerMsg = `🚕 Taxi [${taxiAc}] asignado a dc-super-agente-86 para Issue #${issueDetails.number}`;
+      dcNotifier.notifyHerdr(workerMsg);
+      if (ctx) {
+        dcNotifier.notify(ctx, "🚕 Flota de Taxis", workerMsg, "info");
+      }
+
+      // Notificar inmediatamente al Issue en GitHub la asignación del Taxi y el inicio de análisis
+      await dcIssueNotifier.notifyIssue(
+        { repoRoot: dispatched.worktreePath, repoNwo: repo.fullNwo, issueNumber: dispatched.issueNumber },
+        `🤖 **DC Super-Agent 86**: Taxi [${taxiAc}] asignado. Iniciando análisis de especificación ODD y pruebas RED...`,
+      );
+
+      updateWorktreeOddRoadmap(dispatched.worktreePath, dispatched.taskSlug, "T2", "done", `Analizado por dc-super-agente-86 (${taxiAc})`);
+      updateWorktreeOddRoadmap(dispatched.worktreePath, dispatched.taskSlug, "T3", "in_progress", `dc-super-agente-86 programando en worktree (${taxiAc})`);
+
+      // Notificar inicio de implementación de código
+      await dcIssueNotifier.notifyIssue(
+        { repoRoot: dispatched.worktreePath, repoNwo: repo.fullNwo, issueNumber: dispatched.issueNumber },
+        `🤖 **DC Super-Agent 86**: 🔨 Iniciando implementación de código de la solución en worktree...`,
+      );
+
+      // 2. Ejecución autónoma con LLM Real en worktree aislado
+      const llmResult = await dcWorkerRunner.executeAutonomousLlmSession({
+        worktreePath: dispatched.worktreePath,
+        taskSlug: dispatched.taskSlug,
+        issueNumber: dispatched.issueNumber,
+        issueTitle: dispatched.issueTitle,
+        issueBody: issueDetails.body || "",
+        preparedAgent: ephemeralPlan,
+      });
+
+      if (!llmResult.ok) {
+        if (!llmResult.verification.ok) {
+          const failedCommand = llmResult.verification.commands.find(result => result.exitCode !== 0);
+          const reason = failedCommand
+            ? `${failedCommand.command} ${failedCommand.args.join(" ")}: exit ${failedCommand.exitCode}; ${failedCommand.stderr || failedCommand.stdout}`
+            : llmResult.verification.error || "Sin verificación determinista aprobada";
+          throw new Error(`Verificación fallida: ${reason}`);
+        }
+        throw new Error(`Pi exit ${llmResult.exitCode}: ${llmResult.stderr}`);
+      }
+
+      // Notificar que la verificación determinista fue superada
+      await dcIssueNotifier.notifyIssue(
+        { repoRoot: dispatched.worktreePath, repoNwo: repo.fullNwo, issueNumber: dispatched.issueNumber },
+        `🤖 **DC Super-Agent 86**: ✅ Verificación determinista superada con éxito (exit code 0). Preparando entrega de Pull Request...`,
+      );
+
+      // 4. Entrega final a GitHub (Commit, Push, PR y comentario vinculante)
+      const verificationEvidence = llmResult.verification?.commands.length
+        ? llmResult.verification.commands.map(c => `- \`${c.command} ${c.args.join(" ")}\`: exit ${c.exitCode}`).join("\n")
+        : undefined;
+
+      const deliveryRes = await dcPrDelivery.deliverIssue({
+        worktreePath: dispatched.worktreePath,
+        taskSlug: dispatched.taskSlug,
+        issueNumber: dispatched.issueNumber,
+        issueTitle: dispatched.issueTitle,
+        branchName: dispatched.branchName,
+        baseBranch: dispatched.baseBranch,
+        issueBody: issueDetails.body || "",
+        verificationEvidence,
+      });
+
+      if (!deliveryRes.ok) throw new Error(deliveryRes.error || "Entrega de PR fallida");
+      status = "completed";
+      if (ctx) {
+        dcNotifier.notify(
+          ctx,
+          "DC Super-Agent 86",
+          `🎉 Pull Request lista para Issue #${issueDetails.number}: ${deliveryRes.prUrl}`,
+          "info",
+        );
+      }
+    } catch (workerErr: any) {
+      const errorMsg = workerErr?.message || String(workerErr);
+      status = "failed";
+      error = errorMsg;
+      updateWorktreeOddRoadmap(dispatched.worktreePath, dispatched.taskSlug, "T5", "failed", errorMsg);
+      // Notificar el fallo en el Issue de GitHub
+      await dcIssueNotifier.notifyIssue(
+        { repoRoot: dispatched.worktreePath, repoNwo: repo.fullNwo, issueNumber: dispatched.issueNumber },
+        `🤖 **DC Super-Agent 86**: ❌ Se detuvo la ejecución autónoma: ${errorMsg}. Se requiere intervención en el Centro de Control.`,
+        "DISPATCH",
+      );
+      if (ctx) {
+        dcNotifier.notify(ctx, "DC Super-Agent 86", `Error en superagente Issue #${issueDetails.number}: ${errorMsg}`, "error");
+        // Elevación interactiva mediante modal visual si hay UI activa
+        if (ctx.hasUI) {
+          void promptApprovalModal(ctx, {
+            id: `error-${issueDetails.number}-${Date.now()}`,
+            toolName: "DC Super-Agent Runner",
+            action: `Atender bloqueo/fallo en Issue #${issueDetails.number}`,
+            target: issueDetails.title,
+            reason: `El subagente se detuvo: ${errorMsg}. Continúa manualmente; este aviso no reintenta la ejecución.`,
+            timestamp: Date.now(),
+          }).catch(() => {});
+        }
+      }
+    } finally {
+      this.inFlightWorkers.delete(lockKey);
+      // 5. Liberar Taxi y limpiar recursos efímeros del superagente
+      if (ephemeralPlan) {
+        cleanupEphemeralAgent(ephemeralPlan, {
+          sessionId: workerSessionId,
+          startedAt,
+          endedAt: Date.now(),
+          status,
+          error,
+        });
+      }
+
+      // Si llegaron directivas adicionales mientras el worker estaba en vuelo o entregando,
+      // disparar automáticamente una segunda pasada para no dejarlas sin implementar.
+      const nextRerun = this.pendingReruns.get(lockKey);
+      if (nextRerun) {
+        this.pendingReruns.delete(lockKey);
+        void this.resumeIssue(nextRerun.dispatched, nextRerun.repo, nextRerun.instruction, nextRerun.ctx);
+      }
+    }
+  }
+
+  /** Reanuda la resolución autónoma de un issue existente con nuevas directivas. */
+  public async resumeIssue(
+    dispatched: DispatchedIssueTask,
+    repo: RepoIdentity,
+    newInstruction?: string,
+    ctx?: ExtensionContext,
+  ): Promise<void> {
+    const lockKey = `${repo.fullNwo.toLowerCase()}:${dispatched.issueNumber}`;
+    const specFile = path.join(dispatched.worktreePath, "odd", "tasks", `${dispatched.taskSlug}.md`);
+
+    if (newInstruction && fs.existsSync(specFile)) {
+      const specContent = fs.readFileSync(specFile, "utf8");
+      // Evitar doble escritura si la directiva ya fue asentada
+      if (!specContent.includes(`"${newInstruction}"`)) {
+        fs.appendFileSync(specFile, `\n- Directiva adicional del OWNER: "${newInstruction}"\n`, "utf8");
+      }
+    }
+
+    if (this.inFlightWorkers.has(lockKey)) {
+      // Registrar re-ejecución pendiente para que al terminar el ciclo actual se procese la nueva directiva
+      this.pendingReruns.set(lockKey, { dispatched, repo, instruction: newInstruction, ctx });
+      return;
+    }
+
+    updateWorktreeOddRoadmap(dispatched.worktreePath, dispatched.taskSlug, "T3", "in_progress", "dc-super-agente-86 reanudando implementación con nuevas directivas");
+    return this.runAutonomousWorker(
+      dispatched,
+      repo,
+      {
+        number: dispatched.issueNumber,
+        title: dispatched.issueTitle,
+        body: newInstruction ? `Nuevas directivas: ${newInstruction}` : dispatched.issueTitle,
+      },
+      ctx,
+    );
   }
 
   private startTunnel(repoNwo: string, port: number, capability: string, ctx?: ExtensionContext): void {

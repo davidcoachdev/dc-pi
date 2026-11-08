@@ -6,7 +6,9 @@ import { dcIssueDispatcher } from "./dc-issue-dispatcher.ts";
 import { dcIssueNotifier } from "./dc-issue-notifier.ts";
 import { dcWorkerRunner } from "./dc-worker-runner.ts";
 import { dcRemoteQuestionManager } from "./dc-remote-question.ts";
+import { dcWebhookDaemonManager } from "./dc-webhook-daemon-manager.ts";
 import type { GitHubIssueCommentPayload, IssueCommentCommandResult } from "./dc-issue-comment-types.ts";
+import type { DispatchedIssueTask } from "./dc-issue-dispatcher.ts";
 
 /**
  * Gestor Full-Duplex de Comentarios de Issues (DC Issue Comment Router).
@@ -51,7 +53,7 @@ export class DcIssueCommentRouter {
     }
 
     // Ignorar si el comentario fue emitido por el propio super-agente
-    if (commentBody.includes("🤖 **DC Super-Agent**")) {
+    if (commentBody.includes("🤖 **DC Super-Agent") || commentBody.includes("dc-super-agente")) {
       return { handled: false, reason: "ignoring self comment" };
     }
 
@@ -93,7 +95,7 @@ export class DcIssueCommentRouter {
         source: "custom_text",
         answeredAt: Date.now(),
       });
-      const ackMsg = `🤖 **DC Super-Agent**: 💬 Recibí tu indicación: "${commentBody}". He desbloqueado al subagente y reanudado la tarea.`;
+      const ackMsg = `🤖 **DC Super-Agent 86**: 💬 Recibí tu indicación: "${commentBody}". He desbloqueado al subagente y reanudado la tarea.`;
       await dcIssueNotifier.notifyIssue(target, ackMsg);
       return { handled: true, response: ackMsg };
     }
@@ -126,7 +128,7 @@ export class DcIssueCommentRouter {
         ].join("\n");
       }
 
-      const reply = `🤖 **DC Super-Agent**: Hola @${authorLogin}. Aquí está el reporte en vivo:\n\n${statusDetails}`;
+      const reply = `🤖 **DC Super-Agent 86**: Hola @${authorLogin}. Aquí está el reporte en vivo:\n\n${statusDetails}`;
       await dcIssueNotifier.notifyIssue(target, reply);
       return { handled: true, response: reply };
     }
@@ -138,27 +140,61 @@ export class DcIssueCommentRouter {
         const stat = await dcWorkerRunner.runInWorktree(worktreePath, "git", ["status", "--short"], { timeoutMs: 5000 });
         diffDetails = stat.stdout ? `\`\`\`text\n${stat.stdout}\n\`\`\`` : "El árbol de trabajo está limpio actualmente.";
       }
-      const reply = `🤖 **DC Super-Agent**: Archivos modificados en el worktree:\n\n${diffDetails}`;
+      const reply = `🤖 **DC Super-Agent 86**: Archivos modificados en el worktree:\n\n${diffDetails}`;
       await dcIssueNotifier.notifyIssue(target, reply);
       return { handled: true, response: reply };
     }
 
-    // ── 5. Directiva de Alcance: Añadir requerimiento al ODD ──
+    // ── 5. Directiva de Alcance: Añadir requerimiento al ODD y reanudar ejecución continua ──
     if (cleanMsg.startsWith("añade") || cleanMsg.startsWith("anade") || cleanMsg.startsWith("agrega") || cleanMsg.startsWith("/dc add")) {
       const instruction = commentBody.replace(/^(?:añade|anade|agrega|\/dc add)[:\s]*/i, "").trim();
+
+      // Si el issue ya está cerrado, no se permite añadir tareas ni reanudar
+      if (payload.issue.state === "closed") {
+        const closedReply = `🤖 **DC Super-Agent 86**: ⚠️ El Issue #${issueNumber} ya está cerrado. No se admiten nuevas tareas ni ejecuciones sobre un issue cerrado.`;
+        await dcIssueNotifier.notifyIssue(target, closedReply);
+        return { handled: true, response: closedReply };
+      }
+
       if (worktreePath && instruction) {
         const specFile = path.join(worktreePath, "odd", "tasks", `${taskSlug}.md`);
         if (fs.existsSync(specFile)) {
-          fs.appendFileSync(specFile, `\n- Directiva adicional del OWNER (@${authorLogin}): "${instruction}"\n`, "utf8");
+          const specContent = fs.readFileSync(specFile, "utf8");
+          if (!specContent.includes(`"${instruction}"`)) {
+            fs.appendFileSync(specFile, `\n- Directiva adicional del OWNER (@${authorLogin}): "${instruction}"\n`, "utf8");
+          }
         }
-        const reply = `🤖 **DC Super-Agent**: 📝 Directiva recibida del OWNER. Agregada a la especificación ODD: "${instruction}". El agente la incorporará a la solución.`;
+        const reply = `🤖 **DC Super-Agent 86**: 📝 Directiva recibida del OWNER: "${instruction}". Iniciando implementación autónoma y actualización de la Pull Request...`;
         await dcIssueNotifier.notifyIssue(target, reply);
+
+        // Despachar / reanudar el ciclo de vida continuo del superagente
+        const repoIdentity = {
+          owner: payload.repository.owner.login,
+          repo: payload.repository.name,
+          fullNwo: repoNwo,
+          repoRoot: worktreePath,
+          remoteUrl: `https://github.com/${repoNwo}.git`,
+        };
+
+        const targetDispatch: DispatchedIssueTask = dispatch || {
+          issueNumber,
+          issueTitle: payload.issue.title || `Issue #${issueNumber}`,
+          issueUrl: payload.issue.html_url || "",
+          taskSlug,
+          worktreePath,
+          branchName,
+          baseBranch: "master",
+          dispatchedAt: Date.now(),
+          handle: {} as any,
+        };
+
+        void dcWebhookDaemonManager.resumeIssue(targetDispatch, repoIdentity, instruction);
         return { handled: true, response: reply };
       }
     }
 
     // Respuesta de acuse genérico si no coincidió con un comando específico
-    const defaultAck = `🤖 **DC Super-Agent**: Hola @${authorLogin}. He registrado tu mensaje en el log de auditoría. Puedes preguntarme "¿Cómo vamos?" para ver el estado en vivo o darme directivas con "añade: <detalle>".`;
+    const defaultAck = `🤖 **DC Super-Agent 86**: Hola @${authorLogin}. He registrado tu mensaje en el log de auditoría. Puedes preguntarme "¿Cómo vamos?" para ver el estado en vivo o darme directivas con "añade: <detalle>".`;
     await dcIssueNotifier.notifyIssue(target, defaultAck);
     return { handled: true, response: defaultAck };
   }

@@ -51,7 +51,7 @@ async function main() {
   if (issueNumber > 0) {
     await dcIssueNotifier.notifyIssue(
       { repoRoot: process.cwd(), issueNumber },
-      `🤖 **DC Super-Agent**: ❓ Consulta enviada al usuario humano: "${question}" (Opciones: ${options.join(", ")}). Esperando respuesta interactiva...`,
+      `🤖 **DC Super-Agent 86**: ❓ Consulta enviada al usuario humano: "${question}" (Opciones: ${options.join(", ")}). Esperando respuesta interactiva...`,
       "DISPATCH",
     );
   }
@@ -63,7 +63,7 @@ async function main() {
     const outcomeText = answer.customText ? `Texto: "${answer.customText}"` : (answer.chosenOption ? `Opción: "${answer.chosenOption}"` : "Descartada");
     await dcIssueNotifier.notifyIssue(
       { repoRoot: process.cwd(), issueNumber },
-      `🤖 **DC Super-Agent**: 💬 Respuesta humana recibida: ${outcomeText}. Reanudando trabajo...`,
+      `🤖 **DC Super-Agent 86**: 💬 Respuesta humana recibida: ${outcomeText}. Reanudando trabajo...`,
       "DISPATCH",
     );
   }

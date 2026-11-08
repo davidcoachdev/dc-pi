@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { dcWorkerRunner, updateWorktreeOddRoadmap } from "./dc-worker-runner.ts";
+import { dcWorkerRunner, updateWorktreeOddRoadmap, completeOddDirectives } from "./dc-worker-runner.ts";
 import { getCollaboratorsDatabase } from "./dc-collaborators-db.ts";
 
 const execFileAsync = promisify(execFile);
@@ -54,48 +54,49 @@ export class DcPrDelivery {
 
     const defaultCommitMsg = commitMessage || `feat(issue-${issueNumber}): ${issueTitle.toLowerCase().replace(/[^a-z0-9 _-]/g, "")}\n\nCloses #${issueNumber}`;
 
-    // 1. Git add
-    updateWorktreeOddRoadmap(worktreePath, taskSlug, "T5", "in_progress", "Agregando archivos a Git");
-    const addRes = await dcWorkerRunner.runInWorktree(worktreePath, "git", ["add", "."]);
-    if (addRes.exitCode !== 0) {
-      updateWorktreeOddRoadmap(worktreePath, taskSlug, "T5", "failed", "Fallo git add");
-      this.collabDb.log({
-        level: "ERROR",
-        category: "DISPATCH",
-        actor: "dc-super-agent",
-        message: `Fallo git add en Issue #${issueNumber}: ${addRes.stderr}`,
-      });
-      return { ok: false, error: `Fallo git add: ${addRes.stderr}` };
-    }
-
-    // 2. Git commit
-    updateWorktreeOddRoadmap(worktreePath, taskSlug, "T5", "in_progress", "Creando commit");
-    const commitRes = await dcWorkerRunner.runInWorktree(worktreePath, "git", ["commit", "-m", defaultCommitMsg]);
-    if (commitRes.exitCode !== 0 && !commitRes.stdout.includes("nothing to commit")) {
-      updateWorktreeOddRoadmap(worktreePath, taskSlug, "T5", "failed", "Fallo git commit");
-      this.collabDb.log({
-        level: "ERROR",
-        category: "DISPATCH",
-        actor: "dc-super-agent",
-        message: `Fallo git commit en Issue #${issueNumber}: ${commitRes.stderr}`,
-      });
-      return { ok: false, error: `Fallo git commit: ${commitRes.stderr}` };
-    }
-
-    // 3. Sincronización preventiva con la rama base remota (Git Flow preventivo contra conflictos)
-    updateWorktreeOddRoadmap(worktreePath, taskSlug, "T5", "in_progress", `Sincronizando con origin/${baseBranch}`);
+    // 1. Sincronización preventiva con la rama base remota antes de tocar el árbol
     const fetchRes = await dcWorkerRunner.runInWorktree(worktreePath, "git", ["fetch", "origin", baseBranch]);
     if (fetchRes.exitCode !== 0) {
       updateWorktreeOddRoadmap(worktreePath, taskSlug, "T5", "failed", `Fallo git fetch origin ${baseBranch}`);
       this.collabDb.log({
         level: "ERROR",
         category: "DISPATCH",
-        actor: "dc-super-agent",
+        actor: "dc-super-agent-86",
         message: `Fallo git fetch origin ${baseBranch} en Issue #${issueNumber}: ${fetchRes.stderr}`,
       });
       return { ok: false, error: `Fallo git fetch origin ${baseBranch}: ${fetchRes.stderr}` };
     }
 
+    // Marcar directivas como completadas en el roadmap ODD antes de commit para que queden registradas en Git
+    completeOddDirectives(worktreePath, taskSlug);
+
+    // 2. Git add y Git commit (deja el árbol de trabajo 100% limpio para el merge sin dirty files)
+    updateWorktreeOddRoadmap(worktreePath, taskSlug, "T5", "in_progress", "Consolidando cambios en commit");
+    const addRes = await dcWorkerRunner.runInWorktree(worktreePath, "git", ["add", "."]);
+    if (addRes.exitCode !== 0) {
+      updateWorktreeOddRoadmap(worktreePath, taskSlug, "T5", "failed", "Fallo git add");
+      this.collabDb.log({
+        level: "ERROR",
+        category: "DISPATCH",
+        actor: "dc-super-agent-86",
+        message: `Fallo git add en Issue #${issueNumber}: ${addRes.stderr}`,
+      });
+      return { ok: false, error: `Fallo git add: ${addRes.stderr}` };
+    }
+
+    const commitRes = await dcWorkerRunner.runInWorktree(worktreePath, "git", ["commit", "-m", defaultCommitMsg]);
+    if (commitRes.exitCode !== 0 && !commitRes.stdout.includes("nothing to commit")) {
+      updateWorktreeOddRoadmap(worktreePath, taskSlug, "T5", "failed", "Fallo git commit");
+      this.collabDb.log({
+        level: "ERROR",
+        category: "DISPATCH",
+        actor: "dc-super-agent-86",
+        message: `Fallo git commit en Issue #${issueNumber}: ${commitRes.stderr}`,
+      });
+      return { ok: false, error: `Fallo git commit: ${commitRes.stderr}` };
+    }
+
+    // 3. Git merge de la base remota con el árbol de trabajo limpio
     const preMergeHashRes = await dcWorkerRunner.runInWorktree(worktreePath, "git", ["rev-parse", "HEAD"]);
     if (preMergeHashRes.exitCode !== 0) {
       updateWorktreeOddRoadmap(worktreePath, taskSlug, "T5", "failed", "Fallo al inspeccionar hash previo al merge");
@@ -182,7 +183,7 @@ export class DcPrDelivery {
 ---
 
 ## 📌 Descripción del PR
-Implementación y verificación autónoma realizada por el **DC Super-Agent** de DC Studio.
+Implementación y verificación autónoma realizada por el **DC Super-Agent 86** de DC Studio.
 ${cleanIssueBody}
 ---
 
@@ -228,34 +229,124 @@ ${effectiveEvidence || "✅ Pruebas deterministas superadas (exit code 0)."}
 `;
     }
 
-    const prTitle = `feat(issue-${issueNumber}): ${issueTitle}`;
-    const prArgs = [
-      "pr", "create",
-      "--title", prTitle,
-      "--body", finalPrBody,
-      "--head", branchName,
-      "--base", baseBranch,
-    ];
+    // 5. Crear o Actualizar Pull Request en GitHub con gh
+    updateWorktreeOddRoadmap(worktreePath, taskSlug, "T5", "in_progress", "Sincronizando Pull Request");
 
-    const prRes = await dcWorkerRunner.runInWorktree(worktreePath, "gh", prArgs);
-    if (prRes.exitCode !== 0) {
-      updateWorktreeOddRoadmap(worktreePath, taskSlug, "T5", "failed", "Fallo gh pr create");
-      this.collabDb.log({
-        level: "ERROR",
-        category: "DISPATCH",
-        actor: "dc-super-agent",
-        message: `Fallo gh pr create en Issue #${issueNumber}: ${prRes.stderr}`,
-      });
-      return { ok: false, error: `Fallo gh pr create: ${prRes.stderr}`, commitHash };
+    let prUrl: string | undefined;
+    let prNumber: number | undefined;
+
+    // Verificar si ya existe una PR abierta para esta rama
+    let isExistingPr = false;
+    const existingPrRes = await dcWorkerRunner.runInWorktree(worktreePath, "gh", [
+      "pr", "list", "--head", branchName, "--json", "number,url", "--limit", "1",
+    ]);
+
+    if (existingPrRes.exitCode === 0 && existingPrRes.stdout.trim()) {
+      try {
+        const prList = JSON.parse(existingPrRes.stdout.trim());
+        if (Array.isArray(prList) && prList.length > 0 && prList[0].url) {
+          isExistingPr = true;
+          prUrl = prList[0].url;
+          prNumber = prList[0].number;
+        }
+      } catch {
+        /* fallback a creación normal */
+      }
     }
 
-    const prUrl = prRes.stdout.trim();
-    const prNumberMatch = prUrl.match(/\/pull\/(\d+)$/);
-    const prNumber = prNumberMatch && prNumberMatch[1] ? Number(prNumberMatch[1]) : undefined;
+    const prTitle = `feat(issue-${issueNumber}): ${issueTitle}`;
 
-    // 5. Comentar en el Issue vinculando la Pull Request
+    if (isExistingPr && prUrl && prNumber) {
+      // Actualizar el cuerpo de la PR existente con la nueva especificación y evidencia
+      const editRes = await dcWorkerRunner.runInWorktree(worktreePath, "gh", [
+        "pr", "edit", String(prNumber), "--body", finalPrBody,
+      ]);
+      if (editRes.exitCode !== 0) {
+        updateWorktreeOddRoadmap(worktreePath, taskSlug, "T5", "failed", "Fallo gh pr edit");
+        this.collabDb.log({
+          level: "ERROR",
+          category: "DISPATCH",
+          actor: "dc-super-agent-86",
+          message: `Fallo gh pr edit en PR #${prNumber}: ${editRes.stderr}`,
+        });
+        return { ok: false, error: `Fallo gh pr edit: ${editRes.stderr}`, commitHash };
+      }
+
+      // Agregar comentario de actualización con evidencia fresca en la PR
+      const commentRes = await dcWorkerRunner.runInWorktree(worktreePath, "gh", [
+        "pr", "comment", String(prNumber), "--body",
+        `🤖 **DC Super-Agent 86**: 🔄 Nuevos cambios y tareas añadidas implementadas en la rama.\n\n${effectiveEvidence}`,
+      ]);
+      if (commentRes.exitCode !== 0) {
+        this.collabDb.log({
+          level: "WARN",
+          category: "DISPATCH",
+          actor: "dc-super-agent-86",
+          message: `Aviso: no se pudo comentar en PR #${prNumber}: ${commentRes.stderr}`,
+        });
+      }
+    } else {
+      const prArgs = [
+        "pr", "create",
+        "--title", prTitle,
+        "--body", finalPrBody,
+        "--head", branchName,
+        "--base", baseBranch,
+      ];
+
+      const prRes = await dcWorkerRunner.runInWorktree(worktreePath, "gh", prArgs);
+      if (prRes.exitCode !== 0) {
+        // Si falló porque ya existía una PR detectada por GitHub directamente
+        const alreadyExistsMatch = (prRes.stderr + prRes.stdout).match(/pull\/(\d+)/i);
+        if (alreadyExistsMatch && alreadyExistsMatch[1]) {
+          prNumber = Number(alreadyExistsMatch[1]);
+          const viewRes = await dcWorkerRunner.runInWorktree(worktreePath, "gh", ["pr", "view", String(prNumber), "--json", "url"]);
+          if (viewRes.exitCode === 0) {
+            try {
+              prUrl = JSON.parse(viewRes.stdout.trim()).url;
+            } catch {
+              prUrl = `https://github.com/davidcoachdev/dc-pi/pull/${prNumber}`;
+            }
+          } else {
+            prUrl = `https://github.com/davidcoachdev/dc-pi/pull/${prNumber}`;
+          }
+          isExistingPr = true;
+          // Actualizar la descripción de la PR existente en este camino de recuperación y validar resultado
+          const editRecoveryRes = await dcWorkerRunner.runInWorktree(worktreePath, "gh", [
+            "pr", "edit", String(prNumber), "--body", finalPrBody,
+          ]);
+          if (editRecoveryRes.exitCode !== 0) {
+            updateWorktreeOddRoadmap(worktreePath, taskSlug, "T5", "failed", "Fallo gh pr edit en recuperación");
+            this.collabDb.log({
+              level: "ERROR",
+              category: "DISPATCH",
+              actor: "dc-super-agent-86",
+              message: `Fallo gh pr edit en recuperación de PR #${prNumber}: ${editRecoveryRes.stderr}`,
+            });
+            return { ok: false, error: `Fallo gh pr edit en recuperación: ${editRecoveryRes.stderr}`, commitHash };
+          }
+        } else {
+          updateWorktreeOddRoadmap(worktreePath, taskSlug, "T5", "failed", "Fallo gh pr create");
+          this.collabDb.log({
+            level: "ERROR",
+            category: "DISPATCH",
+            actor: "dc-super-agent-86",
+            message: `Fallo gh pr create en Issue #${issueNumber}: ${prRes.stderr}`,
+          });
+          return { ok: false, error: `Fallo gh pr create: ${prRes.stderr}`, commitHash };
+        }
+      } else {
+        prUrl = prRes.stdout.trim();
+        const prNumberMatch = prUrl.match(/\/pull\/(\d+)$/);
+        prNumber = prNumberMatch && prNumberMatch[1] ? Number(prNumberMatch[1]) : undefined;
+      }
+    }
+
+    // 6. Comentar en el Issue vinculando la Pull Request
     try {
-      const commentMsg = `🤖 **DC Super-Agent**: He completado la implementación para este issue y preparado la Pull Request [${prTitle}](${prUrl}) para tu revisión humana.`;
+      const commentMsg = isExistingPr
+        ? `🤖 **DC Super-Agent 86**: He actualizado la implementación para este issue en la Pull Request existente [${prTitle}](${prUrl}) con las nuevas directivas solicitadas.`
+        : `🤖 **DC Super-Agent 86**: He completado la implementación para este issue y preparado la Pull Request [${prTitle}](${prUrl}) para tu revisión humana.`;
       const commentRes = await dcWorkerRunner.runInWorktree(worktreePath, "gh", [
         "issue", "comment", String(issueNumber), "--body", commentMsg,
       ]);
@@ -263,7 +354,7 @@ ${effectiveEvidence || "✅ Pruebas deterministas superadas (exit code 0)."}
         this.collabDb.log({
           level: "WARN",
           category: "DISPATCH",
-          actor: "dc-super-agent",
+          actor: "dc-super-agent-86",
           message: `Aviso: no se pudo comentar en Issue #${issueNumber}: ${commentRes.stderr}`,
         });
       }
@@ -271,14 +362,14 @@ ${effectiveEvidence || "✅ Pruebas deterministas superadas (exit code 0)."}
       /* best-effort */
     }
 
-    updateWorktreeOddRoadmap(worktreePath, taskSlug, "T5", "done", `PR abierta: ${prUrl}`);
+    updateWorktreeOddRoadmap(worktreePath, taskSlug, "T5", "done", isExistingPr ? `PR actualizada: ${prUrl}` : `PR abierta: ${prUrl}`);
 
     this.collabDb.log({
       level: "INFO",
       category: "DISPATCH",
-      actor: "dc-super-agent",
-      message: `Pull Request creada exitosamente para Issue #${issueNumber}: ${prUrl}`,
-      metadata: JSON.stringify({ prUrl, prNumber, commitHash }),
+      actor: "dc-super-agent-86",
+      message: `Pull Request ${isExistingPr ? "actualizada" : "creada"} exitosamente para Issue #${issueNumber}: ${prUrl}`,
+      metadata: JSON.stringify({ prUrl, prNumber, commitHash, isExistingPr }),
     });
 
     return {

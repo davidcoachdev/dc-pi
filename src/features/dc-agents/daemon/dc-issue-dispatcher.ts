@@ -13,6 +13,7 @@ export interface GitHubIssuePayload {
     number: number;
     title: string;
     body?: string;
+    state?: string;
     user: {
       login: string;
     };
@@ -84,7 +85,7 @@ export class DcIssueDispatcher {
       // Notificación 1: Issue Recibido (solo si no es un test sintético con autor fixture)
       void dcIssueNotifier.notifyIssue(
         { repoRoot: repoIdentity.repoRoot, repoNwo: repoIdentity.fullNwo, issueNumber },
-        `🤖 **DC Super-Agent**: Issue recibido. Verificando identidad de @${authorLogin} y permisos de ejecución autónoma...`,
+        `🤖 **DC Super-Agent 86**: Issue recibido. Verificando identidad de @${authorLogin} y permisos de ejecución autónoma...`,
       );
 
       // ── Doble Validación Soberana de Seguridad ──
@@ -105,7 +106,7 @@ export class DcIssueDispatcher {
           onProgress?.(`Solicitando autorización interactiva para @${authorLogin}...`);
           void dcIssueNotifier.notifyIssue(
             { repoRoot: repoIdentity.repoRoot, repoNwo: repoIdentity.fullNwo, issueNumber },
-            `🤖 **DC Super-Agent**: ⏳ Autorización pendiente. El autor @${authorLogin} requiere aprobación interactiva en el Centro de Control de DC Studio.`,
+            `🤖 **DC Super-Agent 86**: ⏳ Autorización pendiente. El autor @${authorLogin} requiere aprobación interactiva en el Centro de Control de DC Studio.`,
           );
           isAllowed = await onPendingAuthorization(authorLogin, issueNumber, issue.title);
           if (isAllowed) {
@@ -115,7 +116,7 @@ export class DcIssueDispatcher {
       } else if (record.status === "PENDING" && onPendingAuthorization) {
         void dcIssueNotifier.notifyIssue(
           { repoRoot: repoIdentity.repoRoot, repoNwo: repoIdentity.fullNwo, issueNumber },
-          `🤖 **DC Super-Agent**: ⏳ Autorización pendiente. El autor @${authorLogin} requiere aprobación interactiva en el Centro de Control de DC Studio.`,
+          `🤖 **DC Super-Agent 86**: ⏳ Autorización pendiente. El autor @${authorLogin} requiere aprobación interactiva en el Centro de Control de DC Studio.`,
         );
         isAllowed = await onPendingAuthorization(authorLogin, issueNumber, issue.title);
         if (isAllowed) {
@@ -132,7 +133,7 @@ export class DcIssueDispatcher {
         });
         void dcIssueNotifier.notifyIssue(
           { repoRoot: repoIdentity.repoRoot, repoNwo: repoIdentity.fullNwo, issueNumber },
-          `🤖 **DC Super-Agent**: ⛔ Ejecución no autorizada para @${authorLogin} (Estado: ${record?.status || "PENDING"}). El issue no procederá a resolución autónoma.`,
+          `🤖 **DC Super-Agent 86**: ⛔ Ejecución no autorizada para @${authorLogin} (Estado: ${record?.status || "PENDING"}). El issue no procederá a resolución autónoma.`,
           "SECURITY",
         );
         onProgress?.(`⚠️ Despacho autónomo bloqueado: @${authorLogin} no tiene permiso de ejecución (Estado: ${record?.status || "PENDING"}).`);
@@ -142,7 +143,7 @@ export class DcIssueDispatcher {
       // Notificación 2: Autorizado y aceptado
       void dcIssueNotifier.notifyIssue(
         { repoRoot: repoIdentity.repoRoot, repoNwo: repoIdentity.fullNwo, issueNumber },
-        `🤖 **DC Super-Agent**: ✅ Autorizado. Autor @${authorLogin} validado. Procediendo a crear rama Git y worktree aislado...`,
+        `🤖 **DC Super-Agent 86**: ✅ Autorizado. Autor @${authorLogin} validado. Procediendo a crear rama Git y worktree aislado...`,
       );
 
       const issueTitle = issue.title ? issue.title.trim() : `issue-${issueNumber}`;
@@ -210,7 +211,7 @@ export class DcIssueDispatcher {
       // Notificación 3: Rama creada, publicada en remoto y entorno aislado montado
       void dcIssueNotifier.notifyIssue(
         { repoRoot: handle.worktreePath, repoNwo: repoIdentity.fullNwo, issueNumber },
-        `🤖 **DC Super-Agent**: 🌿 Rama creada y publicada en GitHub: \`${handle.branchName}\`. Worktree aislado montado. Especificación inicial ODD asentada.`,
+        `🤖 **DC Super-Agent 86**: 🌿 Rama creada y publicada en GitHub: \`${handle.branchName}\`. Worktree aislado montado. Especificación inicial ODD asentada.`,
       );
 
       this.activeDispatches.set(dispatchKey, dispatched);

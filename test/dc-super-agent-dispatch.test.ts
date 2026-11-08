@@ -4,12 +4,22 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { execFileSync } from "node:child_process";
-import { DcIssueDispatcher, type GitHubIssuePayload } from "../src/features/dc-agents/daemon/dc-issue-dispatcher.ts";
-import { getCollaboratorsDatabase } from "../src/features/dc-agents/daemon/dc-collaborators-db.ts";
-import { DcWorktreeManager } from "../src/features/dc-agents/core/dc-worktree-manager.ts";
+
+const dispatchHome = fs.mkdtempSync(path.join(os.tmpdir(), "dc-dispatch-home-"));
+process.env.HOME = dispatchHome;
+process.env.XDG_CONFIG_HOME = path.join(dispatchHome, "xdg");
+process.env.PI_CODING_AGENT_DIR = path.join(dispatchHome, "pi");
+
+const { DcIssueDispatcher } = await import("../src/features/dc-agents/daemon/dc-issue-dispatcher.ts");
+const { getCollaboratorsDatabase } = await import("../src/features/dc-agents/daemon/dc-collaborators-db.ts");
+const { DcWorktreeManager } = await import("../src/features/dc-agents/core/dc-worktree-manager.ts");
+import type { GitHubIssuePayload } from "../src/features/dc-agents/daemon/dc-issue-dispatcher.ts";
+
+const createdRoots: string[] = [];
 
 function fixture() {
-  const root = fs.mkdtempSync(path.join(os.homedir(), "dispatch-"));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "dc-dispatch-"));
+  createdRoots.push(root);
   const git = (...args: string[]) => execFileSync("git", ["-C", root, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
   git("init", "-b", "main");
   git("config", "user.name", "Fixture"); git("config", "user.email", "fixture@example.invalid");
@@ -85,4 +95,26 @@ test("worktree recovery rejects mismatched branch occupancy and preserves generi
   execFileSync("git", ["-C", target, "checkout", "-b", "unrelated-occupant"], { stdio: "ignore" });
   await assert.rejects(new DcWorktreeManager().createForTask({ ...options, ...{ reuseExisting: true } }), /ownership|occupancy/i);
   assert.equal(fs.existsSync(path.join(handle.worktreePath, "feature-only")), true);
+});
+
+test.after(() => {
+  try {
+    getCollaboratorsDatabase().close();
+  } catch {
+    /* defensive */
+  }
+  for (const root of createdRoots) {
+    try {
+      fs.rmSync(root, { recursive: true, force: true });
+      const worker = `${root}-worker`;
+      if (fs.existsSync(worker)) fs.rmSync(worker, { recursive: true, force: true });
+    } catch {
+      /* best-effort */
+    }
+  }
+  try {
+    fs.rmSync(dispatchHome, { recursive: true, force: true });
+  } catch {
+    /* best-effort */
+  }
 });

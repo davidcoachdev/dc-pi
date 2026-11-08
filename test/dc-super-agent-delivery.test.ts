@@ -114,11 +114,11 @@ test("dc-pr-delivery: deliverIssue estructura y ejecuta el ciclo de entrega a Gi
       branchName: "feat/issue-123",
     });
 
-    // En un directorio temporal plano sin git, git add o commit debe retornar error controlado
+    // En un directorio temporal plano sin git, git fetch o git add debe retornar error controlado
     assert.equal(res.ok, false);
     assert.ok(res.error);
     assert.ok(res.error?.includes("git"));
-    assert.deepEqual(calls, ["git add ."]);
+    assert.deepEqual(calls, ["git fetch origin master"]);
   } finally {
     dcWorkerRunner.runInWorktree = originalRun;
     fs.rmSync(tmpDir, { recursive: true, force: true });

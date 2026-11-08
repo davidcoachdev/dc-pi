@@ -1,8 +1,26 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { DcIssueCommentRouter } from "../src/features/dc-agents/daemon/dc-issue-comment-router.ts";
-import { getCollaboratorsDatabase } from "../src/features/dc-agents/daemon/dc-collaborators-db.ts";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+
+const home = fs.mkdtempSync(path.join(os.tmpdir(), "dc-comment-home-"));
+process.env.HOME = home;
+process.env.XDG_CONFIG_HOME = path.join(home, "xdg");
+process.env.PI_CODING_AGENT_DIR = path.join(home, "pi");
+
+const { DcIssueCommentRouter } = await import("../src/features/dc-agents/daemon/dc-issue-comment-router.ts");
+const { getCollaboratorsDatabase } = await import("../src/features/dc-agents/daemon/dc-collaborators-db.ts");
 import type { GitHubIssueCommentPayload } from "../src/features/dc-agents/daemon/dc-issue-comment-types.ts";
+
+test.after(() => {
+  try {
+    getCollaboratorsDatabase().close();
+    fs.rmSync(home, { recursive: true, force: true });
+  } catch {
+    /* best-effort */
+  }
+});
 
 test("DcIssueCommentRouter: rechaza autores que no son OWNER y procesa comandos del OWNER", async () => {
   const router = DcIssueCommentRouter.getInstance();

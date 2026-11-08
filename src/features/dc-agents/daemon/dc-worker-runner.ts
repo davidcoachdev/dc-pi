@@ -92,6 +92,22 @@ export function updateWorktreeOddRoadmap(
 }
 
 /**
+ * Marca las directivas adicionales del OWNER como completadas en el roadmap ODD
+ * una vez que la entrega de la Pull Request finaliza con éxito.
+ */
+export function completeOddDirectives(worktreePath: string, taskSlug: string): void {
+  const specPath = path.join(worktreePath, "odd", "tasks", `${taskSlug}.md`);
+  if (!fs.existsSync(specPath)) return;
+  try {
+    const content = fs.readFileSync(specPath, "utf8");
+    const updated = content.replace(/^-\s+Directiva adicional del OWNER(?:\s+\[done\])?/gm, "- ✔ Directiva adicional del OWNER [done]");
+    fs.writeFileSync(specPath, updated, "utf8");
+  } catch {
+    /* defensive */
+  }
+}
+
+/**
  * Ejecutor Autónomo de Tareas de Worktree (DC Super-Agent Runner).
  * Gestiona el ciclo de vida de resolución dentro del worktree aislado:
  * 1. Inicialización de hoja de ruta ODD
@@ -255,7 +271,7 @@ L1: Issue capturado en vivo por el daemon y despachado a worktree autónomo.
     const askHelper = askHumanCliPath || path.resolve(__dirname, "dc-ask-human-cli.ts");
 
     const promptInstructions = [
-      `Eres dc-super-agente, el superagente autónomo de DC Studio. Usa exclusivamente tus herramientas asignadas.`,
+      `Eres dc-super-agente-86, el superagente autónomo de desarrollo de DC Studio. Usa exclusivamente tus herramientas asignadas.`,
       `Tu misión es resolver de principio a fin el Issue #${issueNumber}: "${issueTitle}".`,
       "",
       `## Requerimiento original:`,
@@ -292,7 +308,7 @@ L1: Issue capturado en vivo por el daemon y despachado a worktree autónomo.
     args.push("-p", promptInstructions, "--no-session");
     updateWorktreeOddRoadmap(worktreePath, taskSlug, "T4", "pending", "Esperando ejecución y verificación real");
 
-    updateWorktreeOddRoadmap(worktreePath, taskSlug, "T3", "in_progress", "dc-super-agente programando en worktree");
+    updateWorktreeOddRoadmap(worktreePath, taskSlug, "T3", "in_progress", "dc-super-agente-86 programando en worktree");
 
     // Iniciar vigilante activo de progreso de codificación (Worktree Progress Watcher)
     let watcherActive = true;
@@ -317,7 +333,7 @@ L1: Issue capturado en vivo por el daemon y despachado a worktree autónomo.
                 notifiedStages.add("red_tests");
                 void dcIssueNotifier.notifyIssue(
                   { repoRoot: worktreePath, issueNumber },
-                  `🤖 **DC Super-Agent**: 🔴 Fase RED: Escribiendo y estructurando pruebas deterministas previas en \`test/\`...`,
+                  `🤖 **DC Super-Agent 86**: 🔴 Fase RED: Escribiendo y estructurando pruebas deterministas previas en \`test/\`...`,
                 );
               }
             }
@@ -337,7 +353,7 @@ L1: Issue capturado en vivo por el daemon y despachado a worktree autónomo.
                   const verb = isCreated ? "📄 Creando nuevo archivo" : "✏️ Modificando archivo";
                   void dcIssueNotifier.notifyIssue(
                     { repoRoot: worktreePath, issueNumber },
-                    `🤖 **DC Super-Agent**: ${verb}: \`${filePath}\``,
+                    `🤖 **DC Super-Agent 86**: ${verb}: \`${filePath}\``,
                   );
                 }
               }
@@ -356,7 +372,7 @@ L1: Issue capturado en vivo por el daemon y despachado a worktree autónomo.
                 notifiedStages.add(`roadmap_${summaryLine}`);
                 void dcIssueNotifier.notifyIssue(
                   { repoRoot: worktreePath, issueNumber },
-                  `🤖 **DC Super-Agent**: 📊 Hoja de ruta ODD actualizada: ${summaryLine}`,
+                  `🤖 **DC Super-Agent 86**: 📊 Hoja de ruta ODD actualizada: ${summaryLine}`,
                 );
               }
             } else if (previousMtime === 0) {
