@@ -5,10 +5,14 @@ import * as os from "node:os";
 import * as path from "node:path";
 
 // Set before importing modules that own persistent singleton state.
-const home = fs.mkdtempSync(path.join(os.homedir(), "dc-pending-home-"));
+const home = fs.mkdtempSync(path.join(os.tmpdir(), "dc-pending-home-"));
 process.env.HOME = home;
 process.env.XDG_CONFIG_HOME = path.join(home, "xdg");
 process.env.PI_CODING_AGENT_DIR = path.join(home, "pi");
+
+test.after(() => {
+  fs.rmSync(home, { recursive: true, force: true });
+});
 
 const repo = { owner: "fixture", repo: "manual", fullNwo: "fixture/manual", repoRoot: "/fixture", remoteUrl: "https://github.com/fixture/manual.git" };
 const issue = (number: number) => ({ number, title: `Task ${number}`, body: "Untrusted issue text, not authorization", author: { login: "author" },
@@ -17,9 +21,12 @@ const notifications: string[] = [];
 const launches: any[] = [];
 let starts = 0, stops = 0, controls = 0;
 const status = { running: false, tunnelActive: false, activeDispatches: [] };
-mock.module("../src/features/dc-agents/daemon/dc-repo-resolver.js", { namedExports: { resolveCurrentRepoIdentity: (cwd: string) => {
-  assert.equal(cwd, "/fixture/subdir"); return repo;
-} } });
+mock.module("../src/features/dc-agents/daemon/dc-repo-resolver.js", { namedExports: {
+  resolveCurrentRepoIdentity: (cwd: string) => {
+    assert.equal(cwd, "/fixture/subdir"); return repo;
+  },
+  resolveIssueBaseBranch: () => "master",
+} });
 mock.module("../src/features/dc-agents/daemon/dc-webhook-daemon-manager.js", { namedExports: { dcWebhookDaemonManager: {
   start: async () => { starts++; return status; }, stop: async () => { stops++; }, getStatus: () => status,
   executeIssue: async (...args: unknown[]) => { launches.push(args); },
@@ -65,8 +72,12 @@ test("registered check queries current repo, confirms effects, re-fetches and la
   const check = () => commands.get("dc-webhook").handler("check", ctx);
   try {
     reset(); await check();
-    assert.deepEqual(queries, [["gh", ["issue", "list", "--repo", repo.fullNwo, "--state", "open", "--limit", "50", "--json", fields], { cwd: ctx.cwd }],
-      ["gh", ["issue", "view", "2", "--repo", repo.fullNwo, "--json", fields], { cwd: ctx.cwd }]]);
+    assert.deepEqual(queries, [
+      ["gh", ["issue", "list", "--repo", repo.fullNwo, "--state", "all", "--limit", "50", "--json", fields], { cwd: ctx.cwd }],
+      ["gh", ["issue", "view", "2", "--repo", repo.fullNwo, "--json", fields], { cwd: ctx.cwd }],
+      ["gh", ["pr", "list", "--repo", repo.fullNwo, "--head", "feat/issue-2-ghissue1", "--json", "number,url,title,state", "--limit", "1"], { cwd: ctx.cwd }],
+      ["gh", ["pr", "list", "--repo", repo.fullNwo, "--search", "closes #2", "--json", "number,url,title,state", "--limit", "1"], { cwd: ctx.cwd }],
+    ]);
     assert.equal(launches.length, 1); assert.equal(launches[0][0].issue.number, 2);
     assert.equal(launches[0][0].issue.user.login, "author"); assert.equal(launches[0][0].repository.full_name, repo.fullNwo);
     assert.equal(launches[0][1], repo); assert.equal(launches[0][2], ctx);

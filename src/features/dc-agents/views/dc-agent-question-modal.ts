@@ -205,7 +205,7 @@ export class DcAgentQuestionPanel implements Component {
     const innerW = Math.max(50, width);
 
     // Cabecera
-    lines.push(t.bold(t.fg("accent", `⛩  DC Super-Agent te consulta: Issue #${this.packet.issueNumber}`)));
+    lines.push(t.bold(t.fg("accent", `⛩  DC Super-Agent 86 te consulta: Issue #${this.packet.issueNumber}`)));
     lines.push(t.fg("border", "─".repeat(innerW)));
 
     // 1. Sección Contexto
