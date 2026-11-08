@@ -196,6 +196,47 @@ L1: Issue capturado en vivo por el daemon y despachado a worktree autónomo.
   }
 
   /**
+   * Ejecuta la verificación determinista en el worktree (typecheck y tests).
+   */
+  public async verifyWorktree(worktreePath: string): Promise<{
+    ok: boolean;
+    commands: { command: string; args: string[]; stdout: string; stderr: string; exitCode: number }[];
+    error?: string;
+  }> {
+    const verification: AutonomousLlmSessionResult["verification"] = { ok: false, commands: [] };
+    try {
+      const pkgPath = path.join(worktreePath, "package.json");
+      if (!fs.existsSync(pkgPath)) throw new Error("No existe package.json en el worktree");
+      const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf8"));
+      const managers = [
+        { command: "pnpm", locks: ["pnpm-lock.yaml"] },
+        { command: "bun", locks: ["bun.lock", "bun.lockb"] },
+        { command: "yarn", locks: ["yarn.lock"] },
+        { command: "npm", locks: ["package-lock.json", "npm-shrinkwrap.json"] },
+      ].filter(m => m.locks.some(lock => fs.existsSync(path.join(worktreePath, lock))));
+      if (managers.length > 1) throw new Error("Lockfiles de distintos gestores: verificación ambigua");
+      const command = managers[0]?.command || "npm";
+      const scripts = pkg.scripts || {};
+      const names = ["typecheck", scripts.test ? "test" : "test:unit"].filter(name => {
+        const script = scripts[name];
+        return typeof script === "string" && script.trim() &&
+          !/no test specified/i.test(script) && !/^(?:echo\b|true\b|exit\b|:)/.test(script.trim());
+      });
+      if (!names.length) throw new Error("Sin comandos de verificación aplicables (typecheck/test/test:unit)");
+      for (const name of names) {
+        const args = ["run", name];
+        const result = await this.runInWorktree(worktreePath, command, args);
+        verification.commands.push({ command, args, ...result });
+        if (result.exitCode !== 0) break;
+      }
+      verification.ok = verification.commands.every(result => result.exitCode === 0);
+    } catch (error) {
+      verification.error = error instanceof Error ? error.message : String(error);
+    }
+    return verification;
+  }
+
+  /**
    * Ejecuta una sesión de LLM autónoma y desatendida mediante el CLI de Pi (`pi -p`).
    * Corre dentro de `worktreePath` con el modelo del Taxi y la configuración preparada.
    * Un turno exitoso de Pi no sustituye la verificación determinista posterior.
@@ -355,33 +396,10 @@ L1: Issue capturado en vivo por el daemon y despachado a worktree autónomo.
     if (shouldVerify) {
       updateWorktreeOddRoadmap(worktreePath, taskSlug, "T3", "done", `Implementación completada (${filesModified.length} archivos)`);
       updateWorktreeOddRoadmap(worktreePath, taskSlug, "T4", "in_progress", "Ejecutando verificación determinista");
-      try {
-        const pkg = JSON.parse(fs.readFileSync(path.join(worktreePath, "package.json"), "utf8"));
-        const managers = [
-          { command: "pnpm", locks: ["pnpm-lock.yaml"] },
-          { command: "bun", locks: ["bun.lock", "bun.lockb"] },
-          { command: "yarn", locks: ["yarn.lock"] },
-          { command: "npm", locks: ["package-lock.json", "npm-shrinkwrap.json"] },
-        ].filter(m => m.locks.some(lock => fs.existsSync(path.join(worktreePath, lock))));
-        if (managers.length > 1) throw new Error("Lockfiles de distintos gestores: verificación ambigua");
-        const command = managers[0]?.command || "npm";
-        const scripts = pkg.scripts || {};
-        const names = ["typecheck", scripts.test ? "test" : "test:unit"].filter(name => {
-          const script = scripts[name];
-          return typeof script === "string" && script.trim() &&
-            !/no test specified/i.test(script) && !/^(?:echo\b|true\b|exit\b|:)/.test(script.trim());
-        });
-        if (!names.length) throw new Error("Sin comandos de verificación aplicables (typecheck/test/test:unit)");
-        for (const name of names) {
-          const args = ["run", name];
-          const result = await this.runInWorktree(worktreePath, command, args);
-          verification.commands.push({ command, args, ...result });
-          if (result.exitCode !== 0) break;
-        }
-        verification.ok = verification.commands.every(result => result.exitCode === 0);
-      } catch (error) {
-        verification.error = error instanceof Error ? error.message : String(error);
-      }
+      const res = await this.verifyWorktree(worktreePath);
+      verification.ok = res.ok;
+      verification.commands = res.commands;
+      verification.error = res.error;
       const evidence = verification.commands.map(r => `${r.command} ${r.args.join(" ")}: exit ${r.exitCode}`).join("; ");
       updateWorktreeOddRoadmap(worktreePath, taskSlug, "T4", verification.ok ? "done" : "failed", evidence || verification.error);
     } else {

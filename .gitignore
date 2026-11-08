@@ -7,3 +7,6 @@ node_modules/
 .pi/
 # Sentinel telemetry flight logs
 docs/chronicle/
+
+# Local backup / scratch
+.backup/
