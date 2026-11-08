@@ -2,18 +2,15 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import type { Theme, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import {
-  Key, matchesKey, truncateToWidth, visibleWidth,
-  type Component, type TUI, type TuiMouseEvent, type TuiMouseEventResult,
+  Key, matchesKey, decodeKittyPrintable, truncateToWidth, visibleWidth,
+  type Component, type TuiMouseEvent, type TuiMouseEventResult,
 } from "@earendil-works/pi-tui";
 import { openDcModal } from "../../../ui/dc-modal.ts";
 import {
   getCollaboratorsDatabase,
-  type CollaboratorRecord,
-  type AuditLogRecord,
 } from "../daemon/dc-collaborators-db.ts";
 import {
   dcIssueDispatcher,
-  type DispatchedIssueTask,
 } from "../daemon/dc-issue-dispatcher.ts";
 import {
   dcRemoteQuestionManager,
@@ -82,14 +79,7 @@ interface OddRoadmapItem {
 
 function parseOddTasksFromWorktree(worktreePath: string, taskSlug: string): OddRoadmapItem[] {
   const specFile = path.join(worktreePath, "odd", "tasks", `${taskSlug}.md`);
-  if (!fs.existsSync(specFile)) {
-    return [
-      { id: "T1", title: "Inicializar entorno y worktree", status: "done" },
-      { id: "T2", title: "Analizar especificación del Issue", status: "in_progress" },
-      { id: "T3", title: "Implementar solución con TDD", status: "pending" },
-      { id: "T4", title: "Verificar y abrir Pull Request", status: "pending" },
-    ];
-  }
+  if (!fs.existsSync(specFile)) return [];
 
   try {
     const content = fs.readFileSync(specFile, "utf8");
@@ -105,15 +95,15 @@ function parseOddTasksFromWorktree(worktreePath: string, taskSlug: string): OddR
       if (inTasks && line.startsWith("## ")) {
         break;
       }
-      if (inTasks && line.trim().startsWith("T")) {
-        const match = line.match(/^(T\d+):\s*(.*)/);
+      if (inTasks) {
+        const match = line.trim().match(/^(?:[✔✓▶✖○]\s*)?(T\d+):\s*(.*)/);
         if (match && match[1] && match[2]) {
           const isDone = line.includes("[done]") || line.includes("✔");
           const isInProgress = line.includes("[in_progress]") || line.includes("▶");
           const isFailed = line.includes("[failed]") || line.includes("✖");
           items.push({
             id: match[1],
-            title: match[2].replace(/\[.*?\]/g, "").trim(),
+            title: match[2].replace(/\[(?:done|in_progress|failed|pending)\]/g, "").trim(),
             status: isDone ? "done" : isInProgress ? "in_progress" : isFailed ? "failed" : "pending",
           });
         }
@@ -125,27 +115,34 @@ function parseOddTasksFromWorktree(worktreePath: string, taskSlug: string): OddR
     /* fallback */
   }
 
-  return [
-    { id: "T1", title: "Inicializar entorno y worktree", status: "done" },
-    { id: "T2", title: "Analizar requerimiento verbatim", status: "in_progress" },
-    { id: "T3", title: "Escribir tests (RED)", status: "pending" },
-    { id: "T4", title: "Implementar código (GREEN)", status: "pending" },
-    { id: "T5", title: "Verificar con npm test y abrir PR", status: "pending" },
-  ];
+  return [];
 }
+
+type CentralItem =
+  | { kind: "decision"; data: CentralDecisionItem }
+  | { kind: "task"; data: CentralTaskItem };
+
+const graphemes = new Intl.Segmenter(undefined, { granularity: "grapheme" });
 
 export class DcControlCenterPanel implements Component {
   private activeTab: ControlCenterTab = "worktrees";
-  private selectedIndex = 1; // Seleccionado por defecto WibondConnect#3759 para coincidir con la captura
+  private selectedIndex = 0;
   private scrollOffset = 0;
   private readonly collabDb = getCollaboratorsDatabase();
 
   // Estados interactivos para Central
-  private simulatedMode = true;
+  private simulatedMode = false;
   private isInputMode = false;
   private inputText = "";
+  private inputQuestionId?: string;
+  private optionQuestionId?: string;
+  private selectedOption = 0;
   private isHelpMode = false;
   private lastActionMessage = "";
+  private tabHitboxes: Array<{ start: number; end: number; tab: ControlCenterTab }> = [];
+  private itemHitboxes = new Map<number, number>();
+  private listWidth = 0;
+  private inputRow = -1;
 
   // Datos simulados por defecto (fieles al requerimiento de la captura de pantalla)
   private readonly defaultDecisions: CentralDecisionItem[] = [
@@ -261,11 +258,25 @@ export class DcControlCenterPanel implements Component {
 
   public setSimulatedMode(val: boolean): void {
     this.simulatedMode = val;
+    this.selectedIndex = 0;
+    this.scrollOffset = 0;
+    this.selectedOption = 0;
+    this.optionQuestionId = undefined;
+    this.isInputMode = false;
+    this.inputText = "";
+    this.inputQuestionId = undefined;
+    this.lastActionMessage = "";
     this.requestRender?.();
   }
 
-  private getAllItems(): Array<{ kind: "decision" | "task" | "completed"; data: any }> {
-    const items: Array<{ kind: "decision" | "task" | "completed"; data: any }> = [];
+  private getAllItems(): CentralItem[] {
+    if (this.simulatedMode) {
+      return [
+        ...this.defaultDecisions.map((data): CentralItem => ({ kind: "decision", data })),
+        ...this.defaultTasks.map((data): CentralItem => ({ kind: "task", data })),
+      ];
+    }
+    const items: CentralItem[] = [];
 
     // Decisiones en vivo de preguntas remotas pendientes
     const remoteQuestions = dcRemoteQuestionManager.getPendingQuestions();
@@ -296,12 +307,6 @@ export class DcControlCenterPanel implements Component {
       });
     }
 
-    if (this.simulatedMode) {
-      for (const d of this.defaultDecisions) {
-        items.push({ kind: "decision", data: d });
-      }
-    }
-
     // Tareas en vivo de dispatches
     const activeDispatches = dcIssueDispatcher.getActiveDispatches();
     for (const disp of activeDispatches) {
@@ -328,13 +333,33 @@ export class DcControlCenterPanel implements Component {
       });
     }
 
-    if (this.simulatedMode) {
-      for (const t of this.defaultTasks) {
-        items.push({ kind: "task", data: t });
-      }
+    if (this.activeTab === "worktrees") {
+      this.selectedIndex = Math.min(this.selectedIndex, Math.max(0, items.length - 1));
     }
-
     return items;
+  }
+
+  private currentQuestion(): AgentQuestionPacket | undefined {
+    if (this.simulatedMode || this.activeTab !== "worktrees") return undefined;
+    const item = this.getAllItems()[this.selectedIndex];
+    const question = item?.kind === "decision" ? item.data.questionPacket : undefined;
+    if (this.optionQuestionId !== question?.id) {
+      this.optionQuestionId = question?.id;
+      this.selectedOption = 0;
+    }
+    return question;
+  }
+
+  private startInput(): void {
+    const question = this.currentQuestion();
+    if (!this.simulatedMode && (!question || question.allowCustomText === false)) {
+      this.lastActionMessage = "Texto no disponible: selecciona una pregunta que admita respuesta libre.";
+    } else {
+      this.isInputMode = true;
+      this.inputQuestionId = question?.id;
+      this.inputText = "";
+    }
+    this.requestRender?.();
   }
 
   handleInput(data: string): boolean {
@@ -359,7 +384,8 @@ export class DcControlCenterPanel implements Component {
 
       if (matchesKey(data, Key.backspace) || data === "\x7f" || data === "\b") {
         if (this.inputText.length > 0) {
-          this.inputText = this.inputText.slice(0, -1);
+          const last = graphemes.segment(this.inputText).containing(this.inputText.length - 1);
+          this.inputText = this.inputText.slice(0, last?.index ?? 0);
           this.requestRender?.();
         }
         return true;
@@ -368,25 +394,19 @@ export class DcControlCenterPanel implements Component {
       if (matchesKey(data, Key.enter) || data === "\r" || data === "\n") {
         const submitted = this.inputText.trim();
         if (submitted) {
-          this.lastActionMessage = `✔ Enviado a Central: "${truncateToWidth(submitted, 40, "...")}"`;
-          this.collabDb.log({
-            level: "INFO",
-            category: "DISPATCH",
-            actor: "human",
-            message: `Instrucción a Central: ${submitted}`,
-          });
-
-          // Si el elemento seleccionado es una pregunta remota, responderle con el texto
-          const items = this.getAllItems();
-          const current = items[this.selectedIndex]?.data as CentralDecisionItem | undefined;
-          if (current?.questionPacket) {
+          const question = dcRemoteQuestionManager.getPendingQuestions().find((q) => q.id === this.inputQuestionId);
+          if (this.simulatedMode) {
+            this.lastActionMessage = "Demostración: texto no enviado.";
+          } else if (question && question.allowCustomText !== false) {
             dcRemoteQuestionManager.postAnswer({
-              questionId: current.questionPacket.id,
+              questionId: question.id,
               customText: submitted,
               answeredAt: Date.now(),
               source: "custom_text",
             });
-            this.lastActionMessage = `✔ Respuesta enviada al subagente: "${submitted}"`;
+            this.lastActionMessage = "✔ Respuesta enviada al subagente.";
+          } else {
+            this.lastActionMessage = "No enviado: la pregunta ya no está disponible.";
           }
         }
         this.isInputMode = false;
@@ -395,9 +415,10 @@ export class DcControlCenterPanel implements Component {
         return true;
       }
 
-      // Carácter imprimible
-      if (data.length === 1 && data >= " ") {
-        this.inputText += data;
+      const printable = data.startsWith("\x1b[200~") && data.endsWith("\x1b[201~")
+        ? data.slice(6, -6) : decodeKittyPrintable(data) ?? data;
+      if (printable && !/[\x00-\x1f\x7f-\x9f]/u.test(printable)) {
+        this.inputText += printable;
         this.requestRender?.();
         return true;
       }
@@ -429,25 +450,19 @@ export class DcControlCenterPanel implements Component {
 
     // Conmutar modo simulado 'm' / 'M'
     if (data === "m" || data === "M") {
-      this.simulatedMode = !this.simulatedMode;
-      this.lastActionMessage = this.simulatedMode ? "● Modo Simulado Activado" : "● Modo En Vivo Activado";
-      this.requestRender?.();
+      this.setSimulatedMode(!this.simulatedMode);
       return true;
     }
 
     // Activar input de texto con '/'
     if (data === "/") {
-      this.isInputMode = true;
-      this.inputText = "";
-      this.requestRender?.();
+      this.startInput();
       return true;
     }
 
-    // Ctrl+K limpia o enfoca el input
-    if (data === "\x0b") { // Ctrl+K
-      this.isInputMode = true;
-      this.inputText = "";
-      this.requestRender?.();
+    // Ctrl+K enfoca la respuesta a la pregunta seleccionada.
+    if (data === "\x0b") {
+      this.startInput();
       return true;
     }
 
@@ -507,70 +522,42 @@ export class DcControlCenterPanel implements Component {
       return true;
     }
 
-    // Acciones específicas en Pestaña 1 (Central & Worktrees)
     if (this.activeTab === "worktrees") {
-      const items = this.getAllItems();
-      const current = items[this.selectedIndex]?.data;
-
-      // [a] o [s]: Arreglar en tu PR / Aprobar
-      if (data === "a" || data === "A" || data === "s" || data === "S") {
-        this.lastActionMessage = `✔ [a] Arreglar en PR ejecutado para ${current?.title || "item"}`;
-        this.collabDb.log({
-          level: "INFO",
-          category: "DISPATCH",
-          actor: "human",
-          message: `Acción Arreglar ejecutada sobre ${current?.title}`,
-        });
-        if (current?.questionPacket) {
+      const question = this.currentQuestion();
+      const options = question?.options ?? [];
+      if (data === "[" || data === "]") {
+        this.selectedOption = Math.max(0, Math.min(options.length - 1, this.selectedOption + (data === "]" ? 1 : -1)));
+        this.requestRender?.();
+        return true;
+      }
+      if (matchesKey(data, Key.enter) || data === "a" || data === "A" || data === "s" || data === "S" || data === "n" || data === "N") {
+        const dismiss = data.toLowerCase() === "n";
+        const chosen = options[this.selectedOption];
+        if (this.simulatedMode) {
+          this.lastActionMessage = "Demostración: ninguna acción ejecutada.";
+        } else if (question && (dismiss || chosen !== undefined)) {
           dcRemoteQuestionManager.postAnswer({
-            questionId: current.questionPacket.id,
-            chosenOption: current.questionPacket.options?.[0] || "Aprobar",
+            questionId: question.id,
+            ...(dismiss ? {} : { chosenOption: chosen }),
             answeredAt: Date.now(),
-            source: "option",
+            source: dismiss ? "dismissed" : "option",
           });
+          this.lastActionMessage = dismiss ? "✔ Pregunta descartada." : "✔ Opción enviada al subagente.";
+        } else {
+          this.lastActionMessage = "Sin acción: selecciona una pregunta pendiente.";
         }
         this.requestRender?.();
         return true;
       }
-
-      // [n]: Descartar
-      if (data === "n" || data === "N") {
-        this.lastActionMessage = `✔ [n] Descartado: ${current?.title || "item"}`;
-        this.collabDb.log({
-          level: "WARN",
-          category: "DISPATCH",
-          actor: "human",
-          message: `Descartado ${current?.title}`,
-        });
-        if (current?.questionPacket) {
-          dcRemoteQuestionManager.postAnswer({
-            questionId: current.questionPacket.id,
-            chosenOption: "Descartar",
-            answeredAt: Date.now(),
-            source: "dismissed",
-          });
-        }
-        this.requestRender?.();
-        return true;
-      }
-
-      // [d]: Mañana 9:00 (Posponer / Recordar)
-      if (data === "d" || data === "D") {
-        this.lastActionMessage = `✔ [d] Pospuesto para mañana 9:00: ${current?.title || "item"}`;
-        this.requestRender?.();
-        return true;
-      }
-
-      // [o]: Abrir en GitHub
-      if (data === "o" || data === "O") {
-        this.lastActionMessage = `✔ [o] Abriendo en GitHub: ${current?.url || "https://github.com"}`;
+      if (data.toLowerCase() === "d" || data.toLowerCase() === "o") {
+        this.lastActionMessage = "No disponible: esta ventana no programa recordatorios ni abre GitHub.";
         this.requestRender?.();
         return true;
       }
     }
 
     // Toggle de colaboradores con la barra espaciadora en Pestaña 2
-    if (this.activeTab === "collaborators" && matchesKey(data, Key.space)) {
+    if (!this.simulatedMode && this.activeTab === "collaborators" && matchesKey(data, Key.space)) {
       const collabs = this.collabDb.listCollaborators();
       const target = collabs[this.selectedIndex];
       if (target) {
@@ -613,50 +600,33 @@ export class DcControlCenterPanel implements Component {
   }
 
   handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
+    if (this.isHelpMode || this.isInputMode) return undefined;
     if (event.type === "click" && event.button === "left") {
-      // Clic en barra de pestañas (fila 2)
       if (event.y === 2) {
-        if (event.x < 32) this.activeTab = "worktrees";
-        else if (event.x < 65) this.activeTab = "collaborators";
-        else this.activeTab = "audit";
+        const tab = this.tabHitboxes.find((box) => event.x >= box.start && event.x < box.end);
+        if (!tab) return undefined;
+        this.activeTab = tab.tab;
         this.selectedIndex = 0;
-        this.requestRender?.();
-        return { handled: true, render: true };
-      }
-
-      // Clic en la barra inferior de escribir (fila 30)
-      if (event.y >= 29 && event.y <= 31) {
-        this.isInputMode = true;
-        this.requestRender?.();
-        return { handled: true, render: true };
-      }
-
-      // Clic en botones de acción en Central (fila 16 aproximadamente)
-      if (this.activeTab === "worktrees" && event.y >= 14 && event.y <= 18 && event.x >= 35) {
-        this.handleInput("a");
-        return { handled: true, render: true };
-      }
-
-      // Clic en lista de colaboradores para conmutar toggle
-      if (this.activeTab === "collaborators" && event.y >= 5) {
-        const clickedIdx = event.y - 5 + this.scrollOffset;
-        const collabs = this.collabDb.listCollaborators();
-        if (clickedIdx >= 0 && clickedIdx < collabs.length) {
-          this.selectedIndex = clickedIdx;
-          this.collabDb.toggleCollaboratorStatus(collabs[clickedIdx]!.login);
-          this.requestRender?.();
-          return { handled: true, render: true };
+        this.scrollOffset = 0;
+      } else if (this.activeTab === "worktrees" && event.y === this.inputRow) {
+        this.startInput();
+      } else if (this.activeTab === "worktrees" && event.x < this.listWidth) {
+        const index = this.itemHitboxes.get(event.y);
+        if (index === undefined) return undefined;
+        this.selectedIndex = index;
+      } else if (this.activeTab === "collaborators") {
+        const index = this.itemHitboxes.get(event.y);
+        if (index === undefined) return undefined;
+        this.selectedIndex = index;
+        if (!this.simulatedMode) {
+          const target = this.collabDb.listCollaborators()[index];
+          if (target) this.collabDb.toggleCollaboratorStatus(target.login);
         }
+      } else {
+        return undefined;
       }
-
-      // Clic en elementos de la columna izquierda de Central
-      if (this.activeTab === "worktrees" && event.y >= 4 && event.y <= 27 && event.x < 35) {
-        const items = this.getAllItems();
-        const clickedIdx = Math.min(items.length - 1, Math.max(0, Math.floor((event.y - 4) / 3)));
-        this.selectedIndex = clickedIdx;
-        this.requestRender?.();
-        return { handled: true, render: true };
-      }
+      this.requestRender?.();
+      return { handled: true, render: true };
     }
     return undefined;
   }
@@ -670,24 +640,21 @@ export class DcControlCenterPanel implements Component {
   render(width: number): string[] {
     const t = this.theme;
     const lines: string[] = [];
-    const innerW = Math.max(40, width);
-
-    // ── 0. Barra superior: central · anarchy 3 listos · 1 trabajando ──
-    const dispatches = dcIssueDispatcher.getActiveDispatches();
-    const workingCount = dispatches.length > 0 ? dispatches.length : (this.simulatedMode ? 1 : 0);
-    const readyCount = this.simulatedMode ? 3 : 4;
-    const topStatusLine = `${t.fg("dim", "central")} ${t.fg("dim", "·")} ${t.bold(t.fg("accent", "anarchy"))}  ${t.fg("accent", `${readyCount} listos`)} ${t.fg("dim", "·")} ${t.bold(t.fg("warning", `${workingCount} trabajando`))}`;
-    lines.push(topStatusLine);
-
-    // ── 1. Banner de Central: ▲ CENTRAL 2 te necesitan ● MODO PRUEBA ──
+    const innerW = Math.max(1, Math.floor(width));
+    this.itemHitboxes.clear();
+    this.inputRow = -1;
     const allItems = this.getAllItems();
+    const workingCount = allItems.filter((item) => item.kind === "task" && item.data.status === "in_progress").length;
+    lines.push(`${t.bold(t.fg("accent", "central · dc-super-agente"))} · ${workingCount} trabajando`);
+
+    // Pending decisions and explicit data source.
     const needsCount = allItems.filter((i) => i.kind === "decision").length;
     const needsLabel = needsCount > 0 ? `${needsCount} te necesitan` : "al día";
-    const modeLabel = this.simulatedMode ? "MODO PRUEBA - nada sale a GitHub" : "MODO PRODUCCIÓN - entregas en vivo";
+    const modeLabel = this.simulatedMode ? "MODO PRUEBA · sin efectos reales" : "EN VIVO · datos locales";
 
     const badgePart = `${t.bold(t.fg("accent", "▲ CENTRAL"))}  ${t.bold(needsLabel)}`;
     const modePart = `${t.bold(t.fg("accent", "●"))} ${t.fg("dim", modeLabel)}`;
-    const syncPart = t.fg("dim", "GitHub al día · hace 10m lun 22:36");
+    const syncPart = t.fg("dim", "GitHub: sincronización no consultada");
 
     const headerGap = Math.max(2, Math.floor((innerW - visibleWidth(badgePart) - visibleWidth(modePart) - visibleWidth(syncPart)) / 2));
     lines.push(`${badgePart}${" ".repeat(headerGap)}${modePart}${" ".repeat(headerGap)}${syncPart}`);
@@ -703,12 +670,21 @@ export class DcControlCenterPanel implements Component {
       ? t.bg("selectedBg", t.bold(t.fg("accent", " [3] Audit Log Forense ")))
       : t.fg("dim", " [3] Audit Log Forense ");
 
-    lines.push(`${tab1} │ ${tab2} │ ${tab3}`);
+    const tabs: Array<[ControlCenterTab, string]> = innerW < 100
+      ? [["worktrees", " [1] Central "], ["collaborators", " [2] Colaboradores "], ["audit", " [3] Audit Log "]]
+      : [["worktrees", tab1], ["collaborators", tab2], ["audit", tab3]];
+    let tabX = 0;
+    this.tabHitboxes = tabs.map(([tab, label]) => {
+      const box = { start: tabX, end: Math.min(innerW, tabX + visibleWidth(label)), tab };
+      tabX += visibleWidth(label) + 3;
+      return box;
+    });
+    lines.push(tabs.map(([tab, label]) => tab === this.activeTab ? t.bold(t.fg("accent", label)) : label).join(" │ "));
     lines.push(t.fg("border", "─".repeat(innerW)));
 
     // ── 3. Contenido según pestaña activa ──
     if (this.activeTab === "worktrees") {
-      this.renderCentralTab(lines, innerW);
+      this.renderCentralTab(lines, innerW, allItems);
     } else if (this.activeTab === "collaborators") {
       this.renderCollaboratorsTab(lines, innerW);
     } else {
@@ -729,22 +705,24 @@ export class DcControlCenterPanel implements Component {
     return lines.slice(0, targetInteriorRows).map((l) => truncateToWidth(l, innerW, ""));
   }
 
-  private renderCentralTab(lines: string[], width: number): void {
+  private renderCentralTab(lines: string[], width: number, allItems: CentralItem[]): void {
     const t = this.theme;
-    const allItems = this.getAllItems();
     const decisions = allItems.filter((i) => i.kind === "decision");
     const tasks = allItems.filter((i) => i.kind === "task");
-    const completedCount = 0;
+    const completedCount = this.simulatedMode ? this.defaultTasks.filter((task) => task.status === "done").length : undefined;
 
-    const leftColW = Math.min(36, Math.max(28, Math.floor(width * 0.32)));
-    const rightColW = Math.max(24, width - leftColW - 3);
+    const leftColW = width < 80 ? width : Math.min(36, Math.max(28, Math.floor(width * 0.32)));
+    this.listWidth = leftColW;
+    const rightColW = width < 80 ? width : Math.max(1, width - leftColW - 3);
 
     const leftLines: string[] = [];
     const rightLines: string[] = [];
+    const rowItems = new Map<number, number>();
+    let selectedRow = 0;
 
     // ── COLUMNA IZQUIERDA: 1 DECISIONES, 2 TAREAS, 3 HECHO HOY ──
     // Sección 1: DECISIONES
-    const decHeader = `${t.bold(t.fg("accent", `1 DECISIONES · ${decisions.length}`))} ${t.fg("dim", "─".repeat(Math.max(2, leftColW - 22)))} ${t.fg("dim", "s/n/d")}`;
+    const decHeader = t.bold(t.fg("accent", `1 DECISIONES · ${decisions.length}`));
     leftLines.push(decHeader);
 
     if (decisions.length === 0) {
@@ -753,6 +731,8 @@ export class DcControlCenterPanel implements Component {
       decisions.forEach((item, idx) => {
         const isSel = idx === this.selectedIndex;
         const d = item.data as CentralDecisionItem;
+        if (isSel) selectedRow = leftLines.length;
+        for (let r = 0; r < 3; r++) rowItems.set(leftLines.length + r, idx);
         const pointer = isSel ? t.bold(t.fg("accent", "▶ ")) : "  ";
         const icon = d.statusIcon === "✓" ? t.fg("accent", "✓ ") : d.statusIcon === "▲" ? t.bold(t.fg("warning", "▲ ")) : t.fg("dim", "○ ");
         const titleLine = `${pointer}${icon}${d.index} ${t.bold(d.title)} ${t.fg("dim", d.timeAgo)}`;
@@ -775,6 +755,8 @@ export class DcControlCenterPanel implements Component {
         const globalIdx = decisions.length + tIdx;
         const isSel = globalIdx === this.selectedIndex;
         const task = item.data as CentralTaskItem;
+        if (isSel) selectedRow = leftLines.length;
+        for (let r = 0; r < (task.scopeText ? 2 : 1); r++) rowItems.set(leftLines.length + r, globalIdx);
         const pointer = isSel ? t.bold(t.fg("accent", "▶ ")) : "  ";
         let icon = t.fg("dim", "○ ");
         if (task.status === "failed") icon = t.bold(t.fg("error", "✖ "));
@@ -792,14 +774,15 @@ export class DcControlCenterPanel implements Component {
     leftLines.push("");
 
     // Sección 3: HECHO HOY
-    leftLines.push(t.bold(t.fg("accent", `3 HECHO HOY · ${completedCount}`)));
-    leftLines.push(`  ${t.fg("dim", "todavía nada hoy")}`);
+    leftLines.push(t.bold(t.fg("accent", `3 HECHO HOY · ${completedCount ?? "sin historial"}`)));
+    leftLines.push(`  ${t.fg("dim", this.simulatedMode ? "Datos de demostración" : "Historial no disponible")}`);
 
     // ── COLUMNA DERECHA: INSPECCIÓN, RESUMEN, ACCIONES, COMENTARIOS Y BIENVENIDA ──
-    const current = allItems[this.selectedIndex]?.data;
+    const selected = allItems[this.selectedIndex];
+    const current = selected?.data;
 
-    if (current && (current as CentralDecisionItem).summaryCard) {
-      const dec = current as CentralDecisionItem;
+    if (selected?.kind === "decision") {
+      const dec = selected.data;
       // Breadcrumb y título
       rightLines.push(`${t.bold(t.fg("dim", "Decisiones » "))}${t.bold(t.fg("accent", dec.title))}`);
       rightLines.push(t.fg("dim", dec.subtitle));
@@ -813,35 +796,36 @@ export class DcControlCenterPanel implements Component {
       // Tarjeta RESUMEN
       const cardW = Math.max(20, Math.min(rightColW - 2, 66));
       rightLines.push(t.fg("border", `┌─ ${t.bold("RESUMEN")} ${"─".repeat(Math.max(2, cardW - 12))}┐`));
-      rightLines.push(`${t.fg("border", "│")} ${t.bold("Qué piden".padEnd(12))} ${truncateToWidth(dec.summaryCard.peticion || "", cardW - 16, "")} ${t.fg("border", "│")}`);
-      rightLines.push(`${t.fg("border", "│")} ${t.bold("Quién".padEnd(12))} ${truncateToWidth(dec.summaryCard.quien || "", cardW - 16, "")} ${t.fg("border", "│")}`);
-      rightLines.push(`${t.fg("border", "│")} ${t.bold("Sugerido".padEnd(12))} ${truncateToWidth(dec.summaryCard.sugerido || "", cardW - 16, "")} ${t.fg("border", "│")}`);
+      for (const [label, value] of [["Qué piden", dec.summaryCard.peticion], ["Quién", dec.summaryCard.quien], ["Sugerido", dec.summaryCard.sugerido]]) {
+        const body = truncateToWidth(`${label!.padEnd(12)} ${value ?? ""}`, cardW - 4, "…");
+        rightLines.push(`${t.fg("border", "│")} ${body}${" ".repeat(Math.max(0, cardW - 4 - visibleWidth(body)))} ${t.fg("border", "│")}`);
+      }
       rightLines.push(t.fg("border", `└${"─".repeat(cardW - 2)}┘`));
       rightLines.push("");
 
       // Barra de Botones de Acción
-      const btnA = t.bold(t.fg("accent", "[a] Arreglar en tu PR"));
-      const btnN = t.bold(t.fg("dim", "[n] Descartar"));
-      const btnD = t.bold(t.fg("dim", "[d] Mañana 9:00"));
-      const btnO = t.bold(t.fg("dim", "[o] Abrir en GitHub"));
-      rightLines.push(`${btnA}   ${btnN}   ${btnD}   ${btnO}`);
-      rightLines.push("");
-
-      // Comentarios de Revisores
-      if (dec.comments && dec.comments.length > 0) {
-        dec.comments.forEach((c) => {
-          rightLines.push(`• ${t.bold(c.author)} ${t.fg("dim", "· comentó ·")} ${c.threads} hilo ${t.fg("dim", "· menores:")} ${c.text}`);
+      if (dec.questionPacket) {
+        const question = this.currentQuestion();
+        const options = question?.options ?? [];
+        rightLines.push(t.bold("Opciones: [ / ] seleccionar · Enter enviar · n descartar"));
+        const start = Math.max(0, this.selectedOption - 2);
+        options.slice(start, start + 5).forEach((option, offset) => {
+          const index = start + offset;
+          rightLines.push(`${index === this.selectedOption ? "▶" : " "} ${index + 1}. ${option}`);
         });
+      } else {
+        rightLines.push(t.fg("dim", "Demostración: acciones deshabilitadas"));
+        for (const comment of dec.comments) rightLines.push(`• ${comment.author}: ${comment.text}`);
       }
-    } else if (current && (current as CentralTaskItem).worktreePath) {
-      // Tarea con worktree real en ejecución
-      const task = current as CentralTaskItem;
+    } else if (selected?.kind === "task") {
+      const task = selected.data;
       rightLines.push(`${t.bold(t.fg("dim", "Tareas » "))}${t.bold(t.fg("warning", task.title))}`);
-      rightLines.push(t.fg("dim", `Rama: ${task.branchName}  |  Worktree: ${task.worktreePath}`));
+      rightLines.push(t.fg("dim", `Rama: ${task.branchName ?? "no disponible"}  |  Worktree: ${task.worktreePath ?? "no disponible"}`));
       rightLines.push("");
 
-      rightLines.push(t.bold("📋 Hoja de Ruta ODD en Vivo:"));
-      const roadmap = parseOddTasksFromWorktree(task.worktreePath!, task.taskSlug || "task");
+      rightLines.push(t.bold("Hoja de Ruta ODD en Vivo:"));
+      const roadmap = task.worktreePath ? parseOddTasksFromWorktree(task.worktreePath, task.taskSlug || "task") : [];
+      if (roadmap.length === 0) rightLines.push(t.fg("dim", "Hoja de ruta no disponible; no se infiere progreso."));
       for (const item of roadmap) {
         let icon = t.fg("dim", "○");
         let statusLabel = t.fg("dim", "[PENDIENTE]");
@@ -860,54 +844,62 @@ export class DcControlCenterPanel implements Component {
     } else {
       // Estado de bienvenida por defecto
       rightLines.push(t.bold("Bienvenido a Central"));
-      rightLines.push(t.fg("dim", "─".repeat(rightColW - 2)));
-      rightLines.push(`• ${t.bold("1 Decisiones")}: Lo que te necesita · ${t.fg("accent", "[enter]")} ver · ${t.fg("accent", "s")} sí · ${t.fg("accent", "n")} no · ${t.fg("accent", "d")} después`);
-      rightLines.push(`• ${t.bold("2 Tareas")}: Los Claude trabajando · ${t.fg("accent", "[enter]")} espejo en vivo · a responderles`);
-      rightLines.push(`• ${t.bold("Escribile a central abajo")} · ${t.fg("accent", "ctrl+k")} todo · ${t.fg("accent", "?")} teclas · ${t.fg("accent", "esc")} cierra`);
+      rightLines.push(t.fg("dim", "─".repeat(Math.max(0, rightColW - 2))));
+      rightLines.push("Decisiones: selecciona una pregunta y responde una opción o texto.");
+      rightLines.push("Tareas: inspecciona la rama, el worktree y el progreso ODD.");
+      rightLines.push("m: demostración opcional · r: actualizar · ?: ayuda · Esc: salir");
     }
 
-    // Si hay un mensaje de acción reciente, mostrarlo en la columna derecha
-    if (this.lastActionMessage) {
-      rightLines.push("");
-      rightLines.push(t.bold(t.fg("accent", this.lastActionMessage)));
-    }
-
-    // Sección de Bienvenida fija abajo a la derecha (como en la captura)
-    if (rightLines.length < 18) {
+    // Keep the reference's guidance below the inspector, without duplicating the empty state.
+    if (selected && rightLines.length < 18) {
       while (rightLines.length < 18) rightLines.push("");
       rightLines.push(t.bold("Bienvenido a Central"));
-      rightLines.push(`1 Decisiones: lo que te necesita · ver · s sí · n no · d después`);
-      rightLines.push(`2 Tareas: los Claude trabajando · espejo en vivo · a responderles`);
-      rightLines.push(`Escribile a central abajo · ctrl+k todo · ? teclas · esc cierra`);
+      rightLines.push("Decisiones: [ / ] elige opción · Enter envía · n descarta");
+      rightLines.push("Tareas: inspección del worktree y hoja de ruta ODD");
+      rightLines.push("Escribe a Central: / o Ctrl+K · m demostración · ? ayuda");
     }
 
     // Combinar en dos columnas visuales para el cuerpo de Central (filas 4..27)
-    const maxRows = Math.min(23, Math.max(leftLines.length, rightLines.length));
+    const maxRows = width < 80 ? 8 : 23;
+    if (selectedRow < this.scrollOffset) this.scrollOffset = selectedRow;
+    if (selectedRow >= this.scrollOffset + maxRows - 2) this.scrollOffset = selectedRow - maxRows + 3;
+    this.scrollOffset = Math.min(this.scrollOffset, Math.max(0, leftLines.length - maxRows));
     for (let r = 0; r < maxRows; r++) {
-      const leftPart = leftLines[r] ?? "";
-      const rightPart = rightLines[r] ?? "";
-      const leftPadded = truncateToWidth(leftPart, leftColW, "") + " ".repeat(Math.max(0, leftColW - visibleWidth(leftPart)));
-      lines.push(`${leftPadded} ${t.fg("border", "│")} ${rightPart}`);
+      const sourceRow = r + this.scrollOffset;
+      const index = rowItems.get(sourceRow);
+      if (index !== undefined) this.itemHitboxes.set(lines.length, index);
+      const leftPart = truncateToWidth(leftLines[sourceRow] ?? "", leftColW, "");
+      const rightPart = truncateToWidth(rightLines[r] ?? "", rightColW, "…");
+      const leftPadded = leftPart + " ".repeat(Math.max(0, leftColW - visibleWidth(leftPart)));
+      lines.push(width < 80 ? leftPart : `${leftPadded} ${t.fg("border", "│")} ${rightPart}`);
+    }
+    if (width < 80) {
+      for (let row = 0; row < 15; row++) lines.push(truncateToWidth(rightLines[row] ?? "", width, "…"));
     }
 
-    // ── LÍNEAS 28..31: BARRA INFERIOR INTERACTIVA "ESCRIBILE A CENTRAL" Y ATAJOS ──
+    // Fixed composer and status bar, independent of list length.
     lines.push(t.fg("border", "─".repeat(width)));
 
-    const selectedTitle = current?.title || (decisions[0]?.data as CentralDecisionItem)?.title || "WibondConnect#3759";
-    const promptHeader = `escribile a central — sobre: ${t.bold(selectedTitle)} ·`;
+    if (this.lastActionMessage) lines.push(truncateToWidth(t.fg("accent", this.lastActionMessage), width, "…"));
+    else lines.push(t.fg("dim", "Las acciones solo responden preguntas; no modifican PR ni tareas."));
+    const selectedTitle = current?.title || "sin selección";
+    const promptHeader = `Escribe a Central — sobre: ${t.bold(selectedTitle)}`;
     lines.push(promptHeader);
 
     let inputBody = t.fg("dim", "/ para escribir");
     if (this.isInputMode) {
-      inputBody = `${t.bold(this.inputText)}${t.bold(t.fg("accent", "█"))}`;
+      const segments = [...graphemes.segment(this.inputText)].map((segment) => segment.segment);
+      while (segments.length && visibleWidth(segments.join("")) > width - 9) segments.shift();
+      inputBody = `${t.bold(segments.join(""))}${t.bold(t.fg("accent", "█"))}`;
     }
+    this.inputRow = lines.length;
     lines.push(`> [ ${inputBody} ]`);
 
-    // Pie de página de atajos de Central (idéntico a la imagen)
-    const fA = `${t.bold(t.fg("accent", "a"))} arreglar`;
-    const fN = `${t.bold(t.fg("dim", "n"))} descartar`;
-    const fD = `${t.bold(t.fg("dim", "d"))} mañana 9:00`;
-    const fO = `${t.bold(t.fg("dim", "o"))} github`;
+    // Only advertise implemented actions.
+    const fA = `${t.bold(t.fg("accent", "Enter/a/s"))} responder`;
+    const fN = `${t.bold(t.fg("dim", "n"))} descartar pregunta`;
+    const fD = `${t.bold(t.fg("dim", "[/]"))} opción`;
+    const fO = `${t.bold(t.fg("dim", "r"))} actualizar`;
     const fEsc = `${t.bold(t.fg("dim", "esc"))} volver`;
     const fSim = this.simulatedMode ? `${t.bold(t.fg("accent", "●"))} = simulado` : `${t.bold(t.fg("dim", "○"))} = en vivo`;
     const fHelp = `${t.bold(t.fg("accent", "?"))} todas las teclas`;
@@ -923,7 +915,11 @@ export class DcControlCenterPanel implements Component {
     lines.push(`  ${t.fg("dim", "Solo los colaboradores en estado ALLOW pueden activar subagentes en worktrees.")}`);
     lines.push("");
 
-    collabs.forEach((c, idx) => {
+    if (this.selectedIndex < this.scrollOffset) this.scrollOffset = this.selectedIndex;
+    if (this.selectedIndex >= this.scrollOffset + 23) this.scrollOffset = this.selectedIndex - 22;
+    collabs.slice(this.scrollOffset, this.scrollOffset + 23).forEach((c, offset) => {
+      const idx = this.scrollOffset + offset;
+      this.itemHitboxes.set(lines.length, idx);
       const isSelected = idx === this.selectedIndex;
       const pointer = isSelected ? t.fg("accent", "▶ ") : "  ";
 
@@ -941,12 +937,14 @@ export class DcControlCenterPanel implements Component {
     });
 
     lines.push("");
-    lines.push(`  ${t.fg("dim", "Presiona [Espacio] o haz Clic para alternar: ALLOW → BLOCK → PENDING")}`);
+    lines.push(`  ${t.fg("dim", this.simulatedMode ? "Demostración: cambios de permisos deshabilitados." : "Presiona [Espacio] o haz Clic para alternar: ALLOW → BLOCK → PENDING")}`);
   }
 
   private renderAuditLogTab(lines: string[], width: number): void {
     const t = this.theme;
-    const logs = this.collabDb.getRecentLogs(15);
+    const logs = this.collabDb.getRecentLogs(50);
+    if (this.selectedIndex < this.scrollOffset) this.scrollOffset = this.selectedIndex;
+    if (this.selectedIndex >= this.scrollOffset + 25) this.scrollOffset = this.selectedIndex - 24;
 
     lines.push(`  ${t.bold("Registro Forense de Eventos de Seguridad y Despacho:")}`);
     lines.push("");
@@ -956,7 +954,7 @@ export class DcControlCenterPanel implements Component {
       return;
     }
 
-    for (const log of logs) {
+    for (const log of logs.slice(this.scrollOffset, this.scrollOffset + 25)) {
       const timeStr = new Date(log.timestamp).toLocaleTimeString();
       let lvl = t.fg("dim", `[${log.level}]`);
       if (log.level === "SECURITY") lvl = t.bold(t.fg("accent", `[${log.level}]`));
@@ -969,18 +967,17 @@ export class DcControlCenterPanel implements Component {
 
   private overlayHelpCard(lines: string[], width: number): void {
     const t = this.theme;
-    const boxW = Math.min(width - 6, 70);
+    const boxW = Math.max(2, Math.min(width - 6, 70));
     const boxLines: string[] = [
       `┌─ ${t.bold("TECLAS Y ACCIONES DE CENTRAL")} ${"─".repeat(Math.max(2, boxW - 32))}┐`,
       `│ [1..3] Cambiar Pestañas (Central / Colaboradores / Auditoría)     │`,
       `│ [↑/↓] o [j/k] Navegar elementos en Decisiones y Tareas            │`,
-      `│ [Enter] Inspeccionar elemento seleccionado                        │`,
-      `│ [a / s] Arreglar en tu PR / Aprobar decisión                      │`,
-      `│ [n] Descartar decisión o cancelar tarea                           │`,
-      `│ [d] Mañana 9:00 (Posponer / Recordar más tarde)                   │`,
-      `│ [o] Abrir en GitHub (o copiar URL)                                │`,
-      `│ [/] Activar cursor para "Escribile a Central"                     │`,
-      `│ [Ctrl+K] Limpiar input de texto                                   │`,
+      `│ [Enter / a / s] Enviar la opción seleccionada de una pregunta     │`,
+      `│ [ [ / ] ] Seleccionar opción anterior / siguiente                 │`,
+      `│ [n] Descartar solo la pregunta seleccionada                       │`,
+      `│ [d / o] No disponibles: sin recordatorios ni apertura de GitHub    │`,
+      `│ [/] Responder con texto si la pregunta lo permite                 │`,
+      `│ [Ctrl+K] Enfocar respuesta de texto                               │`,
       `│ [m] Alternar Modo Simulado / Modo En Vivo                         │`,
       `│ [r] Refrescar estado y worktrees en vivo                          │`,
       `│ [Espacio] En pestaña 2: Conmutar ALLOW / BLOCK / PENDING          │`,
@@ -1004,8 +1001,6 @@ export class DcControlCenterPanel implements Component {
  * rellenando siempre hasta 34 filas interiores constantes para evitar variaciones de altura.
  */
 export async function openControlCenterModal(ctx: ExtensionContext): Promise<void> {
-  let panelRef: DcControlCenterPanel | undefined;
-
   await openDcModal<void>(ctx, {
     title: "Dc Studio — Centro de Control Autónomo & Worktrees",
     glyph: "⛩ ",
@@ -1016,16 +1011,15 @@ export async function openControlCenterModal(ctx: ExtensionContext): Promise<voi
     scrollable: false,
     showScrollbar: false,
     footer: (theme) => ({
-      left: ` [1..3/Tab/←→] Pestaña   [↑/↓] Navegar   [a] Arreglar   [n] Descartar   [d] Mañana   [/] Escribir   [?] Ayuda`,
+      left: ` [1..3/Tab/←→] Pestaña   [↑/↓] Navegar   [Enter] Responder   [n] Descartar pregunta   [/] Texto   [m] Demo   [?] Ayuda`,
       right: `[Esc Salir] `,
     }),
     content: (done, theme, tui) => {
-      panelRef = new DcControlCenterPanel(
+      return new DcControlCenterPanel(
         theme,
         () => done(undefined),
         () => tui.requestRender(),
       );
-      return panelRef;
     },
   });
 }

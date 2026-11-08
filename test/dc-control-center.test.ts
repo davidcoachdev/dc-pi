@@ -128,13 +128,13 @@ test("DcControlCenterPanel: renderizado de 3 pestañas y navegación interactiva
 
   // Render inicial (Pestaña 1: Worktrees)
   const lines1 = panel.render(80);
-  assert.ok(lines1.some((l) => l.includes("Worktrees & ODD")));
+  assert.ok(lines1.some((l) => l.includes("[1] Central")));
 
   // Cambiar a Pestaña 2: Colaboradores (tecla '2')
   panel.handleInput("2");
   assert.equal(panel.getActiveTab(), "collaborators");
   const lines2 = panel.render(80);
-  assert.ok(lines2.some((l) => l.includes("Colaboradores (Seguridad)")));
+  assert.ok(lines2.some((l) => l.includes("[2] Colaboradores")));
   assert.ok(lines2.some((l) => l.includes("davidcoachdev")));
 
   // Cambiar a Pestaña 3: Audit Log (tecla '3')
@@ -192,15 +192,17 @@ test("DcControlCenterPanel: interfaz Central con Decisiones, Tareas, Resumen, Ac
     () => { renderRequested = true; },
   );
 
-  // Verificamos render inicial en pestaña 1 (Central / Worktrees)
-  const lines = panel.render(100);
+  // Demo fixtures remain available only after explicit opt-in.
+  panel.setSimulatedMode(true);
+  panel.handleInput("j");
+  const lines = panel.render(140);
   const text = lines.join("\n");
 
   // 1. Cabecera superior con estado de Central y modo
-  assert.ok(text.includes("3 listos · 1 trabajando"), "Debe mostrar status de flota y trabajadores");
+  assert.ok(text.includes("0 trabajando"), "Debe contar solo tareas de demostración activas");
   assert.ok(text.includes("CENTRAL"), "Debe incluir el título CENTRAL");
   assert.ok(text.includes("MODO PRUEBA"), "Debe indicar el modo de prueba");
-  assert.ok(text.includes("GitHub al día"), "Debe mostrar estado de GitHub");
+  assert.ok(text.includes("GitHub: sincronización no consultada"), "No debe inventar sincronización");
 
   // 2. Columna izquierda: 1 DECISIONES, 2 TAREAS, 3 HECHO HOY
   assert.ok(text.includes("1 DECISIONES"), "Debe contener sección 1 DECISIONES");
@@ -214,20 +216,19 @@ test("DcControlCenterPanel: interfaz Central con Decisiones, Tareas, Resumen, Ac
   assert.ok(text.includes("Qué piden"), "Debe mostrar campo Qué piden");
   assert.ok(text.includes("Quién"), "Debe mostrar campo Quién");
   assert.ok(text.includes("Sugerido"), "Debe mostrar campo Sugerido");
-  assert.ok(text.includes("Arreglar"), "Debe mostrar acción Arreglar");
-  assert.ok(text.includes("Descartar"), "Debe mostrar acción Descartar");
-  assert.ok(text.includes("Mañana 9:00"), "Debe mostrar acción Mañana 9:00");
-  assert.ok(text.includes("Abrir en GitHub") || text.includes("github"), "Debe mostrar acción Abrir en GitHub");
+  assert.ok(text.includes("acciones deshabilitadas"), "La demostración no ejecuta acciones");
+  assert.ok(text.includes("responder") && text.includes("descartar pregunta"), "Debe mostrar acciones reales");
+  assert.ok(!text.includes("Mañana 9:00"), "No debe prometer recordatorios inexistentes");
 
   // 4. Guía / Ayuda Bienvenido a Central
   assert.ok(text.includes("Bienvenido a Central"), "Debe mostrar bienvenida/guía Central");
 
   // 5. Barra inferior interactiva: escribile a central
-  assert.ok(text.includes("escribile a central"), "Debe mostrar prompt escribile a central");
+  assert.ok(text.includes("Escribe a Central"), "Debe mostrar el prompt de texto");
   assert.ok(text.includes("/ para escribir"), "Debe mostrar hint / para escribir");
 
   // 6. Pie de página con atajos
-  assert.ok(text.includes("arreglar") && text.includes("descartar") && text.includes("simulado"), "Debe mostrar atajos del pie");
+  assert.ok(text.includes("responder") && text.includes("descartar") && text.includes("simulado"), "Debe mostrar atajos del pie");
 });
 
 test("DcControlCenterPanel: interacción de acciones [a], [n], [d], [o], modo input [/] y ayuda [?]", () => {
@@ -240,6 +241,7 @@ test("DcControlCenterPanel: interacción de acciones [a], [n], [d], [o], modo in
     () => { renderRequested = true; },
   );
 
+  panel.setSimulatedMode(true);
   // Navegación con j / k o flechas
   panel.handleInput("j");
   assert.ok(renderRequested);
@@ -294,13 +296,14 @@ test("DcControlCenterPanel: interacción de acciones [a], [n], [d], [o], modo in
   panel.handleInput("m");
   assert.notEqual(panel.isSimulatedMode(), initialSim);
 
-  // Clic de ratón en botón de acción
+  // Clicking arbitrary detail content must never execute an action.
+  panel.render(100);
   const mouseRes = panel.handleMouse({
     type: "click",
     button: "left",
     x: 45,
     y: 16,
   } as any);
-  assert.ok(mouseRes?.handled);
+  assert.equal(mouseRes, undefined);
 });
 
