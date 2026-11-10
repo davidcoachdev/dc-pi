@@ -30,6 +30,7 @@ import {
   formatPassengerRole,
 } from "../providers/dc-taxi-provider.ts";
 import type { DcTaxiUnit } from "../../dc-agents/core/dc-ephemeral-types.ts";
+import { isVipAccount } from "../../dc-agents/core/dc-taxi-accounts.ts";
 import { dcNotifier } from "../../../integrations/dc-notify/dc-notifier.ts";
 import { getSidebarContext } from "../dc-sidebar.ts";
 
@@ -219,10 +220,10 @@ class QuotaProviderList implements Component {
   }
 }
 
-class TaxiUnitList implements Component {
+export class TaxiUnitList implements Component {
   public children: DcCollapsible[] = [];
   private stack = new DcVStack([]);
-  private activeTab: "ac" | "vip" = "ac";
+  private activeTab: "active" | "workshop" | "vip" = "active";
   private allUnits: DcTaxiUnit[] = [];
   private tabsComponent: DcTabs;
   private reqRender: () => void;
@@ -235,14 +236,15 @@ class TaxiUnitList implements Component {
     this.reqRender = reqRender;
     this.tabsComponent = new DcTabs({
       tabs: [
-        { id: "ac", label: "Taxis AC" },
-        { id: "vip", label: "VIP (CC)" },
+        { id: "active", label: "Activas" },
+        { id: "workshop", label: "Taller" },
+        { id: "vip", label: "VIP" },
       ],
-      activeId: "ac",
-      paddingX: 2,
+      activeId: "active",
+      paddingX: 1,
       separator: " │ ",
       onSelect: (id) => {
-        this.activeTab = id as "ac" | "vip";
+        this.activeTab = id as "active" | "workshop" | "vip";
         this.rebuildDisplayList();
         this.reqRender();
       },
@@ -252,17 +254,26 @@ class TaxiUnitList implements Component {
   update(units: DcTaxiUnit[]) {
     this.allUnits = units;
 
-    let acCount = 0;
+    let activeCount = 0;
+    let workshopCount = 0;
     let vipCount = 0;
+
     for (const u of units) {
-      const isVip = u.tier === "vip" || (u.account && u.account.startsWith("cc"));
-      if (isVip) vipCount++;
-      else acCount++;
+      const isVip = u.tier === "vip" || isVipAccount(u.account);
+      if (isVip) {
+        vipCount++;
+      } else if (u.status === "en_taller" || u.status === "recargando") {
+        workshopCount++;
+      } else {
+        // Libre u Ocupado
+        activeCount++;
+      }
     }
 
     this.tabsComponent.options.tabs = [
-      { id: "ac", label: `Taxis AC (${acCount})` },
-      { id: "vip", label: `VIP CC (${vipCount})` },
+      { id: "active", label: `🚕 Activas (${activeCount})` },
+      { id: "workshop", label: `🛠️ Taller (${workshopCount})` },
+      { id: "vip", label: `👑 VIP (${vipCount})` },
     ];
 
     this.rebuildDisplayList();
@@ -270,15 +281,22 @@ class TaxiUnitList implements Component {
 
   private rebuildDisplayList() {
     const filtered = this.allUnits.filter((unit) => {
-      const isVip = unit.tier === "vip" || (unit.account && unit.account.startsWith("cc"));
-      return this.activeTab === "vip" ? isVip : !isVip;
+      const isVip = unit.tier === "vip" || isVipAccount(unit.account);
+      if (this.activeTab === "vip") {
+        return isVip;
+      }
+      if (this.activeTab === "workshop") {
+        return !isVip && (unit.status === "en_taller" || unit.status === "recargando");
+      }
+      // "active": unidades estándar funcionales (libre u ocupado)
+      return !isVip && unit.status !== "en_taller" && unit.status !== "recargando";
     });
 
     this.children = filtered.map((unit) => {
       let entry = this.unitsMap.get(unit.account);
       const rows = createTaxiUnitRows(unit);
       
-      const isVip = unit.tier === "vip" || (unit.account && unit.account.startsWith("cc"));
+      const isVip = unit.tier === "vip" || isVipAccount(unit.account);
       let titleBadge = isVip ? bloodBright("👑 VIP") : bloodSoft("○ libre");
       let titleExtra = isVip ? bloodBright("[VIP]") : dim("(libre)");
       if (unit.status === "ocupado") {

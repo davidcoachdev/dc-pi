@@ -6,7 +6,7 @@ import path from "node:path";
 import { syncBuiltinESMExports } from "node:module";
 import { getEffectiveTodoTasks, createTodoCard } from "../src/features/dc-sidebar/components/dc-sidebar-todo-card.ts";
 import { getEffectiveAgents, createAgentsCard, openSubagentsView } from "../src/features/dc-sidebar/components/dc-sidebar-agents-card.ts";
-import { createStatusCard } from "../src/features/dc-sidebar/components/dc-sidebar-status-card.ts";
+import { createStatusCard, TaxiUnitList } from "../src/features/dc-sidebar/components/dc-sidebar-status-card.ts";
 import { getCachedAccountQuotas, clearCachedQuotasForTesting } from "../src/features/dc-sidebar/providers/dc-quota-provider.ts";
 import {
   formatFleetSummaryText,
@@ -320,4 +320,63 @@ test("Status sidebar: Taxis collapsible renders right after Quota with expandabl
   assert.ok(expandedLines.some((l: string) => l.includes("Gestor /dc-taxis") || l.includes("Alt+Shift+T")));
   assert.ok(expandedLines.some((l: string) => l.includes("ac01") || l.includes("disponible") || l.includes("libre") || l.includes("ocupado")));
 });
+
+test("TaxiUnitList: pestañas Activas, Taller y VIP filtran correctamente las unidades", () => {
+  let renders = 0;
+  const list = new TaxiUnitList(() => {
+    renders++;
+  });
+
+  const mockUnits = [
+    { account: "ac01", status: "libre" as const, tier: "standard" as const, passenger: null },
+    {
+      account: "ac02",
+      status: "ocupado" as const,
+      tier: "standard" as const,
+      passenger: {
+        type: "subagent" as const,
+        sessionId: "s1",
+        pid: process.pid,
+        startedAt: Date.now(),
+        heartbeatAt: Date.now(),
+      },
+    },
+    { account: "ac03", status: "en_taller" as const, tier: "standard" as const, passenger: null, workshopReason: "Permiso Denegado" },
+    { account: "ac04", status: "recargando" as const, tier: "standard" as const, passenger: null },
+    { account: "cc1", status: "libre" as const, tier: "vip" as const, passenger: null },
+    { account: "nan-01", status: "libre" as const, tier: "vip" as const, passenger: null },
+  ];
+
+  list.update(mockUnits);
+
+  const tabsComp = (list as any).tabsComponent;
+  const renderedTabs = tabsComp.options.tabs;
+  assert.equal(renderedTabs.length, 3);
+  assert.ok(renderedTabs[0].label.includes("Activas (2)"), "Activas debe contar libre y ocupado");
+  assert.ok(renderedTabs[1].label.includes("Taller (2)"), "Taller debe contar en_taller y recargando");
+  assert.ok(renderedTabs[2].label.includes("VIP (2)"), "VIP debe contar cc1 y nan-01");
+
+  // 1. Por defecto: pestaña "active" (deben mostrarse solo ac01 y ac02)
+  assert.equal(list.children.length, 2);
+  assert.ok(list.children.some((c) => c.options.title.includes("ac01")));
+  assert.ok(list.children.some((c) => c.options.title.includes("ac02")));
+  assert.ok(!list.children.some((c) => c.options.title.includes("ac03")), "No debe mostrar taller en activas");
+  assert.ok(!list.children.some((c) => c.options.title.includes("cc1")), "No debe mostrar vip en activas");
+
+  // 2. Cambiar a pestaña "workshop" (deben mostrarse solo ac03 y ac04)
+  tabsComp.options.onSelect("workshop");
+  assert.equal(list.children.length, 2);
+  assert.ok(list.children.some((c) => c.options.title.includes("ac03")));
+  assert.ok(list.children.some((c) => c.options.title.includes("ac04")));
+  assert.ok(!list.children.some((c) => c.options.title.includes("ac01")));
+
+  // 3. Cambiar a pestaña "vip" (deben mostrarse cc1 y nan-01)
+  tabsComp.options.onSelect("vip");
+  assert.equal(list.children.length, 2);
+  assert.ok(list.children.some((c) => c.options.title.includes("cc1")));
+  assert.ok(list.children.some((c) => c.options.title.includes("nan-01")));
+  assert.ok(!list.children.some((c) => c.options.title.includes("ac01")));
+  assert.ok(!list.children.some((c) => c.options.title.includes("ac03")));
+});
+
 
