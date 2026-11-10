@@ -40,6 +40,7 @@ export interface DcTaxiUnit {
 export interface DcTaxiFleetState {
   fleet: Record<string, DcTaxiUnit>;
   lastUpdated: number;
+  cycleDispatched?: string[];
 }
 
 export type DcTripStatus = "completed" | "failed" | "cancelled" | "timeout";

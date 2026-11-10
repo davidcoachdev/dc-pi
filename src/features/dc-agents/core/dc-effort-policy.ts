@@ -203,7 +203,12 @@ export function resolveExecutionModel(
       parsedBaseModel = parts.slice(2).join("/");
     } else if (parts.length === 2) {
       // Formato provider/model o account/model
-      if (parts[0].startsWith("ac") || parts[0].startsWith("cc")) {
+      if (
+        parts[0].startsWith("ac") ||
+        parts[0].startsWith("cc") ||
+        parts[0].startsWith("nan-") ||
+        parts[0].startsWith("nan_")
+      ) {
         parsedAccount = parts[0];
         parsedBaseModel = parts[1];
       } else {

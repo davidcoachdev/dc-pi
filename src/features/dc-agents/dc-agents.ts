@@ -1528,7 +1528,13 @@ export default function dcAgentsExtension(
       if (currentModelId && currentModelId.includes("/")) {
         for (const part of currentModelId.split("/")) {
           const lower = part.toLowerCase();
-          if (lower.startsWith("ac") || lower.startsWith("cc")) {
+          if (
+            lower.startsWith("ac") ||
+            lower.startsWith("cc") ||
+            lower.startsWith("nan-") ||
+            lower.startsWith("nan_") ||
+            isVipAccount(lower)
+          ) {
             requestedAccount = lower;
             break;
           }

@@ -30,6 +30,7 @@ import {
 } from "../core/dc-taxi-history.ts";
 import { readRecentTaxiLogs } from "../core/dc-taxi-logger.ts";
 import { fetchAllTaxisQuotas, type DcTaxiQuotaInfo } from "../core/dc-taxi-quota.ts";
+import { isVipAccount } from "../core/dc-taxi-accounts.ts";
 import type {
   DcTaxiUnit,
   DcTaxiTripRecord,
@@ -463,7 +464,7 @@ export class DcTaxisPanel implements Component {
     lines.push(th.fg("muted", "─".repeat(Math.max(10, width - 2))));
 
     // 1. Estado y Pasajero Actual
-    const isVip = unit.tier === "vip" || (unit.account && unit.account.startsWith("cc"));
+    const isVip = unit.tier === "vip" || isVipAccount(unit.account);
     if (isVip) {
       lines.push(`  Categoría:        ${th.bold(th.fg("accent", "👑 VIP (Exclusivo Orquestador / Selección Explícita)"))}`);
     }
@@ -633,7 +634,7 @@ export class DcTaxisPanel implements Component {
         durationStr = `${elapsedSec}s`;
       }
 
-      const isVip = unit.tier === "vip" || (unit.account && unit.account.startsWith("cc"));
+      const isVip = unit.tier === "vip" || isVipAccount(unit.account);
       const unitLabel = isVip
         ? `${unit.account.toUpperCase()} 👑`
         : unit.account.toUpperCase();

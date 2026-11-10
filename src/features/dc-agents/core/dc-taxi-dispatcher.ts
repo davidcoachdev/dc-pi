@@ -367,6 +367,7 @@ export function createInitialFleetState(accounts?: string[]): DcTaxiFleetState {
   return {
     fleet,
     lastUpdated: Date.now(),
+    cycleDispatched: [],
   };
 }
 
@@ -410,9 +411,14 @@ export function loadFleetState(
       }
     }
 
+    const cycleDispatched = Array.isArray(parsed.cycleDispatched)
+      ? parsed.cycleDispatched.filter((x: unknown) => typeof x === "string")
+      : [];
+
     return {
       fleet,
       lastUpdated: typeof parsed.lastUpdated === "number" ? parsed.lastUpdated : Date.now(),
+      cycleDispatched,
     };
   } catch {
     const discovered = defaultAccounts && defaultAccounts.length > 0 ? defaultAccounts : discoverCpamAccounts();
@@ -555,6 +561,68 @@ export function syncOrchestratorTaxi(
 }
 
 /**
+ * Selecciona una unidad estándar libre siguiendo un ciclo de rotación estricto sin repetición.
+ * - Solo participan unidades estándar (no VIP) con status === "libre" (se excluyen en_taller, ocupado, recargando).
+ * - Mantiene state.cycleDispatched con las cuentas ya asignadas en el ciclo actual.
+ * - Si todas las unidades libres disponibles ya fueron despachadas en esta ronda,
+ *   reinicia atómicamente el ciclo (state.cycleDispatched = []) para que todas las libres
+ *   vuelvan a estar disponibles.
+ * - Registra la unidad seleccionada en state.cycleDispatched.
+ */
+export function selectNextCycleTaxi(
+  state: DcTaxiFleetState,
+  quotaGetter: (account: string) => DcTaxiQuotaInfo | undefined = getCachedTaxiQuota,
+  excludedAccounts?: string[],
+): DcTaxiUnit | null {
+  const isExcluded = (ac: string) => Array.isArray(excludedAccounts) && excludedAccounts.includes(ac);
+
+  // 1. Filtrar estrictamente unidades estándar con status "libre"
+  const freeStandardUnits = Object.values(state.fleet).filter((u) => {
+    if (u.status !== "libre" || isExcluded(u.account)) return false;
+    const isVip = u.tier === "vip" || isVipAccount(u.account);
+    return !isVip;
+  });
+
+  if (freeStandardUnits.length === 0) {
+    return null;
+  }
+
+  if (!Array.isArray(state.cycleDispatched)) {
+    state.cycleDispatched = [];
+  }
+
+  // 2. Determinar unidades libres que aún NO se han despachado en el ciclo actual
+  let eligibleInCycle = freeStandardUnits.filter((u) => !state.cycleDispatched!.includes(u.account));
+
+  // 3. Si ya se despacharon todas las unidades libres disponibles en el ciclo, auto-reset
+  if (eligibleInCycle.length === 0) {
+    state.cycleDispatched = [];
+    eligibleInCycle = freeStandardUnits;
+  }
+
+  // 4. De las elegibles, ordenar y priorizar por cuota óptima (dentro del 10% del máximo)
+  const unitsWithQuota = eligibleInCycle.map((u) => {
+    const quota = getEffectiveQuotaPct(quotaGetter(u.account)) ?? 100;
+    return { unit: u, quota };
+  });
+
+  const maxQuota = Math.max(...unitsWithQuota.map((u) => u.quota));
+  const topCandidates = unitsWithQuota.filter((u) => u.quota >= maxQuota - 10);
+
+  // Selección pseudoaleatoria uniforme entre los mejores candidatos libres de la ronda
+  const selectedIdx = Math.floor(Math.random() * topCandidates.length);
+  const selected = topCandidates[selectedIdx] ?? unitsWithQuota[0]!;
+  const selectedUnit = selected.unit;
+
+  // 5. Registrar en el ciclo actual
+  if (!state.cycleDispatched.includes(selectedUnit.account)) {
+    state.cycleDispatched.push(selectedUnit.account);
+  }
+
+  return selectedUnit;
+}
+
+/**
  * Adquiere un taxi para la sesión principal del orquestador.
  * Si la cuenta configurada por defecto está ocupada por otra sesión activa viva,
  * busca el primer taxi LIBRE y devuelve la nueva cuenta/modelo asignados para que
@@ -587,7 +655,13 @@ export function acquireOrchestratorTaxi(
       parts = modelId.split("/");
       for (let i = 0; i < parts.length; i++) {
         const lower = parts[i].toLowerCase();
-        if (lower.startsWith("ac") || lower.startsWith("cc")) {
+        if (
+          lower.startsWith("ac") ||
+          lower.startsWith("cc") ||
+          lower.startsWith("nan-") ||
+          lower.startsWith("nan_") ||
+          isVipAccount(lower)
+        ) {
           currentAccount = lower;
           accountIndex = i;
           break;
@@ -720,6 +794,12 @@ export function acquireOrchestratorTaxi(
           startedAt: Date.now(),
           heartbeatAt: Date.now(),
         };
+
+        if (!state.cycleDispatched) state.cycleDispatched = [];
+        if (!state.cycleDispatched.includes(currentAccount)) {
+          state.cycleDispatched.push(currentAccount);
+        }
+
         saveFleetState(state, fleetPath);
 
         appendTaxiLog("INFO", "TAXI_ORCHESTRATOR_ACQUIRED", {
@@ -738,30 +818,13 @@ export function acquireOrchestratorTaxi(
       }
     }
 
-    // Caso 2: Balanceo de carga automático (startup, failover o cuenta estándar solicitada ocupada).
+    // Caso 2: Balanceo de carga automático según ciclo de rotación sin repetición.
     // AISLAMIENTO VIP ESTRICTO: NUNCA asignar cuentas VIP en balanceo automático, ni al arrancar con modelo heredado cc*.
-    const freeUnits = Object.entries(state.fleet)
-      .filter(([ac, unit]) => {
-        if (unit.status !== "libre" || isExcluded(ac)) return false;
-        const unitIsVip = unit.tier === "vip" || isVipAccount(ac);
-        return !unitIsVip;
-      })
-      .map(([ac, unit]) => {
-        const q = getCachedTaxiQuota(ac);
-        const quotaPct = typeof q?.gemini5hPct === "number" ? q.gemini5hPct : 100;
-        return { ac, unit, quotaPct };
-      });
+    const selectedUnit = selectNextCycleTaxi(state, (ac) => getCachedTaxiQuota(ac), excludedAccounts);
 
-    if (freeUnits.length > 0) {
-      // Filtrar el grupo de unidades con la máxima cuota disponible
-      const maxQuota = Math.max(...freeUnits.map((u) => u.quotaPct));
-      const topCandidates = freeUnits.filter((u) => u.quotaPct >= maxQuota - 10);
-
-      // Selección pseudoaleatoria uniforme entre los mejores candidatos libres
-      const selectedIdx = Math.floor(Math.random() * topCandidates.length);
-      const selected = topCandidates[selectedIdx] ?? freeUnits[0]!;
-      const ac = selected.ac;
-      const unit = selected.unit;
+    if (selectedUnit) {
+      const ac = selectedUnit.account;
+      const unit = selectedUnit;
 
       releasePriorReservation(ac);
 
@@ -895,6 +958,12 @@ export function leaseTaxi(
         const unit = state.fleet[preferredAccount];
         unit.status = "ocupado";
         unit.passenger = fullPassenger;
+
+        if (!state.cycleDispatched) state.cycleDispatched = [];
+        if (!state.cycleDispatched.includes(preferredAccount)) {
+          state.cycleDispatched.push(preferredAccount);
+        }
+
         saveFleetState(state, fleetPath);
 
         appendTaxiLog("INFO", "TAXI_LEASED", {
@@ -910,26 +979,10 @@ export function leaseTaxi(
       }
     }
 
-    // 2. Buscar entre los taxis libres disponibles con mayor cuota restante mediante balanceo de carga.
+    // 2. Buscar entre los taxis libres disponibles siguiendo el ciclo de rotación sin repetición.
     // AISLAMIENTO VIP: Subagentes y pasajeros comunes NUNCA pueden arrendar taxis VIP (tier === 'vip' o cc*).
-    const freeUnits = Object.values(state.fleet).filter(
-      (u) => u.status === "libre" && u.tier !== "vip" && !isVipAccount(u.account),
-    );
-    if (freeUnits.length > 0) {
-      const unitsWithQuota = freeUnits.map((u) => {
-        const quota = getEffectiveQuotaPct(quotaGetter(u.account)) ?? 100;
-        return { unit: u, quota };
-      });
-
-      const maxQuota = Math.max(...unitsWithQuota.map((u) => u.quota));
-      // Candidatos óptimos dentro del 10% de la cuota máxima
-      const topCandidates = unitsWithQuota.filter((u) => u.quota >= maxQuota - 10);
-
-      // Selección pseudoaleatoria uniforme entre los mejores candidatos libres
-      const selectedIdx = Math.floor(Math.random() * topCandidates.length);
-      const selected = topCandidates[selectedIdx] ?? unitsWithQuota[0]!;
-      const selectedUnit = selected.unit;
-
+    const selectedUnit = selectNextCycleTaxi(state, quotaGetter);
+    if (selectedUnit) {
       selectedUnit.status = "ocupado";
       selectedUnit.passenger = fullPassenger;
       saveFleetState(state, fleetPath);
@@ -941,8 +994,9 @@ export function leaseTaxi(
         pid: fullPassenger.pid,
         model: fullPassenger.model,
         preferred: false,
-        quotaPct: selected.quota,
+        quotaPct: getEffectiveQuotaPct(quotaGetter(selectedUnit.account)) ?? 100,
         loadBalanced: true,
+        cycleRotated: true,
       });
 
       return { account: selectedUnit.account, unit: selectedUnit };
@@ -1233,27 +1287,14 @@ export function leaseAvailableTaxis(
       }
     }
 
-    // Filtrar estrictamente unidades 'libre', ignorando 'en_taller', 'ocupado', 'recargando' y 'vip'
-    const freeUnits = Object.values(state.fleet).filter(
-      (u) => u.status === "libre" && u.tier !== "vip" && !isVipAccount(u.account),
-    );
-
-    // Ordenar de mayor a menor cuota restante
-    freeUnits.sort((a, b) => {
-      const qA = quotaGetter(a.account)?.gemini5hPct ?? 100;
-      const qB = quotaGetter(b.account)?.gemini5hPct ?? 100;
-      if (qB !== qA) {
-        return qB - qA;
-      }
-      return a.account.localeCompare(b.account, undefined, { numeric: true });
-    });
-
-    const unitsToLease = freeUnits.slice(0, count);
+    // Seleccionar count unidades siguiendo el ciclo de rotación sin repetición
     const leasedUnits: DcTaxiUnit[] = [];
     const now = Date.now();
 
-    for (let i = 0; i < unitsToLease.length; i++) {
-      const unit = unitsToLease[i];
+    for (let i = 0; i < count; i++) {
+      const unit = selectNextCycleTaxi(state, quotaGetter);
+      if (!unit) break;
+
       const passengerData = passengerFactory(i);
       const plate = passengerData.plate || `DC-${randomUUID().slice(0, 6).toUpperCase()}`;
       const fullPassenger: DcTaxiPassenger = {
