@@ -350,11 +350,12 @@ test("TaxiUnitList: pestañas Activas, Taller y VIP filtran correctamente las un
   list.update(mockUnits);
 
   const tabsComp = (list as any).tabsComponent;
-  const renderedTabs = tabsComp.options.tabs;
+  let renderedTabs = tabsComp.options.tabs;
   assert.equal(renderedTabs.length, 3);
-  assert.ok(renderedTabs[0].label.includes("Activas (2)"), "Activas debe contar libre y ocupado");
-  assert.ok(renderedTabs[1].label.includes("Taller (2)"), "Taller debe contar en_taller y recargando");
-  assert.ok(renderedTabs[2].label.includes("VIP (2)"), "VIP debe contar cc1 y nan-01");
+  // Al estar "active" seleccionada por defecto:
+  assert.ok(renderedTabs[0].label.includes("Activas (2)"), "Activa seleccionada debe tener texto completo");
+  assert.equal(renderedTabs[1].label, "🛠️ 2", "Taller no seleccionada debe ser compacta: icono y conteo");
+  assert.equal(renderedTabs[2].label, "👑 2", "VIP no seleccionada debe ser compacta: icono y conteo");
 
   // 1. Por defecto: pestaña "active" (deben mostrarse solo ac01 y ac02)
   assert.equal(list.children.length, 2);
@@ -363,15 +364,25 @@ test("TaxiUnitList: pestañas Activas, Taller y VIP filtran correctamente las un
   assert.ok(!list.children.some((c) => c.options.title.includes("ac03")), "No debe mostrar taller en activas");
   assert.ok(!list.children.some((c) => c.options.title.includes("cc1")), "No debe mostrar vip en activas");
 
-  // 2. Cambiar a pestaña "workshop" (deben mostrarse solo ac03 y ac04)
+  // 2. Cambiar a pestaña "workshop" (deben mostrarse solo ac03 y ac04 y expandir su texto)
   tabsComp.options.onSelect("workshop");
+  renderedTabs = tabsComp.options.tabs;
+  assert.equal(renderedTabs[0].label, "🚕 2", "Activa no seleccionada pasa a compacta");
+  assert.ok(renderedTabs[1].label.includes("Taller (2)"), "Taller seleccionada pasa a completa");
+  assert.equal(renderedTabs[2].label, "👑 2", "VIP sigue compacta");
+
   assert.equal(list.children.length, 2);
   assert.ok(list.children.some((c) => c.options.title.includes("ac03")));
   assert.ok(list.children.some((c) => c.options.title.includes("ac04")));
   assert.ok(!list.children.some((c) => c.options.title.includes("ac01")));
 
-  // 3. Cambiar a pestaña "vip" (deben mostrarse cc1 y nan-01)
+  // 3. Cambiar a pestaña "vip" (deben mostrarse cc1 y nan-01 y expandir VIP)
   tabsComp.options.onSelect("vip");
+  renderedTabs = tabsComp.options.tabs;
+  assert.equal(renderedTabs[0].label, "🚕 2");
+  assert.equal(renderedTabs[1].label, "🛠️ 2");
+  assert.ok(renderedTabs[2].label.includes("VIP (2)"));
+
   assert.equal(list.children.length, 2);
   assert.ok(list.children.some((c) => c.options.title.includes("cc1")));
   assert.ok(list.children.some((c) => c.options.title.includes("nan-01")));

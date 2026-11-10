@@ -241,8 +241,8 @@ export class TaxiUnitList implements Component {
         { id: "vip", label: "VIP" },
       ],
       activeId: "active",
-      paddingX: 1,
-      separator: " │ ",
+      paddingX: 0,
+      separator: "│",
       onSelect: (id) => {
         this.activeTab = id as "active" | "workshop" | "vip";
         this.rebuildDisplayList();
@@ -253,33 +253,41 @@ export class TaxiUnitList implements Component {
 
   update(units: DcTaxiUnit[]) {
     this.allUnits = units;
+    this.rebuildTabs();
+    this.rebuildDisplayList();
+  }
 
+  private rebuildTabs() {
     let activeCount = 0;
     let workshopCount = 0;
     let vipCount = 0;
 
-    for (const u of units) {
+    for (const u of this.allUnits) {
       const isVip = u.tier === "vip" || isVipAccount(u.account);
       if (isVip) {
         vipCount++;
       } else if (u.status === "en_taller" || u.status === "recargando") {
         workshopCount++;
       } else {
-        // Libre u Ocupado
         activeCount++;
       }
     }
 
-    this.tabsComponent.options.tabs = [
-      { id: "active", label: `🚕 Activas (${activeCount})` },
-      { id: "workshop", label: `🛠️ Taller (${workshopCount})` },
-      { id: "vip", label: `👑 VIP (${vipCount})` },
-    ];
+    // Pestaña seleccionada: texto completo con icono y conteo
+    // Pestañas no seleccionadas: compactas con solo icono y conteo
+    const activeLabel = this.activeTab === "active" ? `🚕 Activas (${activeCount})` : `🚕 ${activeCount}`;
+    const workshopLabel = this.activeTab === "workshop" ? `🛠️ Taller (${workshopCount})` : `🛠️ ${workshopCount}`;
+    const vipLabel = this.activeTab === "vip" ? `👑 VIP (${vipCount})` : `👑 ${vipCount}`;
 
-    this.rebuildDisplayList();
+    this.tabsComponent.options.tabs = [
+      { id: "active", label: activeLabel },
+      { id: "workshop", label: workshopLabel },
+      { id: "vip", label: vipLabel },
+    ];
   }
 
   private rebuildDisplayList() {
+    this.rebuildTabs();
     const filtered = this.allUnits.filter((unit) => {
       const isVip = unit.tier === "vip" || isVipAccount(unit.account);
       if (this.activeTab === "vip") {
