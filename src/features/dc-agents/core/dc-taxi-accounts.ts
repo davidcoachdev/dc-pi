@@ -79,12 +79,27 @@ export function discoverCpamAccounts(
   );
 }
 
-/** Cuentas VIP reservadas exclusivamente para el orquestador bajo selección manual (cc1..cc4) */
-export const VIP_ACCOUNTS: readonly string[] = ["cc1", "cc2", "cc3", "cc4"];
+/** Cuentas VIP reservadas exclusivamente para el orquestador bajo selección manual (cc1..cc4, nan-01..nan-06) */
+export const DEFAULT_VIP_ACCOUNTS: readonly string[] = [
+  "cc1",
+  "cc2",
+  "cc3",
+  "cc4",
+  "nan-01",
+  "nan-02",
+  "nan-03",
+  "nan-04",
+  "nan-05",
+  "nan-06",
+];
+
+export const VIP_ACCOUNTS: readonly string[] = DEFAULT_VIP_ACCOUNTS;
 
 export function isVipAccount(account?: string): boolean {
   if (!account) return false;
-  return VIP_ACCOUNTS.includes(account.toLowerCase());
+  const lower = account.toLowerCase();
+  if (lower.startsWith("nan-") || lower.startsWith("nan_")) return true;
+  return VIP_ACCOUNTS.includes(lower);
 }
 
 /**
@@ -93,7 +108,7 @@ export function isVipAccount(account?: string): boolean {
 export function discoverVipAccounts(
   modelsJsonPath: string = MODELS_JSON_PATH,
 ): string[] {
-  const vips = new Set<string>(VIP_ACCOUNTS);
+  const vips = new Set<string>(DEFAULT_VIP_ACCOUNTS);
 
   if (fs.existsSync(modelsJsonPath)) {
     try {
@@ -105,7 +120,12 @@ export function discoverVipAccounts(
           const id = String(m?.id || "").trim();
           if (id.includes("/")) {
             const prefix = id.split("/")[0]?.toLowerCase();
-            if (prefix && prefix.startsWith("cc")) {
+            if (
+              prefix &&
+              (prefix.startsWith("cc") ||
+                prefix.startsWith("nan-") ||
+                prefix.startsWith("nan_"))
+            ) {
               vips.add(prefix);
             }
           }
