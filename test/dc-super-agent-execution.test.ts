@@ -151,3 +151,65 @@ for (const exit of [0, 9]) {
     } finally { fs.rmSync(f.cwd, { recursive: true, force: true }); }
   });
 }
+
+test("multi-round recovery: round 1 fails verification, round 2 succeeds and produces handoff", async () => {
+  const f = fixture();
+  try {
+    let piCallCount = 0;
+    class RecoveringRunner extends StubRunner {
+      override async runInWorktree(cwd: string, command: string, args: string[]) {
+        if (command === "pi") {
+          piCallCount++;
+          return { exitCode: 0, stdout: `Pi round ${piCallCount} done`, stderr: "" };
+        }
+        if (command === "git") return { exitCode: 0, stdout: " M src/example.ts", stderr: "" };
+        if (args[1] === "typecheck") return { exitCode: 0, stdout: "typecheck ok", stderr: "" };
+        if (args[1] === "test") {
+          const exitCode = piCallCount === 1 ? 1 : 0;
+          return { exitCode, stdout: exitCode === 0 ? "tests passed" : "", stderr: exitCode ? "assertion failed" : "" };
+        }
+        return { exitCode: 0, stdout: "", stderr: "" };
+      }
+    }
+
+    const runner = new RecoveringRunner();
+    const result = await runner.executeAutonomousLlmSession(f.options);
+
+    assert.equal(result.ok, true);
+    assert.equal(result.roundsExecuted, 2);
+    assert.equal(piCallCount, 2);
+    assert.ok(result.handoffPath && fs.existsSync(result.handoffPath));
+    const handoffContent = fs.readFileSync(result.handoffPath, "utf8");
+    assert.ok(handoffContent.includes("**Rondas de ejecución**: 2"));
+    assert.match(fs.readFileSync(f.spec, "utf8"), /T4:.*\[done\].*exit 0/);
+  } finally { fs.rmSync(f.cwd, { recursive: true, force: true }); }
+});
+
+test("anti-looping circuit breaker: identical failure signature terminates retry loop early", async () => {
+  const f = fixture();
+  try {
+    let piCallCount = 0;
+    class LoopingRunner extends StubRunner {
+      override async runInWorktree(cwd: string, command: string, args: string[]) {
+        if (command === "pi") {
+          piCallCount++;
+          return { exitCode: 0, stdout: `Pi attempt ${piCallCount}`, stderr: "" };
+        }
+        if (command === "git") return { exitCode: 0, stdout: " M src/example.ts", stderr: "" };
+        if (args[1] === "typecheck") return { exitCode: 0, stdout: "ok", stderr: "" };
+        if (args[1] === "test") {
+          return { exitCode: 1, stdout: "", stderr: "Error: exact identical failure signature" };
+        }
+        return { exitCode: 0, stdout: "", stderr: "" };
+      }
+    }
+
+    const runner = new LoopingRunner();
+    const result = await runner.executeAutonomousLlmSession({ ...f.options, maxRounds: 5 });
+
+    assert.equal(result.ok, false);
+    assert.equal(piCallCount, 2, "Debe abortar en la ronda 2 al detectar fallo idéntico sin agotar 5 rondas");
+    assert.equal(result.roundsExecuted, 2);
+    assert.match(fs.readFileSync(f.spec, "utf8"), /T4:.*\[failed\]/);
+  } finally { fs.rmSync(f.cwd, { recursive: true, force: true }); }
+});

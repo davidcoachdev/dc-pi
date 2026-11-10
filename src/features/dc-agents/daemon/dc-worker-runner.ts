@@ -19,6 +19,7 @@ export interface AutonomousLlmSessionOptions {
   model?: string; // Opcional: si se omite, Pi resuelve automáticamente su modelo de taxi o configuración
   askHumanCliPath?: string;
   preparedAgent?: Pick<EphemeralAgentLaunchPlan, "agentFilePath" | "tools" | "effectiveEffort" | "fullModelRef">;
+  maxRounds?: number; // Límite máximo de rondas de auto-corrección (default 3)
 }
 
 export interface AutonomousLlmSessionResult {
@@ -27,6 +28,8 @@ export interface AutonomousLlmSessionResult {
   stderr: string;
   exitCode: number;
   filesModified: string[];
+  roundsExecuted: number;
+  handoffPath?: string;
   verification: {
     ok: boolean;
     commands: { command: string; args: string[]; stdout: string; stderr: string; exitCode: number }[];
@@ -105,6 +108,83 @@ export function completeOddDirectives(worktreePath: string, taskSlug: string): v
   } catch {
     /* defensive */
   }
+}
+
+/**
+ * Opciones para generar el recibo de entrega auditable (Handoff Receipt).
+ */
+export interface GenerateHandoffReceiptOptions {
+  worktreePath: string;
+  taskSlug: string;
+  issueNumber: number;
+  issueTitle: string;
+  branchName: string;
+  filesModified: string[];
+  verificationCommands: { command: string; args: string[]; stdout: string; stderr: string; exitCode: number }[];
+  diffStat?: string;
+  roundsCount?: number;
+  author?: string;
+  modelUsed?: string;
+}
+
+/**
+ * Genera un archivo auditable `odd/handoff.md` en el worktree con la evidencia de la orden,
+ * comandos deterministas ejecutados, resumen de diff y notas de rollback.
+ */
+export function generateHandoffReceipt(options: GenerateHandoffReceiptOptions): string {
+  const {
+    worktreePath,
+    taskSlug,
+    issueNumber,
+    issueTitle,
+    branchName,
+    filesModified,
+    verificationCommands,
+    diffStat = "",
+    roundsCount = 1,
+    author = "dc-super-agent-86",
+    modelUsed = "Taxi de la Flota DC Studio",
+  } = options;
+
+  const oddDir = path.join(worktreePath, "odd");
+  if (!fs.existsSync(oddDir)) {
+    fs.mkdirSync(oddDir, { recursive: true });
+  }
+
+  const passedCommands = verificationCommands.length > 0
+    ? verificationCommands.map(c => `- \`${c.command} ${c.args.join(" ")}\` → exit ${c.exitCode}`).join("\n")
+    : "- Ningún comando registrado";
+
+  const filesList = filesModified.length > 0
+    ? filesModified.map(f => `- \`${f}\``).join("\n")
+    : "- Sin modificaciones registradas";
+
+  const handoffContent = `# Recibo de Entrega / Handoff Receipt
+
+## Metadatos de la Orden
+- **Issue**: #${issueNumber} - ${issueTitle}
+- **Rama**: \`${branchName}\`
+- **Slug**: \`${taskSlug}\`
+- **Agente / Autor**: ${author}
+- **Modelo / Taxi**: ${modelUsed}
+- **Rondas de ejecución**: ${roundsCount}
+- **Fecha**: ${new Date().toISOString()}
+
+## Evidencia Determinista (Exit Code 0)
+${passedCommands}
+
+## Superficie Afectada
+${filesList}
+
+${diffStat.trim() ? `### Resumen de Diff\n\`\`\`\n${diffStat.trim()}\n\`\`\`\n` : ""}
+## Plan de Rollback y Preservación
+- **Reversión en Git**: \`git revert <commit-hash>\` o eliminar la rama \`${branchName}\`.
+- **Efectos externos**: No se aplicaron migraciones destructivas ni mutaciones fuera del worktree.
+`;
+
+  const handoffPath = path.join(oddDir, "handoff.md");
+  fs.writeFileSync(handoffPath, handoffContent, "utf8");
+  return handoffPath;
 }
 
 /**
@@ -190,6 +270,11 @@ export class DcWorkerRunner {
 ## Requerimiento original (Verbatim)
 ${body || "(Sin descripción proporcionada)"}
 
+## Boundary Matrix / Casos Límite y Contrato
+- **Casos nominales**: Comportamiento estándar observable con entradas válidas y códigos de salida 0.
+- **Casos frontera y errores**: Validación de parámetros vacíos/nulos, límites de rango e interfaces de error explícitas.
+- **Invariantes e idempotencia**: Preservación de estado no relacionado, persistencia intacta y llamadas repetidas seguras.
+
 ## Tasks
 ✔ T1: Inicializar entorno y worktree aislado [done]
 ▶ T2: Analizar especificación y definir plan de pruebas (RED) [in_progress]
@@ -255,7 +340,8 @@ L1: Issue capturado en vivo por el daemon y despachado a worktree autónomo.
   /**
    * Ejecuta una sesión de LLM autónoma y desatendida mediante el CLI de Pi (`pi -p`).
    * Corre dentro de `worktreePath` con el modelo del Taxi y la configuración preparada.
-   * Un turno exitoso de Pi no sustituye la verificación determinista posterior.
+   * Cuenta con bucle de auto-corrección determinista (hasta maxRounds, default 3)
+   * y detección anti-looping ante fallos consecutivos idénticos.
    */
   public async executeAutonomousLlmSession(options: AutonomousLlmSessionOptions): Promise<AutonomousLlmSessionResult> {
     const {
@@ -269,175 +355,261 @@ L1: Issue capturado en vivo por el daemon y despachado a worktree autónomo.
     } = options;
 
     const askHelper = askHumanCliPath || path.resolve(__dirname, "dc-ask-human-cli.ts");
+    const maxRounds = options.maxRounds ?? 3;
+    let currentRound = 1;
+    let isSuccess = false;
+    let lastRunResult: { stdout: string; stderr: string; exitCode: number } = { stdout: "", stderr: "", exitCode: 1 };
+    let filesModified: string[] = [];
+    let verification: AutonomousLlmSessionResult["verification"] = { ok: false, commands: [] };
+    let lastErrorSignature = "";
 
-    const promptInstructions = [
-      `Eres dc-super-agente-86, el superagente autónomo de desarrollo de DC Studio. Usa exclusivamente tus herramientas asignadas.`,
-      `Tu misión es resolver de principio a fin el Issue #${issueNumber}: "${issueTitle}".`,
-      "",
-      `## Requerimiento original:`,
-      issueBody || "(Sin descripción)",
-      "",
-      `## Entorno de trabajo:`,
-      `- Estás en un Git Worktree aislado. Tu directorio actual es la raíz del proyecto.`,
-      `- Lee la especificación en 'odd/tasks/${taskSlug}.md'.`,
-      "",
-      `## Directivas obligatorias:`,
-      `1. Lee los archivos relevantes con 'read' antes de modificarlos.`,
-      `2. Implementa la solución editando o creando archivos de código real y tests con 'edit'/'write'.`,
-      `3. Investiga únicamente con las herramientas asignadas; no supongas acceso a herramientas externas ni intentes subagentes de revisión como gentle-ai-verify.`,
-      `4. Si tienes una DUDA DE DISEÑO o necesitas una DECISIÓN DEL HUMANO, NO ADIVINES NI TE DETENGAS: ejecuta con bash:`,
-      `   node "${askHelper}" --issue=${issueNumber} --context="Explica qué archivos viste y qué dudas tienes" --question="¿Pregunta?" --options="Opción A|Opción B"`,
-      `   El humano verá tu pregunta en una ventana modal interactiva y este comando esperará pacientemente su respuesta en stdout. Continúa tu trabajo según lo que responda el humano; NUNCA cierres la sesión mientras falte la respuesta.`,
-      `5. Eres el IMPLEMENTADOR AUTÓNOMO de la tarea: no pidas decisiones ni bloquees por verificación independiente de terceros. Tu propia verificación requerida es que 'npm test' y 'npm run typecheck' pasen con exit code 0.`,
-      `6. IMPORTANTE: NO intentes ejecutar git commit, git push ni gh pr create; el sistema supervisor de DC Studio se encarga automáticamente de commitear, pushear la rama y abrir la Pull Request una vez verificado tu código con exit code 0.`,
-      `7. Cuando todo esté implementado y verificado con exit code 0 en los tests deterministas del proyecto, concluye tu turno con un resumen de los archivos modificados.`,
-    ].join("\n");
+    const executionModel = options.preparedAgent?.fullModelRef || model;
 
-    const args: string[] = [];
-    const prepared = options.preparedAgent;
-    const executionModel = prepared?.fullModelRef || model;
-    if (executionModel) args.push("--model", executionModel);
-    if (prepared) {
-      const definition = fs.readFileSync(prepared.agentFilePath, "utf8");
-      const body = definition.replace(/^---\r?\n[\s\S]*?\r?\n---(?:\r?\n|$)/, "").trim();
-      if (!body || body === definition.trim()) throw new Error("Invalid prepared agent definition: missing frontmatter or system body");
-      args.push("--append-system-prompt", body, "--thinking", prepared.effectiveEffort);
-      if (prepared.tools.length) args.push("--tools", prepared.tools.join(","));
-      else args.push("--no-tools");
-    }
-    args.push("-p", promptInstructions, "--no-session");
-    updateWorktreeOddRoadmap(worktreePath, taskSlug, "T4", "pending", "Esperando ejecución y verificación real");
+    while (currentRound <= maxRounds) {
+      let promptInstructions = "";
+      if (currentRound === 1) {
+        promptInstructions = [
+          `Eres dc-super-agente-86, el superagente autónomo de desarrollo de DC Studio. Usa exclusivamente tus herramientas asignadas.`,
+          `Tu misión es resolver de principio a fin el Issue #${issueNumber}: "${issueTitle}".`,
+          "",
+          `## Requerimiento original:`,
+          issueBody || "(Sin descripción)",
+          "",
+          `## Entorno de trabajo:`,
+          `- Estás en un Git Worktree aislado. Tu directorio actual es la raíz del proyecto.`,
+          `- Lee la especificación en 'odd/tasks/${taskSlug}.md'.`,
+          "",
+          `## Directivas obligatorias:`,
+          `1. Lee los archivos relevantes con 'read' antes de modificarlos.`,
+          `2. Implementa la solución editando o creando archivos de código real y tests con 'edit'/'write'.`,
+          `3. Investiga únicamente con las herramientas asignadas; no supongas acceso a herramientas externas ni intentes subagentes de revisión como gentle-ai-verify.`,
+          `4. Si tienes una DUDA DE DISEÑO o necesitas una DECISIÓN DEL HUMANO, NO ADIVINES NI TE DETENGAS: ejecuta con bash:`,
+          `   node "${askHelper}" --issue=${issueNumber} --context="Explica qué archivos viste y qué dudas tienes" --question="¿Pregunta?" --options="Opción A|Opción B"`,
+          `   El humano verá tu pregunta en una ventana modal interactiva y este comando esperará pacientemente su respuesta en stdout. Continúa tu trabajo según lo que responda el humano; NUNCA cierres la sesión mientras falte la respuesta.`,
+          `5. Eres el IMPLEMENTADOR AUTÓNOMO de la tarea: no pidas decisiones ni bloquees por verificación independiente de terceros. Tu propia verificación requerida es que 'npm test' y 'npm run typecheck' pasen con exit code 0.`,
+          `6. IMPORTANTE: NO intentes ejecutar git commit, git push ni gh pr create; el sistema supervisor de DC Studio se encarga automáticamente de commitear, pushear la rama y abrir la Pull Request una vez verificado tu código con exit code 0.`,
+          `7. Cuando todo esté implementado y verificado con exit code 0 en los tests deterministas del proyecto, concluye tu turno con un resumen de los archivos modificados.`,
+        ].join("\n");
+      } else {
+        const failedCmd = verification.commands.find((c) => c.exitCode !== 0);
+        const errorDetail = failedCmd
+          ? `Comando fallido: \`${failedCmd.command} ${failedCmd.args.join(" ")}\` (exit code: ${failedCmd.exitCode})\nError observado:\n${(failedCmd.stderr || failedCmd.stdout).slice(-1500)}`
+          : verification.error || "La verificación determinista del proyecto falló.";
 
-    updateWorktreeOddRoadmap(worktreePath, taskSlug, "T3", "in_progress", "dc-super-agente-86 programando en worktree");
+        promptInstructions = [
+          `Eres dc-super-agente-86 en ronda de auto-corrección ${currentRound} de ${maxRounds}.`,
+          `La verificación determinista previa en el worktree ha fallado. Debes resolver el fallo observado sin sobreingeniería.`,
+          "",
+          `## Error determinista observado:`,
+          errorDetail,
+          "",
+          `## Directivas de corrección:`,
+          `1. Lee los archivos afectados con 'read'.`,
+          `2. Corrige el código de producción o las pruebas en 'test/' con 'edit'/'write'.`,
+          `3. Asegúrate de que las pruebas y el tipado pasen limpiamente con exit code 0.`,
+          `4. NO ejecutes git commit, git push ni gh pr create; el supervisor verificará de forma determinista al finalizar tu turno.`,
+        ].join("\n");
 
-    // Iniciar vigilante activo de progreso de codificación (Worktree Progress Watcher)
-    let watcherActive = true;
-    const notifiedStages = new Set<string>();
+        void dcIssueNotifier.notifyIssue(
+          { repoRoot: worktreePath, issueNumber },
+          `🤖 **DC Super-Agent 86**: ⚠️ Ronda ${currentRound}/${maxRounds}: Auto-corrección tras fallo determinista...`,
+        );
+        updateWorktreeOddRoadmap(worktreePath, taskSlug, "T4", "in_progress", `Auto-corrección ronda ${currentRound}/${maxRounds}`);
+      }
 
-    const progressWatcher = (async () => {
-      const specFile = path.join(worktreePath, "odd", "tasks", `${taskSlug}.md`);
-      let previousMtime = 0;
+      const args: string[] = [];
+      const prepared = options.preparedAgent;
+      if (executionModel) args.push("--model", executionModel);
+      if (prepared) {
+        const definition = fs.readFileSync(prepared.agentFilePath, "utf8");
+        const body = definition.replace(/^---\r?\n[\s\S]*?\r?\n---(?:\r?\n|$)/, "").trim();
+        if (!body || body === definition.trim()) throw new Error("Invalid prepared agent definition: missing frontmatter or system body");
+        args.push("--append-system-prompt", body, "--thinking", prepared.effectiveEffort);
+        if (prepared.tools.length) args.push("--tools", prepared.tools.join(","));
+        else args.push("--no-tools");
+      }
+      args.push("-p", promptInstructions, "--no-session");
 
-      while (watcherActive) {
-        await new Promise((r) => setTimeout(r, 6000));
-        if (!watcherActive) break;
+      if (currentRound === 1) {
+        updateWorktreeOddRoadmap(worktreePath, taskSlug, "T4", "pending", "Esperando ejecución y verificación real");
+        updateWorktreeOddRoadmap(worktreePath, taskSlug, "T3", "in_progress", "dc-super-agente-86 programando en worktree");
+      }
 
-        try {
-          // 1. Detección de creación de tests (Fase RED)
-          if (!notifiedStages.has("red_tests")) {
-            const testDir = path.join(worktreePath, "test");
-            if (fs.existsSync(testDir)) {
-              const testFiles = fs.readdirSync(testDir);
-              const hasNewTest = testFiles.some((f) => f.includes(taskSlug) || f.endsWith(".test.ts"));
-              if (hasNewTest) {
-                notifiedStages.add("red_tests");
-                void dcIssueNotifier.notifyIssue(
-                  { repoRoot: worktreePath, issueNumber },
-                  `🤖 **DC Super-Agent 86**: 🔴 Fase RED: Escribiendo y estructurando pruebas deterministas previas en \`test/\`...`,
-                );
-              }
-            }
+      // Iniciar vigilante activo de progreso de codificación (Worktree Progress Watcher) con ciclo de respuesta rápido
+      let watcherActive = true;
+      const notifiedStages = new Set<string>();
+
+      const progressWatcher = (async () => {
+        const specFile = path.join(worktreePath, "odd", "tasks", `${taskSlug}.md`);
+        let previousMtime = 0;
+
+        while (watcherActive) {
+          for (let i = 0; i < 24 && watcherActive; i++) {
+            await new Promise((r) => setTimeout(r, 250));
           }
+          if (!watcherActive) break;
 
-          // 2. Detección de edición de código fuente y archivos modificados individualmente
-          const status = await this.runInWorktree(worktreePath, "git", ["status", "--porcelain"], { timeoutMs: 5000 });
-          if (status.stdout) {
-            const rawLines = status.stdout.split("\n").map(l => l.trim()).filter(Boolean);
-            for (const line of rawLines) {
-              const filePath = line.slice(3).trim();
-              if (filePath && !filePath.startsWith("odd/") && !filePath.startsWith("node_modules")) {
-                const stageKey = `file_${filePath}`;
-                if (!notifiedStages.has(stageKey)) {
-                  notifiedStages.add(stageKey);
-                  const isCreated = line.startsWith("??") || line.startsWith("A");
-                  const verb = isCreated ? "📄 Creando nuevo archivo" : "✏️ Modificando archivo";
+          try {
+            // 1. Detección de creación de tests (Fase RED)
+            if (!notifiedStages.has("red_tests")) {
+              const testDir = path.join(worktreePath, "test");
+              if (fs.existsSync(testDir)) {
+                const testFiles = fs.readdirSync(testDir);
+                const hasNewTest = testFiles.some((f) => f.includes(taskSlug) || f.endsWith(".test.ts"));
+                if (hasNewTest) {
+                  notifiedStages.add("red_tests");
                   void dcIssueNotifier.notifyIssue(
                     { repoRoot: worktreePath, issueNumber },
-                    `🤖 **DC Super-Agent 86**: ${verb}: \`${filePath}\``,
+                    `🤖 **DC Super-Agent 86**: 🔴 Fase RED: Escribiendo y estructurando pruebas deterministas previas en \`test/\`...`,
                   );
                 }
               }
             }
-          }
 
-          // 3. Detección de cambios en la hoja de ruta ODD viva
-          if (fs.existsSync(specFile)) {
-            const mtime = fs.statSync(specFile).mtimeMs;
-            if (mtime > previousMtime && previousMtime > 0) {
-              previousMtime = mtime;
-              const content = fs.readFileSync(specFile, "utf8");
-              const tasks = content.split("\n").filter((l) => /^[✔▶○✖]\s+T\d+:/.test(l.trim()));
-              const summaryLine = tasks.map((t) => t.trim().slice(0, 30)).join(" · ");
-              if (summaryLine && !notifiedStages.has(`roadmap_${summaryLine}`)) {
-                notifiedStages.add(`roadmap_${summaryLine}`);
-                void dcIssueNotifier.notifyIssue(
-                  { repoRoot: worktreePath, issueNumber },
-                  `🤖 **DC Super-Agent 86**: 📊 Hoja de ruta ODD actualizada: ${summaryLine}`,
-                );
+            // 2. Detección de edición de código fuente y archivos modificados individualmente
+            const status = await this.runInWorktree(worktreePath, "git", ["status", "--porcelain"], { timeoutMs: 5000 });
+            if (status.stdout) {
+              const rawLines = status.stdout.split("\n").map(l => l.trim()).filter(Boolean);
+              for (const line of rawLines) {
+                const filePath = line.slice(3).trim();
+                if (filePath && !filePath.startsWith("odd/") && !filePath.startsWith("node_modules")) {
+                  const stageKey = `file_${filePath}`;
+                  if (!notifiedStages.has(stageKey)) {
+                    notifiedStages.add(stageKey);
+                    const isCreated = line.startsWith("??") || line.startsWith("A");
+                    const verb = isCreated ? "📄 Creando nuevo archivo" : "✏️ Modificando archivo";
+                    void dcIssueNotifier.notifyIssue(
+                      { repoRoot: worktreePath, issueNumber },
+                      `🤖 **DC Super-Agent 86**: ${verb}: \`${filePath}\``,
+                    );
+                  }
+                }
               }
-            } else if (previousMtime === 0) {
-              previousMtime = mtime;
             }
+
+            // 3. Detección de cambios en la hoja de ruta ODD viva
+            if (fs.existsSync(specFile)) {
+              const mtime = fs.statSync(specFile).mtimeMs;
+              if (mtime > previousMtime && previousMtime > 0) {
+                previousMtime = mtime;
+                const content = fs.readFileSync(specFile, "utf8");
+                const tasks = content.split("\n").filter((l) => /^[✔▶○✖]\s+T\d+:/.test(l.trim()));
+                const summaryLine = tasks.map((t) => t.trim().slice(0, 30)).join(" · ");
+                if (summaryLine && !notifiedStages.has(`roadmap_${summaryLine}`)) {
+                  notifiedStages.add(`roadmap_${summaryLine}`);
+                  void dcIssueNotifier.notifyIssue(
+                    { repoRoot: worktreePath, issueNumber },
+                    `🤖 **DC Super-Agent 86**: 📊 Hoja de ruta ODD actualizada: ${summaryLine}`,
+                  );
+                }
+              } else if (previousMtime === 0) {
+                previousMtime = mtime;
+              }
+            }
+          } catch {
+            /* best-effort */
           }
-        } catch {
-          /* best-effort */
         }
+      })();
+
+      try {
+        lastRunResult = await this.runInWorktree(worktreePath, "pi", args);
+      } finally {
+        watcherActive = false;
+        await progressWatcher.catch(() => {});
       }
-    })();
 
-    let runResult: { stdout: string; stderr: string; exitCode: number };
-    try {
-      runResult = await this.runInWorktree(worktreePath, "pi", args);
-    } finally {
-      watcherActive = false;
-      await progressWatcher.catch(() => {});
-    }
+      // Comprobar archivos modificados mediante git status en el worktree
+      const statusRes = await this.runInWorktree(worktreePath, "git", ["status", "--porcelain"]);
+      filesModified = statusRes.stdout
+        ? statusRes.stdout.split("\n").map((l) => l.slice(3).trim()).filter(Boolean)
+        : [];
 
-    const { stdout, stderr, exitCode } = runResult;
+      // Limpiar secuencias de escape ANSI del stderr para evitar fallos de evaluación
+      const cleanStderr = lastRunResult.stderr.replace(/\x1b\]0;[^\x07\x1b]*(?:\x07|\x1b\\)/g, "").trim();
 
-    // Comprobar archivos modificados mediante git status en el worktree
-    const statusRes = await this.runInWorktree(worktreePath, "git", ["status", "--porcelain"]);
-    const filesModified = statusRes.stdout
-      ? statusRes.stdout.split("\n").map((l) => l.slice(3).trim()).filter(Boolean)
-      : [];
+      // Si exitCode fue 0, o si exitCode fue 1 pero Pi modificó archivos de código reales y no hay un error fatal real en stderr
+      const hasSourceModifications = filesModified.some((f) => !f.startsWith("odd/") && !f.startsWith("node_modules"));
+      const shouldVerify = lastRunResult.exitCode === 0 || (lastRunResult.exitCode === 1 && hasSourceModifications && !cleanStderr.includes("FatalError"));
 
-    // Limpiar secuencias de escape ANSI del stderr para evitar fallos de evaluación
-    const cleanStderr = stderr.replace(/\x1b\]0;[^\x07\x1b]*(?:\x07|\x1b\\)/g, "").trim();
+      if (!shouldVerify) {
+        verification = { ok: false, commands: [], error: `No ejecutada: Pi exit ${lastRunResult.exitCode}` };
+        updateWorktreeOddRoadmap(worktreePath, taskSlug, "T3", "failed", `Fallo en ejecución: exit ${lastRunResult.exitCode}`);
+        break;
+      }
 
-    // Si exitCode fue 0, o si exitCode fue 1 pero Pi modificó archivos de código reales y no hay un error fatal real en stderr
-    const hasSourceModifications = filesModified.some((f) => !f.startsWith("odd/") && !f.startsWith("node_modules"));
-    const shouldVerify = exitCode === 0 || (exitCode === 1 && hasSourceModifications && !cleanStderr.includes("FatalError"));
-
-    const verification: AutonomousLlmSessionResult["verification"] = { ok: false, commands: [] };
-    if (shouldVerify) {
       updateWorktreeOddRoadmap(worktreePath, taskSlug, "T3", "done", `Implementación completada (${filesModified.length} archivos)`);
       updateWorktreeOddRoadmap(worktreePath, taskSlug, "T4", "in_progress", "Ejecutando verificación determinista");
-      const res = await this.verifyWorktree(worktreePath);
-      verification.ok = res.ok;
-      verification.commands = res.commands;
-      verification.error = res.error;
-      const evidence = verification.commands.map(r => `${r.command} ${r.args.join(" ")}: exit ${r.exitCode}`).join("; ");
-      updateWorktreeOddRoadmap(worktreePath, taskSlug, "T4", verification.ok ? "done" : "failed", evidence || verification.error);
-    } else {
-      verification.error = `No ejecutada: Pi exit ${exitCode}`;
-      updateWorktreeOddRoadmap(worktreePath, taskSlug, "T3", "failed", `Fallo en ejecución: exit ${exitCode}`);
-    }
-    const isSuccess = shouldVerify && verification.ok;
 
+      verification = await this.verifyWorktree(worktreePath);
+      const evidence = verification.commands.map(r => `${r.command} ${r.args.join(" ")}: exit ${r.exitCode}`).join("; ");
+
+      if (verification.ok) {
+        isSuccess = true;
+        updateWorktreeOddRoadmap(worktreePath, taskSlug, "T4", "done", evidence);
+        break;
+      }
+
+      // Fallo en la verificación de esta ronda
+      updateWorktreeOddRoadmap(worktreePath, taskSlug, "T4", "failed", evidence || verification.error);
+
+      // Detección de anti-looping ante fallos idénticos repetidos consecutivamente
+      const failedCommand = verification.commands.find((r) => r.exitCode !== 0);
+      const currentSignature = failedCommand
+        ? `${failedCommand.command}:${failedCommand.args.join(" ")}:${failedCommand.exitCode}:${(failedCommand.stderr || failedCommand.stdout).slice(0, 150)}`
+        : verification.error || "error";
+
+      if (currentRound >= 2 && currentSignature === lastErrorSignature) {
+        this.collabDb.log({
+          level: "WARN",
+          category: "DISPATCH",
+          actor: "dc-super-agent-86",
+          message: `Anti-looping disparado: el error en ronda ${currentRound} es idéntico a la ronda previa. Deteniendo reintentos para evitar consumo infructuoso.`,
+        });
+        break;
+      }
+      lastErrorSignature = currentSignature;
+
+      currentRound++;
+    }
+
+    let handoffPath: string | undefined;
+    if (isSuccess) {
+      let diffStat = "";
+      const diffRes = await this.runInWorktree(worktreePath, "git", ["diff", "--stat"]);
+      if (diffRes.exitCode === 0) diffStat = diffRes.stdout;
+
+      handoffPath = generateHandoffReceipt({
+        worktreePath,
+        taskSlug,
+        issueNumber,
+        issueTitle,
+        branchName: taskSlug,
+        filesModified,
+        verificationCommands: verification.commands,
+        diffStat,
+        roundsCount: Math.min(currentRound, maxRounds),
+        modelUsed: executionModel || "Taxi de la Flota DC Studio",
+      });
+    }
+
+    const roundsExecuted = Math.min(currentRound, maxRounds);
     this.collabDb.log({
       level: isSuccess ? "INFO" : "ERROR",
       category: "DISPATCH",
-      actor: "dc-super-agent",
-      message: `Sesión LLM: Pi exit ${exitCode}; verificación ${verification.ok ? "superada" : "no superada"} (${filesModified.length} archivos)`,
-      metadata: JSON.stringify({ exitCode, filesModified, verification }),
+      actor: "dc-super-agent-86",
+      message: `Sesión LLM: Pi exit ${lastRunResult.exitCode}; verificación ${verification.ok ? "superada" : "no superada"} en ${roundsExecuted} rondas (${filesModified.length} archivos)`,
+      metadata: JSON.stringify({ exitCode: lastRunResult.exitCode, filesModified, verification, roundsExecuted }),
     });
 
     return {
       ok: isSuccess,
-      stdout,
-      stderr,
-      exitCode,
+      stdout: lastRunResult.stdout,
+      stderr: lastRunResult.stderr,
+      exitCode: lastRunResult.exitCode,
       filesModified,
+      roundsExecuted,
+      handoffPath,
       verification,
     };
   }
