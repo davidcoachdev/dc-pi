@@ -5,7 +5,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { dcNotifier } from "../../../integrations/dc-notify/dc-notifier.ts";
 import { resolveCurrentRepoIdentity, type RepoIdentity } from "./dc-repo-resolver.ts";
-import { DcWebhookReceiver } from "./dc-webhook-receiver.ts";
+import { DcControlReceiver } from "./dc-control-receiver.ts";
 import { dcIssueDispatcher, type GitHubIssuePayload, type DispatchedIssueTask } from "./dc-issue-dispatcher.ts";
 import { promptApprovalModal } from "../../dc-approval/views/dc-approval-modal.ts";
 import { dcPrDelivery } from "./dc-pr-delivery.ts";
@@ -23,26 +23,26 @@ export interface DaemonStatus {
 }
 
 /**
- * Supervisor del Daemon Autónomo de GitHub Webhooks para DC Studio.
+ * Supervisor del Daemon Autónomo de GitHub y Centro de Control para DC Studio.
  * - Detecta el repositorio activo dinámicamente (`owner/repo`).
  * - Levanta el receptor HTTP local en loopback (127.0.0.1:4545+).
  * - Spawnea el túnel oficial `gh webhook forward` en background sin bloquear la sesión.
  * - Al recibir un issue, dispara la notificación visual y el aislamiento en worktree.
  */
-export class DcWebhookDaemonManager {
-  private static instance?: DcWebhookDaemonManager;
-  private receiver?: DcWebhookReceiver;
+export class DcControlDaemonManager {
+  private static instance?: DcControlDaemonManager;
+  private receiver?: DcControlReceiver;
   private tunnelProcess?: ChildProcess;
   private currentRepo?: RepoIdentity;
   private isTunnelRunning = false;
   private inFlightWorkers = new Set<string>();
   private pendingReruns = new Map<string, { dispatched: DispatchedIssueTask; repo: RepoIdentity; instruction?: string; ctx?: ExtensionContext }>();
 
-  public static getInstance(): DcWebhookDaemonManager {
-    if (!DcWebhookDaemonManager.instance) {
-      DcWebhookDaemonManager.instance = new DcWebhookDaemonManager();
+  public static getInstance(): DcControlDaemonManager {
+    if (!DcControlDaemonManager.instance) {
+      DcControlDaemonManager.instance = new DcControlDaemonManager();
     }
-    return DcWebhookDaemonManager.instance;
+    return DcControlDaemonManager.instance;
   }
 
   public async start(ctx?: ExtensionContext): Promise<DaemonStatus> {
@@ -60,7 +60,7 @@ export class DcWebhookDaemonManager {
 
     const capability = randomBytes(32).toString("hex");
     // 2. Iniciar el receptor HTTP local
-      this.receiver = new DcWebhookReceiver({
+      this.receiver = new DcControlReceiver({
         port: 4545,
         capability,
         expectedRepoNwo: repo.fullNwo,
@@ -70,7 +70,7 @@ export class DcWebhookDaemonManager {
         },
         onError: (err) => {
           if (ctx) {
-            dcNotifier.notify(ctx, "DC Webhook Daemon", `Error receptor: ${err.message}`, "error");
+            dcNotifier.notify(ctx, "DC Control Daemon", `Error receptor: ${err.message}`, "error");
           }
         },
       });
@@ -371,7 +371,7 @@ export class DcWebhookDaemonManager {
           this.isTunnelRunning = false;
         }
         if (ctx) {
-          dcNotifier.notify(ctx, "DC Webhook Tunnel", "Fallo túnel gh", "error");
+          dcNotifier.notify(ctx, "DC Control Tunnel", "Fallo túnel gh", "error");
         }
       });
 
@@ -380,7 +380,7 @@ export class DcWebhookDaemonManager {
           this.isTunnelRunning = false;
         }
         if (code !== 0 && code !== null && ctx) {
-          dcNotifier.notify(ctx, "DC Webhook Tunnel", `Túnel gh finalizado (código ${code})`, "warning");
+          dcNotifier.notify(ctx, "DC Control Tunnel", `Túnel gh finalizado (código ${code})`, "warning");
         }
       });
 
@@ -388,7 +388,7 @@ export class DcWebhookDaemonManager {
     } catch (err: any) {
       this.isTunnelRunning = false;
       if (ctx) {
-        dcNotifier.notify(ctx, "DC Webhook Tunnel", "No se pudo iniciar gh webhook", "error");
+        dcNotifier.notify(ctx, "DC Control Tunnel", "No se pudo iniciar gh webhook", "error");
       }
     }
   }
@@ -422,4 +422,6 @@ export class DcWebhookDaemonManager {
   }
 }
 
-export const dcWebhookDaemonManager = DcWebhookDaemonManager.getInstance();
+export const dcControlDaemonManager = DcControlDaemonManager.getInstance();
+export const dcWebhookDaemonManager = dcControlDaemonManager;
+export const DcWebhookDaemonManager = DcControlDaemonManager;
