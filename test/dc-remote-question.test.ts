@@ -22,8 +22,8 @@ after(() => {
 });
 const { DcRemoteQuestionManager, dcRemoteQuestionManager } = await import("../src/features/dc-agents/daemon/dc-remote-question.ts");
 const { DcAgentQuestionPanel } = await import("../src/features/dc-agents/views/dc-agent-question-modal.ts");
-const { registerWebhookDaemonCommands } = await import("../src/features/dc-agents/daemon/dc-webhook-commands.ts");
-const { dcWebhookDaemonManager } = await import("../src/features/dc-agents/daemon/dc-webhook-daemon-manager.ts");
+const { registerControlDaemonCommands, registerWebhookDaemonCommands } = await import("../src/features/dc-agents/daemon/dc-control-commands.ts");
+const { dcControlDaemonManager, dcWebhookDaemonManager } = await import("../src/features/dc-agents/daemon/dc-control-daemon-manager.ts");
 
 const dummyTheme: Theme = {
   fg: (_color: string, text: string) => text,

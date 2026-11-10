@@ -27,7 +27,7 @@ mock.module("../src/features/dc-agents/daemon/dc-repo-resolver.js", { namedExpor
   },
   resolveIssueBaseBranch: () => "master",
 } });
-mock.module("../src/features/dc-agents/daemon/dc-webhook-daemon-manager.js", { namedExports: { dcWebhookDaemonManager: {
+mock.module("../src/features/dc-agents/daemon/dc-control-daemon-manager.js", { namedExports: { dcControlDaemonManager: {
   start: async () => { starts++; return status; }, stop: async () => { stops++; }, getStatus: () => status,
   executeIssue: async (...args: unknown[]) => { launches.push(args); },
 } } });
@@ -37,7 +37,7 @@ mock.module("../src/features/dc-agents/views/dc-control-center-modal.js", { name
 mock.module("../src/features/dc-exit/dc-exit.js", { namedExports: { isSessionChangeReason: (reason: string) => ["reload", "new", "resume", "fork"].includes(reason) } });
 mock.module("../src/features/dc-agents/daemon/dc-remote-question.js", { namedExports: { dcRemoteQuestionManager: { getPendingQuestions: () => [] } } });
 mock.module("../src/features/dc-agents/views/dc-agent-question-modal.js", { namedExports: { promptAgentQuestionModal: async () => {} } });
-const { registerWebhookDaemonCommands } = await import("../src/features/dc-agents/daemon/dc-webhook-commands.ts");
+const { registerControlDaemonCommands } = await import("../src/features/dc-agents/daemon/dc-control-commands.ts");
 
 test("registered check queries current repo, confirms effects, re-fetches and launches only selection", async (t) => {
   const commands = new Map<string, any>();
@@ -59,7 +59,7 @@ test("registered check queries current repo, confirms effects, re-fetches and la
       assert.equal(queries.length, 1, "re-fetch must follow confirmation"); return confirmed;
     },
   } };
-  registerWebhookDaemonCommands({ registerCommand: (name: string, command: any) => commands.set(name, command), registerShortcut: () => {},
+  registerControlDaemonCommands({ registerCommand: (name: string, command: any) => commands.set(name, command), registerShortcut: () => {},
     on: (name: string, handler: any) => events.set(name, handler), exec: async (...args: any[]) => {
       queries.push(args); const response = responses.shift();
       if (response instanceof Error) throw response;
@@ -69,7 +69,7 @@ test("registered check queries current repo, confirms effects, re-fetches and la
   const result = (value: unknown) => ({ code: 0, stdout: JSON.stringify(value), stderr: "", killed: false });
   const reset = () => { queries.length = 0; launches.length = 0; notifications.length = 0; selections = 0; confirmations = 0;
     selected = 1; confirmed = true; hasUI = true; mode = "tui"; responses = [result([issue(1), issue(2)]), result(issue(2))]; };
-  const check = () => commands.get("dc-webhook").handler("check", ctx);
+  const check = () => commands.get("dc-control").handler("check", ctx);
   try {
     reset(); await check();
     assert.deepEqual(queries, [
@@ -115,14 +115,14 @@ test("registered check queries current repo, confirms effects, re-fetches and la
       reset(); responses[1] = { code: 1, stdout: "", stderr: "not found" }; await check(); assert.equal(launches.length, 0);
     });
     await t.test("existing status/start/stop/control and reload behavior remain intact", async () => {
-      for (const sub of ["status", "", "start", "stop"]) await commands.get("dc-webhook").handler(sub, ctx);
+      for (const sub of ["status", "start", "stop"]) await commands.get("dc-control").handler(sub, ctx);
       await commands.get("dc-control").handler("", ctx);
       assert.equal(starts, 1); assert.equal(stops, 1); assert.equal(controls, 1);
       await events.get("session_shutdown")({ reason: "reload" }); assert.equal(stops, 1);
       await events.get("session_shutdown")({ reason: "quit" }); assert.equal(stops, 2);
-      notifications.length = 0; await commands.get("dc-webhook").handler("invalid", ctx);
+      notifications.length = 0; await commands.get("dc-control").handler("invalid", ctx);
       assert.match(notifications.join(), /start.*stop.*status.*check/);
-      assert.match(commands.get("dc-webhook").description, /check/);
+      assert.match(commands.get("dc-control").description, /check/);
     });
   } finally { await events.get("session_shutdown")({ reason: "reload" }); }
 });

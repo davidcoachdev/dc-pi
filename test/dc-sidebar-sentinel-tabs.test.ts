@@ -9,7 +9,7 @@ import dcSidebarExtension from "../src/features/dc-sidebar/dc-sidebar.ts";
 import { writeSidebarPrefs, readSidebarPrefs } from "../src/features/dc-sidebar/core/dc-sidebar-prefs.ts";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
-test("DcSidebarTabs renders all 5 sentinel tabs and allows switching", () => {
+test("DcSidebarTabs renders all 6 sentinel tabs and allows switching", () => {
   let switched = "";
   const tabs = new DcSidebarTabs(undefined, (id) => {
     switched = id;
@@ -26,14 +26,15 @@ test("DcSidebarTabs renders all 5 sentinel tabs and allows switching", () => {
   assert.ok(lines[0].includes("[3]"));
   assert.ok(lines[0].includes("[4]"));
   assert.ok(lines[0].includes("[5]"));
+  assert.ok(lines[0].includes("[6]"));
 
-  tabs.setActiveTab("tree");
-  assert.equal(tabs.getActiveTab(), "tree");
-  assert.equal(switched, "tree");
+  tabs.setActiveTab("ctrl");
+  assert.equal(tabs.getActiveTab(), "ctrl");
+  assert.equal(switched, "ctrl");
 
-  const linesTree = tabs.render(50);
-  assert.ok(linesTree[0].includes("[ 3 TREE ]"));
-  assert.ok(!linesTree[0].includes("MAIN"));
+  const linesCtrl = tabs.render(50);
+  assert.ok(linesCtrl[0].includes("[ 3 CTRL ]"));
+  assert.ok(!linesCtrl[0].includes("MAIN"));
 });
 
 test("DcSidebarPagedBody routes views according to active tab", () => {
@@ -55,19 +56,25 @@ test("DcSidebarPagedBody routes views according to active tab", () => {
   const fleetLines = pagedBody.render(50);
   assert.ok(fleetLines.some((l) => l.includes("Quotas:") || l.includes("Flota")));
 
-  // Tab 3: TREE (Explorador de Archivos)
+  // Tab 3: CTRL (Oficina de Super-Agentes)
+  pagedBody.setTab("ctrl");
+  assert.equal(pagedBody.getActiveTab(), "ctrl");
+  const ctrlLines = pagedBody.render(50);
+  assert.ok(ctrlLines.some((l) => l.includes("SUPER-AGENTS") || l.includes("DC-CONTROL")));
+
+  // Tab 4: TREE (Explorador de Archivos)
   pagedBody.setTab("tree");
   assert.equal(pagedBody.getActiveTab(), "tree");
   const treeLines = pagedBody.render(50);
   assert.ok(treeLines.some((l) => l.includes("Explorador")));
 
-  // Tab 4: MEM (Engram, Centinela)
+  // Tab 5: MEM (Engram, Centinela)
   pagedBody.setTab("mem");
   assert.equal(pagedBody.getActiveTab(), "mem");
   const memLines = pagedBody.render(50);
   assert.ok(memLines.some((l) => l.includes("Engram:") || l.includes("Centinela:")));
 
-  // Tab 5: SYS (Profile, MCP)
+  // Tab 6: SYS (Profile, MCP)
   pagedBody.setTab("sys");
   assert.equal(pagedBody.getActiveTab(), "sys");
   const sysLines = pagedBody.render(50);
@@ -99,21 +106,21 @@ test("framedRail incorporates fixed DcSidebarTabs at the top without displacing 
   assert.equal(innerStack.entries[2].grow, 0);       // Footer fijo
 });
 
-test("findSidebarTab resolves tabs 1 to 5 and safely returns undefined for tabs 6 to 9", () => {
+test("findSidebarTab resolves tabs 1 to 6 and safely returns undefined for tabs 7 to 9", () => {
   assert.equal(findSidebarTab(1)?.id, "main");
   assert.equal(findSidebarTab(2)?.id, "fleet");
-  assert.equal(findSidebarTab(3)?.id, "tree");
-  assert.equal(findSidebarTab(4)?.id, "mem");
-  assert.equal(findSidebarTab(5)?.id, "sys");
+  assert.equal(findSidebarTab(3)?.id, "ctrl");
+  assert.equal(findSidebarTab(4)?.id, "tree");
+  assert.equal(findSidebarTab(5)?.id, "mem");
+  assert.equal(findSidebarTab(6)?.id, "sys");
 
-  // Tabs 6..9 aún no existen en el catálogo base de 5 tabs
-  assert.equal(findSidebarTab(6), undefined);
+  // Tabs 7..9 aún no existen en el catálogo base de 6 tabs
   assert.equal(findSidebarTab(7), undefined);
   assert.equal(findSidebarTab(8), undefined);
   assert.equal(findSidebarTab(9), undefined);
 
   // Búsqueda por id o label
-  assert.equal(findSidebarTab("FLEET")?.id, "fleet");
+  assert.equal(findSidebarTab("CTRL")?.id, "ctrl");
   assert.equal(findSidebarTab("tree")?.id, "tree");
 });
 
@@ -121,21 +128,21 @@ test("findSidebarTab dynamically supports adding tabs up to 9", () => {
   const customTabs = new DcSidebarTabs();
   customTabs.setTabs([
     ...SIDEBAR_TABS,
-    { id: "logs", key: "6", label: "LOGS" },
-    { id: "network", key: "7", label: "NET" },
+    { id: "logs", key: "7", label: "LOGS" },
+    { id: "network", key: "8", label: "NET" },
   ]);
-
-  const tab6 = findSidebarTab(6, customTabs);
-  assert.ok(tab6);
-  assert.equal(tab6?.id, "logs");
-  assert.equal(tab6?.label, "LOGS");
 
   const tab7 = findSidebarTab(7, customTabs);
   assert.ok(tab7);
-  assert.equal(tab7?.id, "network");
+  assert.equal(tab7?.id, "logs");
+  assert.equal(tab7?.label, "LOGS");
 
-  // Tab 8 aún no existe
-  assert.equal(findSidebarTab(8, customTabs), undefined);
+  const tab8 = findSidebarTab(8, customTabs);
+  assert.ok(tab8);
+  assert.equal(tab8?.id, "network");
+
+  // Tab 9 aún no existe
+  assert.equal(findSidebarTab(9, customTabs), undefined);
 });
 
 test("switchSidebarTab switches active tab, updates preferences and notifies", () => {
@@ -183,10 +190,10 @@ test("switchSidebarTab unhides sidebar when navigating directly if terminal widt
 
   const res = switchSidebarTab(3, mockCtx, mockTuiWide);
   assert.equal(res.success, true);
-  assert.equal(res.tab?.id, "tree");
+  assert.equal(res.tab?.id, "ctrl");
   assert.equal(readSidebarPrefs().hidden, false);
-  assert.equal(readSidebarPrefs().activeTab, "tree");
-  assert.ok(notifications.some((n) => n.includes("DC Sidebar visible: [3 TREE]")));
+  assert.equal(readSidebarPrefs().activeTab, "ctrl");
+  assert.ok(notifications.some((n) => n.includes("DC Sidebar visible: [3 CTRL]")));
 });
 
 test("switchSidebarTab blocks unhiding if terminal width is insufficient", () => {
@@ -225,10 +232,10 @@ test("switchSidebarTab warns when target tab 1-9 is not available", () => {
     },
   };
 
-  const res = switchSidebarTab(6, mockCtx);
+  const res = switchSidebarTab(7, mockCtx);
   assert.equal(res.success, false);
   assert.equal(res.reason, "tab_not_found");
-  assert.ok(notifications.some((n) => n.includes("pestaña [6] no disponible")));
+  assert.ok(notifications.some((n) => n.includes("pestaña [7] no disponible")));
 });
 
 test("dcSidebarExtension registers alt+1 to alt+9 shortcuts and /dc-sidebar command", () => {

@@ -84,9 +84,9 @@ test("public daemon preserves one launch and records actual worker/delivery outc
   syncBuiltinESMExports();
   const { getCollaboratorsDatabase } = await import("../src/features/dc-agents/daemon/dc-collaborators-db.ts");
   getCollaboratorsDatabase().setCollaborator("fixture-author", "ALLOW", "CONTRIBUTOR", "fixture");
-  const { DcWebhookDaemonManager } = await import("../src/features/dc-agents/daemon/dc-webhook-daemon-manager.ts");
-  const manager = DcWebhookDaemonManager.getInstance();
-  const { registerWebhookDaemonCommands } = await import("../src/features/dc-agents/daemon/dc-webhook-commands.ts");
+  const { DcControlDaemonManager, DcWebhookDaemonManager } = await import("../src/features/dc-agents/daemon/dc-control-daemon-manager.ts");
+  const manager = DcControlDaemonManager.getInstance();
+  const { registerControlDaemonCommands, registerWebhookDaemonCommands } = await import("../src/features/dc-agents/daemon/dc-control-commands.ts");
   const { dcIssueDispatcher } = await import("../src/features/dc-agents/daemon/dc-issue-dispatcher.ts");
   const commands = new Map<string, any>();
   let shutdown: any;
@@ -99,7 +99,7 @@ test("public daemon preserves one launch and records actual worker/delivery outc
   } };
   const detail = () => ({ number: manualNumber, title: "fixture", body: "body", author: { login: manualAuthor },
     url: `https://github.com/${manualRepo}/issues/${manualNumber}`, state: "OPEN", labels: [] });
-  registerWebhookDaemonCommands({ registerCommand: (name: string, command: any) => commands.set(name, command), registerShortcut: () => {},
+  registerControlDaemonCommands({ registerCommand: (name: string, command: any) => commands.set(name, command), registerShortcut: () => {},
     on: (name: string, handler: any) => { if (name === "session_shutdown") shutdown = handler; },
     exec: async (_command: string, args: string[], options: { cwd: string }) => {
       assert.equal(options.cwd, ctx.cwd);
@@ -107,7 +107,7 @@ test("public daemon preserves one launch and records actual worker/delivery outc
       return { code: 0, stdout: JSON.stringify(args[1] === "list" ? [detail()] : manualDetail ?? detail()), stderr: "", killed: false };
     },
   } as any);
-  const check = () => commands.get("dc-webhook").handler("check", ctx);
+  const check = () => commands.get("dc-control").handler("check", ctx);
   try {
     // Manual dispatch works before any receiver/tunnel exists, using the actual singleton dispatcher.
     assert.equal(manager.getStatus().running, false);
