@@ -4,12 +4,12 @@ import { promisify } from "node:util";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { DcSidebarCard } from "../../../ui/dc-sidebar-card.ts";
-import { DcTabs, type DcTabItem } from "../../../ui/dc-tabs.ts";
+import { DcVStack } from "../../../ui/dc-vstack.ts";
+import { DcJustifiedRow } from "../views/dc-sidebar-body.ts";
+import { renderProgressBar } from "../../../ui/dc-progress-bar.ts";
 import { dcControlDaemonManager } from "../../dc-agents/daemon/dc-control-daemon-manager.ts";
-import { dcConflictGuard } from "../../dc-agents/daemon/dc-conflict-guard.ts";
-import { dcIssueDispatcher, type DispatchedIssueTask } from "../../dc-agents/daemon/dc-issue-dispatcher.ts";
 import { openControlCenterModal } from "../../dc-agents/views/dc-control-center-modal.ts";
-import { dcNotifier } from "../../../integrations/dc-notify/dc-notifier.ts";
+import { getSidebarContext } from "../dc-sidebar.ts";
 
 const execFileAsync = promisify(execFile);
 
@@ -67,160 +67,255 @@ function parseOddTasksFromWorktree(worktreePath: string, taskSlug?: string): Arr
 }
 
 export class DcSuperAgentsSidebarCard implements Component {
-  private activeSubtab = "86"; // "86" o "config"
+  private activeSubtab: "86" | "config" = "86";
   private requestRender?: () => void;
-  private tabsComponent: DcTabs;
-  private actionButtonRegions: Array<{ id: string; y: number; height: number; action: () => void }> = [];
+  private currentCard?: DcSidebarCard;
 
   constructor(requestRender?: () => void) {
     this.requestRender = requestRender;
-
-    const subtabs: DcTabItem[] = [
-      { id: "86", key: "1", label: "AGENT #86" },
-      { id: "config", key: "2", label: "CONFIG & BIN" },
-    ];
-
-    this.tabsComponent = new DcTabs({
-      tabs: subtabs,
-      activeId: this.activeSubtab,
-      variant: "standard",
-      fullWidthBorder: false,
-      paddingX: 1,
-      onSelect: (id) => {
-        this.activeSubtab = id;
-        this.requestRender?.();
-      },
-    });
-
-    // Check binario en background
     void checkGhBinary().then(() => this.requestRender?.());
   }
 
-  render(width: number): string[] {
-    const lines: string[] = [];
-    this.actionButtonRegions = [];
-
-    // Header del Card
-    lines.push(`\x1b[1;31m╔══ \x1b[1;37mDC-CONTROL: SUPER-AGENTS\x1b[0;31m ${"═".repeat(Math.max(0, width - 29))}╗\x1b[0m`);
-
-    // Render Sub-tabs
-    const tabLines = this.tabsComponent.render(width - 4);
-    for (const tl of tabLines) {
-      lines.push(`\x1b[31m║\x1b[0m  ${tl}${" ".repeat(Math.max(0, width - 4 - tl.replace(/\x1b\[[0-9;]*m/g, "").length))}\x1b[31m║\x1b[0m`);
-    }
-    lines.push(`\x1b[31m╟${"─".repeat(width - 2)}╢\x1b[0m`);
-
-    if (this.activeSubtab === "86") {
-      this.renderAgent86View(lines, width);
-    } else {
-      this.renderConfigView(lines, width);
-    }
-
-    lines.push(`\x1b[1;31m╚${"═".repeat(width - 2)}╝\x1b[0m`);
-    return lines;
+  invalidate(): void {
+    this.currentCard?.invalidate?.();
   }
 
-  private renderAgent86View(lines: string[], width: number): void {
+  private toggleSubtab(): void {
+    this.activeSubtab = this.activeSubtab === "86" ? "config" : "86";
+    this.requestRender?.();
+  }
+
+  render(width: number): string[] {
+    const bloodBright = (s: string) => `\x1b[38;2;255;51;51m${s}\x1b[0m`;
+    const bloodSoft = (s: string) => `\x1b[38;2;255;128;128m${s}\x1b[0m`;
+    const bloodWhite = (s: string) => `\x1b[38;2;255;204;204m${s}\x1b[0m`;
+    const greenBright = (s: string) => `\x1b[38;2;46;204;113m${s}\x1b[0m`;
+    const yellowBright = (s: string) => `\x1b[38;2;250;204;21m${s}\x1b[0m`;
+    const dim = (s: string) => `\x1b[2m${s}\x1b[22m`;
+    const bold = (s: string) => `\x1b[1m${s}\x1b[22m`;
+
     const status = dcControlDaemonManager.getStatus();
     const dispatches = status.activeDispatches;
     const isDaemonRunning = status.running;
     const isTunnelRunning = status.tunnelActive;
 
-    const daemonPill = isDaemonRunning ? "\x1b[32m● RUNNING\x1b[0m" : "\x1b[90m○ STOPPED\x1b[0m";
-    const tunnelPill = isTunnelRunning ? "\x1b[32m● GH TUNNEL\x1b[0m" : "\x1b[90m○ NO TUNNEL\x1b[0m";
+    const rows: Component[] = [];
 
-    lines.push(`\x1b[31m║\x1b[0m \x1b[1mEstado Daemon:\x1b[0m ${daemonPill}  ${tunnelPill}${" ".repeat(Math.max(0, width - 36))}\x1b[31m║\x1b[0m`);
+    // ── 1. Barra de Sub-Tabs Interactiva ──
+    const tab86Style = this.activeSubtab === "86"
+      ? `\x1b[48;2;60;15;20m\x1b[1;38;2;255;77;77m [1: AGENT #86] \x1b[0m`
+      : ` ${dim("[1: #86]")} `;
+    const tabCfgStyle = this.activeSubtab === "config"
+      ? `\x1b[48;2;60;15;20m\x1b[1;38;2;255;77;77m [2: CONFIG & BIN] \x1b[0m`
+      : ` ${dim("[2: CONFIG]")} `;
 
-    if (dispatches.length === 0) {
-      lines.push(`\x1b[31m║\x1b[0m \x1b[90mNo hay misiones autónomas activas para #86\x1b[0m${" ".repeat(Math.max(0, width - 45))}\x1b[31m║\x1b[0m`);
-      lines.push(`\x1b[31m║\x1b[0m \x1b[90mEsperando issues en GitHub o despacho manual...\x1b[0m${" ".repeat(Math.max(0, width - 50))}\x1b[31m║\x1b[0m`);
-    } else {
-      const active = dispatches[0];
-      lines.push(`\x1b[31m║\x1b[0m \x1b[1;33m▶ Misión:\x1b[0m Issue #${active.issueNumber} \x1b[37m${active.branchName}\x1b[0m${" ".repeat(Math.max(0, width - 28 - active.branchName.length))}\x1b[31m║\x1b[0m`);
-      lines.push(`\x1b[31m║\x1b[0m   \x1b[90mWorktree:\x1b[0m \x1b[36m${path.basename(active.worktreePath)}\x1b[0m${" ".repeat(Math.max(0, width - 15 - path.basename(active.worktreePath).length))}\x1b[31m║\x1b[0m`);
+    rows.push(
+      new DcJustifiedRow(
+        ` ${tab86Style} ${tabCfgStyle}`,
+        `${bloodBright("[cambiar ⇄]")} `,
+        () => this.toggleSubtab()
+      )
+    );
+    rows.push(new DcJustifiedRow(`  ${dim("─".repeat(Math.max(10, width - 8)))}`, ""));
 
-      // ODD Tasks
-      const oddTasks = parseOddTasksFromWorktree(active.worktreePath, active.taskSlug);
-      if (oddTasks.length > 0) {
-        lines.push(`\x1b[31m║\x1b[0m   \x1b[1mPipeline ODD:\x1b[0m${" ".repeat(Math.max(0, width - 19))}\x1b[31m║\x1b[0m`);
-        for (const t of oddTasks.slice(0, 4)) {
-          let glyph = "\x1b[90m○\x1b[0m";
-          if (t.status === "done") glyph = "\x1b[32m✓\x1b[0m";
-          else if (t.status === "in_progress") glyph = "\x1b[33m▶\x1b[0m";
-          else if (t.status === "failed") glyph = "\x1b[31m✗\x1b[0m";
-          const shortTitle = t.title.length > width - 18 ? t.title.slice(0, width - 21) + "..." : t.title;
-          lines.push(`\x1b[31m║\x1b[0m    ${glyph} \x1b[1m${t.id}:\x1b[0m ${shortTitle}${" ".repeat(Math.max(0, width - 12 - t.id.length - shortTitle.length))}\x1b[31m║\x1b[0m`);
+    // ── 2. Contenido según la Sub-Tab activa ──
+    if (this.activeSubtab === "86") {
+      // Estado del Daemon y Túnel
+      const daemonStatusStr = isDaemonRunning ? greenBright("● ACTIVO") : dim("○ DETENIDO");
+      const tunnelStatusStr = isTunnelRunning ? greenBright("✓ GH TÚNEL") : dim("○ SIN TÚNEL");
+
+      rows.push(
+        new DcJustifiedRow(
+          `  ${bloodSoft("Daemon:")} ${daemonStatusStr}`,
+          `${tunnelStatusStr} `
+        )
+      );
+
+      if (dispatches.length === 0) {
+        rows.push(
+          new DcJustifiedRow(
+            `  ${dim("Misión actual:")}`,
+            `${dim("en espera")} `
+          )
+        );
+        rows.push(
+          new DcJustifiedRow(
+            `  ${dim("↳ Escuchando issues en GitHub...")}`,
+            ""
+          )
+        );
+      } else {
+        const active = dispatches[0]!;
+        const branchShort = active.branchName.length > 18 ? active.branchName.slice(0, 17) + "…" : active.branchName;
+        rows.push(
+          new DcJustifiedRow(
+            `  ${yellowBright("▶")} ${bloodWhite(bold(`Issue #${active.issueNumber}`))}`,
+            `${bloodSoft(branchShort)} `
+          )
+        );
+
+        const worktreeName = path.basename(active.worktreePath);
+        rows.push(
+          new DcJustifiedRow(
+            `    ${dim("Worktree:")} ${dim(worktreeName)}`,
+            `${yellowBright("[en curso]")} `
+          )
+        );
+
+        // ODD Steps
+        const oddTasks = parseOddTasksFromWorktree(active.worktreePath, active.taskSlug);
+        if (oddTasks.length > 0) {
+          const doneSteps = oddTasks.filter((t) => t.status === "done").length;
+          const totalSteps = oddTasks.length;
+          const pct = Math.round((doneSteps / totalSteps) * 100);
+          const bar = renderProgressBar(pct, 10, "▰", "▱", "\x1b[38;2;255;77;77m");
+
+          rows.push(
+            new DcJustifiedRow(
+              `    ${bloodSoft("Pipeline ODD:")} ${bar}`,
+              `${bloodBright(`${doneSteps}/${totalSteps}`)} `
+            )
+          );
+
+          for (const t of oddTasks.slice(0, 4)) {
+            let glyph = dim("○");
+            let badge = dim("[pend]");
+            if (t.status === "done") {
+              glyph = greenBright("✓");
+              badge = greenBright("[done]");
+            } else if (t.status === "in_progress") {
+              glyph = yellowBright("▶");
+              badge = yellowBright(bold("[work]"));
+            } else if (t.status === "failed") {
+              glyph = bloodBright("✗");
+              badge = bloodBright("[fail]");
+            }
+            const taskLabel = t.title.length > 20 ? t.title.slice(0, 19) + "…" : t.title;
+            rows.push(
+              new DcJustifiedRow(
+                `      ${glyph} ${dim(t.id + ":")} ${bloodWhite(taskLabel)}`,
+                `${badge} `
+              )
+            );
+          }
         }
+      }
+
+      // Separador y Acciones
+      rows.push(new DcJustifiedRow(`  ${dim("─".repeat(Math.max(10, width - 8)))}`, ""));
+      rows.push(
+        new DcJustifiedRow(
+          `  ${bloodWhite(bold("🏢 OFICINA DC-CONTROL"))}`,
+          `${bloodBright("[Abrir ↗]")} `,
+          () => {
+            const ctx = getSidebarContext();
+            if (ctx) void openControlCenterModal(ctx);
+          }
+        )
+      );
+      rows.push(
+        new DcJustifiedRow(
+          `  ${dim("↻ Reiniciar Servicio")}`,
+          `${bloodBright("[Reiniciar]")} `,
+          () => {
+            const ctx = getSidebarContext();
+            if (ctx) {
+              void dcControlDaemonManager.stop().then(async () => {
+                await dcControlDaemonManager.start(ctx);
+                this.requestRender?.();
+              });
+            }
+          }
+        )
+      );
+    } else {
+      // ── Sub-Tab CONFIG & BINARIOS ──
+      const gh = cachedGhStatus;
+      const ghStr = gh?.ghInstalled ? greenBright("✓ INSTALADO") : bloodBright("✗ FALTANTE");
+      rows.push(
+        new DcJustifiedRow(
+          `  ${bloodSoft("GitHub CLI (gh):")}`,
+          `${ghStr} `
+        )
+      );
+
+      const portStr = status.port ? `${status.port}` : "4545";
+      const receiverStr = status.running ? greenBright(`✓ 127.0.0.1:${portStr}`) : dim("○ Inactivo");
+      rows.push(
+        new DcJustifiedRow(
+          `  ${bloodSoft("Receptor Local:")}`,
+          `${receiverStr} `
+        )
+      );
+
+      const tunnelStr = status.tunnelActive ? greenBright("✓ CONECTADO") : dim("○ DESCONECTADO");
+      rows.push(
+        new DcJustifiedRow(
+          `  ${bloodSoft("Túnel Webhook:")}`,
+          `${tunnelStr} `
+        )
+      );
+
+      rows.push(new DcJustifiedRow(`  ${dim("─".repeat(Math.max(10, width - 8)))}`, ""));
+      rows.push(
+        new DcJustifiedRow(
+          `  ${dim("Arquetipo:")} ${bloodWhite("dc-odd-worker")}`,
+          `${dim("Thinking:")} ${yellowBright("High")} `
+        )
+      );
+      rows.push(
+        new DcJustifiedRow(
+          `  ${dim("Herramientas:")} ${bloodWhite("fs, terminal, tdd")}`,
+          `${dim("Flota:")} ${bloodBright("Taxis")} `
+        )
+      );
+
+      rows.push(new DcJustifiedRow(`  ${dim("─".repeat(Math.max(10, width - 8)))}`, ""));
+      if (isDaemonRunning) {
+        rows.push(
+          new DcJustifiedRow(
+            `  ${bloodBright("■ Detener Daemon & Túnel")}`,
+            `${bloodBright("[Detener]")} `,
+            () => {
+              void dcControlDaemonManager.stop().then(() => this.requestRender?.());
+            }
+          )
+        );
+      } else {
+        rows.push(
+          new DcJustifiedRow(
+            `  ${greenBright("▶ Iniciar Daemon & Túnel")}`,
+            `${greenBright("[Iniciar]")} `,
+            () => {
+              const ctx = getSidebarContext();
+              if (ctx) void dcControlDaemonManager.start(ctx).then(() => this.requestRender?.());
+            }
+          )
+        );
       }
     }
 
-    lines.push(`\x1b[31m╟${"─".repeat(width - 2)}╢\x1b[0m`);
-    lines.push(`\x1b[31m║\x1b[0m \x1b[1;37mAcciones Rápidas:\x1b[0m${" ".repeat(Math.max(0, width - 20))}\x1b[31m║\x1b[0m`);
-
-    // Botones de acción interactivos
-    const startY = lines.length;
-    lines.push(`\x1b[31m║\x1b[0m   \x1b[1;41;37m [🏢 OFICINA DC-CONTROL] \x1b[0m  \x1b[1;40;37m [↻ REINICIAR] \x1b[0m${" ".repeat(Math.max(0, width - 46))}\x1b[31m║\x1b[0m`);
-    this.actionButtonRegions.push({
-      id: "btn-open-modal",
-      y: startY,
-      height: 1,
-      action: () => {
-        const ctx = (globalThis as any)[Symbol.for("dc.sidebar.ctx")];
+    this.currentCard = new DcSidebarCard({
+      glyph: "🏢",
+      title: "DC-Control",
+      titleRight: "oficina [↗]",
+      content: new DcVStack(rows),
+      paddingX: 1,
+      onTitleClick: () => {
+        const ctx = getSidebarContext();
+        if (ctx) void openControlCenterModal(ctx);
+      },
+      onRightClick: () => {
+        const ctx = getSidebarContext();
         if (ctx) void openControlCenterModal(ctx);
       },
     });
 
-    lines.push(`\x1b[31m║\x1b[0m   \x1b[1;40;37m [⚡ TEST ISSUE] \x1b[0m          \x1b[1;40;37m [■ DETENER] \x1b[0m${" ".repeat(Math.max(0, width - 46))}\x1b[31m║\x1b[0m`);
+    return this.currentCard.render(width);
   }
 
-  private renderConfigView(lines: string[], width: number): void {
-    const gh = cachedGhStatus;
-    const ghColor = gh?.ghInstalled ? "\x1b[32m✓ ACTIVO\x1b[0m" : "\x1b[31m✗ NO DETECTADO\x1b[0m";
-    const status = dcControlDaemonManager.getStatus();
-
-    lines.push(`\x1b[31m║\x1b[0m \x1b[1mBinarios & Servicios:\x1b[0m${" ".repeat(Math.max(0, width - 24))}\x1b[31m║\x1b[0m`);
-    lines.push(`\x1b[31m║\x1b[0m   gh CLI:       ${ghColor} \x1b[90m(${gh?.ghVersion ? gh.ghVersion.slice(0, 16) : "verificando"})\x1b[0m${" ".repeat(Math.max(0, width - 40))}\x1b[31m║\x1b[0m`);
-    lines.push(`\x1b[31m║\x1b[0m   Receptor:     ${status.running ? `\x1b[32m✓ 127.0.0.1:${status.port}\x1b[0m` : "\x1b[90m○ Inactivo\x1b[0m"}${" ".repeat(Math.max(0, width - 36))}\x1b[31m║\x1b[0m`);
-    lines.push(`\x1b[31m║\x1b[0m   Túnel GitHub: ${status.tunnelActive ? "\x1b[32m✓ Conectado\x1b[0m" : "\x1b[90m○ Desconectado\x1b[0m"}${" ".repeat(Math.max(0, width - 34))}\x1b[31m║\x1b[0m`);
-
-    lines.push(`\x1b[31m╟${"─".repeat(width - 2)}╢\x1b[0m`);
-    lines.push(`\x1b[31m║\x1b[0m \x1b[1mConfiguración Super-Agente #86:\x1b[0m${" ".repeat(Math.max(0, width - 34))}\x1b[31m║\x1b[0m`);
-    lines.push(`\x1b[31m║\x1b[0m   Arquetipo:    \x1b[33mdc-odd-worker\x1b[0m (TDD estricto)${" ".repeat(Math.max(0, width - 46))}\x1b[31m║\x1b[0m`);
-    lines.push(`\x1b[31m║\x1b[0m   Herramientas: \x1b[36mfs-read, fs-write, terminal\x1b[0m${" ".repeat(Math.max(0, width - 45))}\x1b[31m║\x1b[0m`);
-    lines.push(`\x1b[31m║\x1b[0m   Thinking:     \x1b[35mHigh\x1b[0m (Lease de Taxi de Flota)${" ".repeat(Math.max(0, width - 43))}\x1b[31m║\x1b[0m`);
-
-    lines.push(`\x1b[31m╟${"─".repeat(width - 2)}╢\x1b[0m`);
-    const startY = lines.length;
-    lines.push(`\x1b[31m║\x1b[0m   \x1b[1;42;30m [▶ INICIAR DAEMON] \x1b[0m     \x1b[1;41;37m [■ DETENER TÚNEL] \x1b[0m${" ".repeat(Math.max(0, width - 46))}\x1b[31m║\x1b[0m`);
-    this.actionButtonRegions.push({
-      id: "btn-start-daemon",
-      y: startY,
-      height: 1,
-      action: () => {
-        const ctx = (globalThis as any)[Symbol.for("dc.sidebar.ctx")];
-        if (ctx) void dcControlDaemonManager.start(ctx).then(() => this.requestRender?.());
-      },
-    });
-  }
-
-  invalidate(): void {
-    this.tabsComponent.invalidate?.();
-  }
-
-  handleMouse(event: TuiMouseEvent): TuiMouseEventResult {
-    // Pasar evento a las subtabs primero
-    const tabRes = this.tabsComponent.handleMouse?.(event);
-    if (tabRes?.handled) return tabRes;
-
-    if (event.type === "click" && event.button === "left") {
-      for (const btn of this.actionButtonRegions) {
-        if (event.y === btn.y) {
-          btn.action();
-          return { handled: true };
-        }
-      }
-    }
-    return { handled: false };
+  handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
+    return this.currentCard?.handleMouse?.(event);
   }
 }
 
