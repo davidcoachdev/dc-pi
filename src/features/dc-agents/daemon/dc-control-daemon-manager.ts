@@ -361,10 +361,18 @@ export class DcControlDaemonManager {
 
     try {
       const child = spawn("gh", args, {
-        stdio: ["ignore", "ignore", "ignore"],
+        stdio: ["ignore", "pipe", "pipe"],
       });
       this.tunnelProcess = child;
       this.isTunnelRunning = true;
+
+      child.stderr?.on("data", (data: Buffer) => {
+        const errText = data.toString("utf8");
+        // Log para depuración sin spam
+        if (errText.includes("Error") || errText.includes("422")) {
+          console.error(`[dc-control-tunnel] ${errText.trim()}`);
+        }
+      });
 
       child.on("error", (err) => {
         if (this.tunnelProcess === child) {

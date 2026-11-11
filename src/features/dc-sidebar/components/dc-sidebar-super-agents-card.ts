@@ -280,8 +280,16 @@ export class DcSuperAgentsSidebarCard implements Component {
             () => {
               const ctx = getSidebarContext();
               if (ctx) {
-                const pi = (globalThis as any)[Symbol.for("dc.sidebar.pi")] || (ctx as any).pi || ctx;
-                void checkPendingIssues(pi, ctx);
+                // Programar ejecución diferida en el siguiente tick del event loop
+                // para que no interrumpa el ciclo sincrónico de dibujo de Pi TUI
+                setTimeout(async () => {
+                  try {
+                    const pi = (globalThis as any)[Symbol.for("dc.sidebar.pi")] || (ctx as any).pi || ctx;
+                    await checkPendingIssues(pi, ctx);
+                  } catch (err: any) {
+                    dcControlDaemonManager.stop().catch(() => {});
+                  }
+                }, 50);
               }
             }
           )
