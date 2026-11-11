@@ -413,6 +413,18 @@ export class DcControlDaemonManager {
       }
     }
 
+    // Purgar cualquier proceso huérfano de gh webhook forward y liberar el hook
+    try {
+      const { execSync } = await import("node:child_process");
+      execSync("pkill -9 -f 'gh.*webhook.*forward' 2>/dev/null || true");
+      if (this.currentRepo?.fullNwo) {
+        // Limpiar hooks temporales de forwarder en GitHub para evitar HTTP 422
+        execSync(`gh api repos/${this.currentRepo.fullNwo}/hooks --jq '.[] | select(.config.url | contains("webhook-forwarder.github.com")) | .id' | xargs -r -I {} gh api repos/${this.currentRepo.fullNwo}/hooks/{} -X DELETE 2>/dev/null || true`);
+      }
+    } catch {
+      /* defensive */
+    }
+
     if (this.receiver) {
       await this.receiver.stop();
       this.receiver = undefined;
