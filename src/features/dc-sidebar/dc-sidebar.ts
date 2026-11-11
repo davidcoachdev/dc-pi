@@ -238,6 +238,7 @@ export default function dcSidebarExtension(pi: ExtensionAPI): void {
     if (!ctx.hasUI || ctx.mode !== "tui") return;
     (globalThis as any)[Symbol.for("dc.sidebar.theme-fn")] = () => ctx.ui.theme;
     (globalThis as any)[G_CTX] = ctx;
+    (globalThis as any)[Symbol.for("dc.sidebar.pi")] = pi;
 
     // Instalar intercepción inteligente de widgets de extensión (para dock aboveEditor cuando sidebar está oculto)
     patchExtensionWidgets();
