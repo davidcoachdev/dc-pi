@@ -319,6 +319,8 @@ export default function dcSidebarExtension(pi: ExtensionAPI): void {
   });
 
   pi.on("session_shutdown", () => {
+    (globalThis as any)[G_CTX] = undefined;
+    (globalThis as any)[Symbol.for("dc.sidebar.pi")] = undefined;
     if (resizeHandler) {
       try {
         process.stdout.off("resize", resizeHandler);
