@@ -9,6 +9,7 @@ import { DcJustifiedRow } from "../views/dc-sidebar-body.ts";
 import { renderProgressBar } from "../../../ui/dc-progress-bar.ts";
 import { dcControlDaemonManager } from "../../dc-agents/daemon/dc-control-daemon-manager.ts";
 import { openControlCenterModal } from "../../dc-agents/views/dc-control-center-modal.ts";
+import { checkPendingIssues } from "../../dc-agents/daemon/dc-pending-issues.ts";
 import { getSidebarContext } from "../dc-sidebar.ts";
 
 const execFileAsync = promisify(execFile);
@@ -271,6 +272,29 @@ export class DcSuperAgentsSidebarCard implements Component {
       );
 
       rows.push(new DcJustifiedRow(`  ${dim("─".repeat(Math.max(10, width - 8)))}`, ""));
+      if (isTunnelRunning) {
+        rows.push(
+          new DcJustifiedRow(
+            `  ${bloodWhite("⚡ Revisar Issues GitHub")}`,
+            `${bloodBright("[Check Issues]")} `,
+            () => {
+              const ctx = getSidebarContext();
+              if (ctx) {
+                const pi = (globalThis as any)[Symbol.for("dc.sidebar.pi")] || (ctx as any).pi || ctx;
+                void checkPendingIssues(pi, ctx);
+              }
+            }
+          )
+        );
+      } else {
+        rows.push(
+          new DcJustifiedRow(
+            `  ${dim("⚡ Revisar Issues GitHub")}`,
+            `${dim("[Túnel Inactivo]")} `
+          )
+        );
+      }
+
       if (isDaemonRunning) {
         rows.push(
           new DcJustifiedRow(
