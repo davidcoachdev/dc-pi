@@ -267,11 +267,14 @@ test("dc-pr-delivery: integración de upstream activa re-verificación y actuali
     if (command === "git" && args[0] === "add") return { stdout: "", stderr: "", exitCode: 0 };
     if (command === "git" && args[0] === "commit") return { stdout: "[feat 1234567] commit", stderr: "", exitCode: 0 };
     if (command === "git" && args[0] === "fetch") return { stdout: "", stderr: "", exitCode: 0 };
+    if (command === "git" && args[0] === "status") return { stdout: "", stderr: "", exitCode: 0 };
     if (command === "git" && args[0] === "rev-parse" && args[1] === "HEAD") {
       revParseCount++;
-      // Primer rev-parse antes del merge: hash A
-      if (revParseCount === 1) return { stdout: "1111111111111111111111111111111111111111\n", stderr: "", exitCode: 0 };
-      // Segundo rev-parse después del merge: hash B (upstream integrado)
+      // Primer rev-parse (delivery receipt pre-commit): hash base
+      if (revParseCount === 1) return { stdout: "0000000000000000000000000000000000000000\n", stderr: "", exitCode: 0 };
+      // Segundo rev-parse (pre-merge): hash A
+      if (revParseCount === 2) return { stdout: "1111111111111111111111111111111111111111\n", stderr: "", exitCode: 0 };
+      // Tercer rev-parse (post-merge): hash B (upstream integrado)
       return { stdout: "2222222222222222222222222222222222222222\n", stderr: "", exitCode: 0 };
     }
     if (command === "git" && args[0] === "merge") return { stdout: "Merge made by the 'ort' strategy.", stderr: "", exitCode: 0 };

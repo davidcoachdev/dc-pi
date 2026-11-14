@@ -6,7 +6,7 @@ import { dcIssueDispatcher } from "./dc-issue-dispatcher.ts";
 import { dcIssueNotifier } from "./dc-issue-notifier.ts";
 import { dcWorkerRunner } from "./dc-worker-runner.ts";
 import { dcRemoteQuestionManager } from "./dc-remote-question.ts";
-import { dcWebhookDaemonManager } from "./dc-webhook-daemon-manager.ts";
+import { dcControlDaemonManager } from "./dc-control-daemon-manager.ts";
 import type { GitHubIssueCommentPayload, IssueCommentCommandResult } from "./dc-issue-comment-types.ts";
 import type { DispatchedIssueTask } from "./dc-issue-dispatcher.ts";
 
@@ -188,7 +188,7 @@ export class DcIssueCommentRouter {
           handle: {} as any,
         };
 
-        void dcWebhookDaemonManager.resumeIssue(targetDispatch, repoIdentity, instruction);
+        void dcControlDaemonManager.resumeIssue(targetDispatch, repoIdentity, instruction);
         return { handled: true, response: reply };
       }
     }

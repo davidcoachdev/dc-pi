@@ -7,7 +7,7 @@ import { execFileSync } from "node:child_process";
 import * as path from "node:path";
 import { parseGitHubRepoNwo, resolveCurrentRepoIdentity } from "../src/features/dc-agents/daemon/dc-repo-resolver.ts";
 import { DcConflictGuard } from "../src/features/dc-agents/daemon/dc-conflict-guard.ts";
-import { DcWebhookReceiver } from "../src/features/dc-agents/daemon/dc-webhook-receiver.ts";
+import { DcControlReceiver } from "../src/features/dc-agents/daemon/dc-control-receiver.ts";
 import { DcIssueDispatcher, type GitHubIssuePayload } from "../src/features/dc-agents/daemon/dc-issue-dispatcher.ts";
 import { handleToolCall } from "../src/features/dc-scan-guard/index.ts";
 import { dcConflictGuard } from "../src/features/dc-agents/daemon/dc-conflict-guard.ts";
@@ -91,7 +91,7 @@ test("dc-conflict-guard: reserva y detecta colisiones de archivos", () => {
 
 test("receiver authenticates before parsing or deduplication and requires repository and event identity", async () => {
   let calls = 0;
-  const receiver = new DcWebhookReceiver({ port: 0, expectedRepoNwo: "org/repo",
+  const receiver = new DcControlReceiver({ port: 0, expectedRepoNwo: "org/repo",
     capability: "test-capability", onIssueOpened: () => { calls++; } });
   const port = await receiver.start();
   const send = async (token: string, payload: unknown, event = "issues") => {
@@ -133,7 +133,7 @@ test("receiver authenticates before parsing or deduplication and requires reposi
 test("dc-webhook-receiver: levanta servidor loopback, procesa webhook y deduplica entregas", async () => {
   let receivedIssue: any = null;
 
-  const receiver = new DcWebhookReceiver({
+  const receiver = new DcControlReceiver({
     port: 4599,
     capability: "test-capability",
     expectedRepoNwo: "davidcoachdev/dc-pi",

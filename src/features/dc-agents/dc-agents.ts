@@ -33,7 +33,7 @@ import { installSubagentInboxInterceptor, uninstallSubagentInboxInterceptor } fr
 import { registerSubagentInboxTools } from "./tools/dc-subagent-inbox-tools.ts";
 import { isVipAccount } from "./core/dc-taxi-accounts.ts";
 import { DcAgentsPanel } from "./views/dc-agents-panel.ts";
-import { registerWebhookDaemonCommands } from "./daemon/dc-webhook-commands.ts";
+import { registerControlDaemonCommands } from "./daemon/dc-control-commands.ts";
 import { DcTaxisPanel } from "./views/dc-taxis-panel.ts";
 
 export let activeWorkshopCoordinator: TaxiWorkshopCoordinator | null = null;
@@ -1642,7 +1642,7 @@ export default function dcAgentsExtension(
     },
   });
 
-  // Registro de comandos del Daemon de GitHub Webhooks para resolución autónoma
-  registerWebhookDaemonCommands(pi);
+  // Registro de comandos del Centro de Control y Daemon Autónomo para resolución de issues
+  registerControlDaemonCommands(pi);
 }
 

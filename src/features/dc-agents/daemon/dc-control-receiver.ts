@@ -3,7 +3,7 @@ import { timingSafeEqual } from "node:crypto";
 import type { GitHubIssuePayload } from "./dc-issue-dispatcher.ts";
 import type { GitHubIssueCommentPayload } from "./dc-issue-comment-types.ts";
 
-export interface WebhookReceiverOptions {
+export interface ControlReceiverOptions {
   port?: number;
   capability?: string;
   host?: string;
@@ -14,7 +14,9 @@ export interface WebhookReceiverOptions {
   onLog?: (msg: string) => void;
 }
 
-export class DcWebhookReceiver {
+export type WebhookReceiverOptions = ControlReceiverOptions;
+
+export class DcControlReceiver {
   private server?: http.Server;
   private port: number;
   private host: string;
@@ -22,7 +24,7 @@ export class DcWebhookReceiver {
   private processedDeliveries = new Set<string>(); // X-GitHub-Delivery deduplication
   private isListening = false;
 
-  constructor(private options: WebhookReceiverOptions = {}) {
+  constructor(private options: ControlReceiverOptions = {}) {
     this.port = options.port ?? 4545;
     this.host = "127.0.0.1";
     this.expectedRepoNwo = options.expectedRepoNwo?.toLowerCase();
@@ -70,7 +72,7 @@ export class DcWebhookReceiver {
       this.server.listen(this.port, this.host, () => {
         this.isListening = true;
         this.port = (this.server!.address() as import("node:net").AddressInfo).port;
-        this.options.onLog?.(`Receptor de Webhooks escuchando en http://${this.host}:${this.port}/github-webhook`);
+        this.options.onLog?.(`Receptor DC-Control escuchando en http://${this.host}:${this.port}/github-webhook`);
         resolve(this.port);
       });
     });
@@ -220,3 +222,5 @@ export class DcWebhookReceiver {
     });
   }
 }
+
+export const DcWebhookReceiver = DcControlReceiver;

@@ -672,11 +672,11 @@ export class DcControlCenterPanel implements Component {
     const lines: string[] = [];
     const innerW = Math.max(40, width);
 
-    // ── 0. Barra superior: central · anarchy 3 listos · 1 trabajando ──
+    // ── 0. Barra superior: DC-CONTROL · OFICINA CENTRAL DE SUPER-AGENTES ──
     const dispatches = dcIssueDispatcher.getActiveDispatches();
     const workingCount = dispatches.length > 0 ? dispatches.length : (this.simulatedMode ? 1 : 0);
     const readyCount = this.simulatedMode ? 3 : 4;
-    const topStatusLine = `${t.fg("dim", "central")} ${t.fg("dim", "·")} ${t.bold(t.fg("accent", "anarchy"))}  ${t.fg("accent", `${readyCount} listos`)} ${t.fg("dim", "·")} ${t.bold(t.fg("warning", `${workingCount} trabajando`))}`;
+    const topStatusLine = `${t.bold(t.fg("accent", "🏢 DC-CONTROL"))} ${t.fg("dim", "·")} ${t.bold(t.fg("accent", "OFICINA CENTRAL"))}  ${t.fg("accent", `${readyCount} listos`)} ${t.fg("dim", "·")} ${t.bold(t.fg("warning", `${workingCount} trabajando`))}`;
     lines.push(topStatusLine);
 
     // ── 1. Banner de Central: ▲ CENTRAL 2 te necesitan ● MODO PRUEBA ──
@@ -687,10 +687,15 @@ export class DcControlCenterPanel implements Component {
 
     const badgePart = `${t.bold(t.fg("accent", "▲ CENTRAL"))}  ${t.bold(needsLabel)}`;
     const modePart = `${t.bold(t.fg("accent", "●"))} ${t.fg("dim", modeLabel)}`;
-    const syncPart = t.fg("dim", "GitHub al día · hace 10m lun 22:36");
+    const syncPart = t.fg("dim", "GitHub al día");
 
     const headerGap = Math.max(2, Math.floor((innerW - visibleWidth(badgePart) - visibleWidth(modePart) - visibleWidth(syncPart)) / 2));
     lines.push(`${badgePart}${" ".repeat(headerGap)}${modePart}${" ".repeat(headerGap)}${syncPart}`);
+
+    // Selector de Agentes
+    const agent86Chip = `${t.bg("selectedBg", t.bold(t.fg("accent", " 🤖 AGENT #86 ")))}`;
+    const agent87Chip = `${t.fg("dim", " 🤖 AGENT #87 (PRÓXIMO) ")}`;
+    lines.push(`${t.fg("dim", "Super-Agentes:")} ${agent86Chip} ${agent87Chip}`);
 
     // ── 2. Pestañas de navegación ──
     const tab1 = this.activeTab === "worktrees"

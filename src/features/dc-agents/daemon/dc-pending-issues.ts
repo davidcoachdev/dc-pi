@@ -4,7 +4,7 @@ import * as os from "node:os";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { dcNotifier } from "../../../integrations/dc-notify/dc-notifier.ts";
 import { resolveCurrentRepoIdentity, type RepoIdentity } from "./dc-repo-resolver.ts";
-import { dcWebhookDaemonManager } from "./dc-webhook-daemon-manager.ts";
+import { dcControlDaemonManager } from "./dc-control-daemon-manager.ts";
 import { dcIssueDispatcher } from "./dc-issue-dispatcher.ts";
 import type { GitHubIssuePayload } from "./dc-issue-dispatcher.ts";
 
@@ -22,7 +22,7 @@ interface PendingIssue {
 // GitHub content is data, never an execution instruction or publication grant.
 function validateIssue(value: unknown, repo: RepoIdentity, selected?: number): PendingIssue {
   const issue = value as PendingIssue | null;
-  const invalid = () => new Error("Datos de issue inválidos o de otro repositorio. Vuelve a ejecutar /dc-webhook check.");
+  const invalid = () => new Error("Datos de issue inválidos o de otro repositorio. Vuelve a ejecutar /dc-control check.");
   if (!issue || !Number.isSafeInteger(issue.number) || issue.number < 1 || (selected !== undefined && issue.number !== selected)
     || (issue.state !== "OPEN" && issue.state !== "CLOSED") || typeof issue.title !== "string" || !issue.title.trim() || /[\x00-\x1f\x7f-\x9f]/.test(issue.title)
     || typeof issue.body !== "string" || typeof issue.author?.login !== "string"
@@ -38,7 +38,7 @@ function validateIssue(value: unknown, repo: RepoIdentity, selected?: number): P
 
 export async function checkPendingIssues(pi: ExtensionAPI, ctx: ExtensionContext): Promise<void> {
   if (!ctx.hasUI || ctx.mode !== "tui") {
-    dcNotifier.notify(ctx, "DC Issues pendientes", "Usa /dc-webhook check en una sesión TUI interactiva; no se consultó GitHub.", "warning");
+    dcNotifier.notify(ctx, "DC Issues pendientes", "Usa /dc-control check en una sesión TUI interactiva; no se consultó GitHub.", "warning");
     return;
   }
   try {
@@ -51,7 +51,7 @@ export async function checkPendingIssues(pi: ExtensionAPI, ctx: ExtensionContext
       catch { throw new Error("Respuesta JSON inválida de gh. Comprueba tu instalación de GitHub CLI y vuelve a intentarlo."); }
     };
     const data = await query(["list", "--repo", repo.fullNwo, "--state", "all", "--limit", "50"]);
-    if (!Array.isArray(data) || data.length > 50) throw new Error("Lista de issues inválida de GitHub; vuelve a consultar con /dc-webhook check.");
+    if (!Array.isArray(data) || data.length > 50) throw new Error("Lista de issues inválida de GitHub; vuelve a consultar con /dc-control check.");
     const issues = data.map(value => validateIssue(value, repo));
     if (new Set(issues.map(issue => issue.number)).size !== issues.length) throw new Error("Lista de issues duplicados; vuelve a consultar GitHub.");
     if (!issues.length) {
@@ -62,7 +62,7 @@ export async function checkPendingIssues(pi: ExtensionAPI, ctx: ExtensionContext
     const choice = await ctx.ui.select(`${repo.fullNwo} — issues (máximo 50)`, options);
     if (choice === undefined) return;
     const index = options.indexOf(choice);
-    if (index < 0) throw new Error("Selección inválida; vuelve a ejecutar /dc-webhook check.");
+    if (index < 0) throw new Error("Selección inválida; vuelve a ejecutar /dc-control check.");
     const selectedItem = issues[index]!;
     const number = selectedItem.number;
 
@@ -170,7 +170,7 @@ export async function checkPendingIssues(pi: ExtensionAPI, ctx: ExtensionContext
           handle: {} as any,
         };
 
-        await dcWebhookDaemonManager.resumeIssue(targetDispatch, repo, directivesText, ctx);
+        await dcControlDaemonManager.resumeIssue(targetDispatch, repo, directivesText, ctx);
         return;
       } else {
         await ctx.ui.confirm(
@@ -187,7 +187,7 @@ export async function checkPendingIssues(pi: ExtensionAPI, ctx: ExtensionContext
       issue: { number: issue.number, title: issue.title, body: issue.body, user: { login: issue.author.login }, html_url: issue.url, labels: issue.labels },
       repository: { name: repo.repo, full_name: repo.fullNwo, owner: { login: repo.owner }, html_url: `https://github.com/${repo.fullNwo}` },
     };
-    await dcWebhookDaemonManager.executeIssue(payload, repo, ctx);
+    await dcControlDaemonManager.executeIssue(payload, repo, ctx);
   } catch (err) {
     dcNotifier.notify(ctx, "DC Issues pendientes", `No se pudo revisar/ejecutar el issue: ${err instanceof Error ? err.message : String(err)}`, "error");
   }
