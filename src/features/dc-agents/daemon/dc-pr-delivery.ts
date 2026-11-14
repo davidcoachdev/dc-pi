@@ -1,8 +1,9 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import * as fs from "node:fs";
+import * as path from "node:path";
 import { dcWorkerRunner, updateWorktreeOddRoadmap, completeOddDirectives } from "./dc-worker-runner.ts";
 import { getCollaboratorsDatabase } from "./dc-collaborators-db.ts";
-
 const execFileAsync = promisify(execFile);
 
 export interface DeliveryResult {
@@ -69,6 +70,55 @@ export class DcPrDelivery {
 
     // Marcar directivas como completadas en el roadmap ODD antes de commit para que queden registradas en Git
     completeOddDirectives(worktreePath, taskSlug);
+
+    // --- DELIVERY RECEIPT ---
+    // Genera odd/receipts/<taskSlug>-receipt.json antes del git add para que
+    // quede incluido en el commit como evidencia inmutable de la entrega.
+    try {
+      const receiptsDir = path.join(worktreePath, "odd", "receipts");
+      fs.mkdirSync(receiptsDir, { recursive: true });
+      const receiptPath = path.join(receiptsDir, `${taskSlug}-receipt.json`);
+
+      // Obtener commit SHA actual antes del commit de entrega
+      const shaRes = await dcWorkerRunner.runInWorktree(worktreePath, "git", ["rev-parse", "HEAD"]);
+      const headSha = shaRes.exitCode === 0 ? shaRes.stdout.trim() : "unknown";
+
+      // Recoger archivos modificados actuales
+      const statusRes = await dcWorkerRunner.runInWorktree(worktreePath, "git", ["status", "--porcelain"]);
+      const modifiedFiles = statusRes.stdout
+        ? statusRes.stdout.split("\n").map((l) => l.slice(3).trim()).filter(Boolean)
+        : [];
+
+      const receipt = {
+        schema: "dc-delivery-receipt/v1",
+        generatedAt: new Date().toISOString(),
+        issue: { number: issueNumber, title: issueTitle },
+        taskSlug,
+        branch: branchName,
+        baseBranch: baseBranch ?? "master",
+        headShaBeforeDelivery: headSha,
+        filesModified: modifiedFiles,
+        verification: options.verificationEvidence ?? null,
+      };
+
+      fs.writeFileSync(receiptPath, JSON.stringify(receipt, null, 2), "utf8");
+
+      this.collabDb.log({
+        level: "INFO",
+        category: "DELIVERY",
+        actor: "dc-super-agent-86",
+        message: `Delivery receipt generado: odd/receipts/${taskSlug}-receipt.json (Issue #${issueNumber})`,
+        metadata: JSON.stringify({ receiptPath, headSha, filesCount: modifiedFiles.length }),
+      });
+    } catch (receiptErr) {
+      // best-effort: no bloquear la entrega si el receipt falla
+      this.collabDb.log({
+        level: "WARN",
+        category: "DELIVERY",
+        actor: "dc-super-agent-86",
+        message: `No se pudo generar el delivery receipt para Issue #${issueNumber}: ${String(receiptErr)}`,
+      });
+    }
 
     // 2. Git add y Git commit (deja el árbol de trabajo 100% limpio para el merge sin dirty files)
     updateWorktreeOddRoadmap(worktreePath, taskSlug, "T5", "in_progress", "Consolidando cambios en commit");
