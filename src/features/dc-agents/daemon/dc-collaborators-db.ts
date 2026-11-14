@@ -15,7 +15,7 @@ export interface CollaboratorRecord {
   notes?: string;
 }
 
-export type AuditLogCategory = "WEBHOOK" | "WORKTREE" | "DISPATCH" | "SECURITY" | "TESTS" | "CONFLICT";
+export type AuditLogCategory = "WEBHOOK" | "WORKTREE" | "DISPATCH" | "SECURITY" | "TESTS" | "CONFLICT" | "EVALUATOR" | "DELIVERY";
 
 export interface AuditLogRecord {
   id?: number;
