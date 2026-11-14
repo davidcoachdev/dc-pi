@@ -7,7 +7,7 @@ const home = fs.mkdtempSync(path.join(os.tmpdir(), "dc-delivery-home-"));
 process.env.HOME = home;
 process.env.XDG_CONFIG_HOME = path.join(home, "xdg");
 process.env.PI_CODING_AGENT_DIR = path.join(home, "pi");
-const { dcWorkerRunner, updateWorktreeOddRoadmap } = await import("../src/features/dc-agents/daemon/dc-worker-runner.ts");
+const { dcWorkerRunner, updateWorktreeOddRoadmap, generateHandoffReceipt } = await import("../src/features/dc-agents/daemon/dc-worker-runner.ts");
 const { DcPrDelivery } = await import("../src/features/dc-agents/daemon/dc-pr-delivery.ts");
 const { getCollaboratorsDatabase } = await import("../src/features/dc-agents/daemon/dc-collaborators-db.ts");
 test.after(() => {
@@ -267,11 +267,14 @@ test("dc-pr-delivery: integración de upstream activa re-verificación y actuali
     if (command === "git" && args[0] === "add") return { stdout: "", stderr: "", exitCode: 0 };
     if (command === "git" && args[0] === "commit") return { stdout: "[feat 1234567] commit", stderr: "", exitCode: 0 };
     if (command === "git" && args[0] === "fetch") return { stdout: "", stderr: "", exitCode: 0 };
+    if (command === "git" && args[0] === "status") return { stdout: "", stderr: "", exitCode: 0 };
     if (command === "git" && args[0] === "rev-parse" && args[1] === "HEAD") {
       revParseCount++;
-      // Primer rev-parse antes del merge: hash A
-      if (revParseCount === 1) return { stdout: "1111111111111111111111111111111111111111\n", stderr: "", exitCode: 0 };
-      // Segundo rev-parse después del merge: hash B (upstream integrado)
+      // Primer rev-parse (delivery receipt pre-commit): hash base
+      if (revParseCount === 1) return { stdout: "0000000000000000000000000000000000000000\n", stderr: "", exitCode: 0 };
+      // Segundo rev-parse (pre-merge): hash A
+      if (revParseCount === 2) return { stdout: "1111111111111111111111111111111111111111\n", stderr: "", exitCode: 0 };
+      // Tercer rev-parse (post-merge): hash B (upstream integrado)
       return { stdout: "2222222222222222222222222222222222222222\n", stderr: "", exitCode: 0 };
     }
     if (command === "git" && args[0] === "merge") return { stdout: "Merge made by the 'ort' strategy.", stderr: "", exitCode: 0 };
@@ -304,6 +307,114 @@ test("dc-pr-delivery: integración de upstream activa re-verificación y actuali
   } finally {
     dcWorkerRunner.runInWorktree = originalRun;
     dcWorkerRunner.verifyWorktree = originalVerify;
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test("dc-worker-runner: initializeOddSpec incluye sección de Boundary Matrix y casos límite", () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "dc-spec-boundary-test-"));
+  const taskSlug = "issue-88";
+
+  dcWorkerRunner.initializeOddSpec({
+    issueNumber: 88,
+    issueTitle: "Política de devoluciones",
+    issueUrl: "https://github.com/test/repo/issues/88",
+    taskSlug,
+    worktreePath: tmpDir,
+    branchName: "feat/issue-88",
+    dispatchedAt: Date.now(),
+    handle: {} as any,
+  }, "@davidcoachdev", "Reembolso del 100% si faltan 24h.");
+
+  const specFile = path.join(tmpDir, "odd", "tasks", `${taskSlug}.md`);
+  assert.ok(fs.existsSync(specFile));
+  const content = fs.readFileSync(specFile, "utf8");
+  assert.ok(content.includes("## Boundary Matrix / Casos Límite y Contrato"));
+  assert.ok(content.includes("Casos nominales"));
+  assert.ok(content.includes("Casos frontera y errores"));
+  assert.ok(content.includes("Invariantes e idempotencia"));
+
+  fs.rmSync(tmpDir, { recursive: true, force: true });
+});
+
+test("dc-worker-runner: generateHandoffReceipt persiste recibo auditable en odd/handoff.md", () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "dc-handoff-test-"));
+  const taskSlug = "issue-92";
+
+  const handoffPath = generateHandoffReceipt({
+    worktreePath: tmpDir,
+    taskSlug,
+    issueNumber: 92,
+    issueTitle: "Crear endpoint de pagos",
+    branchName: "feat/issue-92",
+    filesModified: ["src/payments.ts", "test/payments.test.ts"],
+    verificationCommands: [
+      { command: "npm", args: ["run", "typecheck"], stdout: "", stderr: "", exitCode: 0 },
+      { command: "npm", args: ["run", "test"], stdout: "pass 4", stderr: "", exitCode: 0 },
+    ],
+    diffStat: "src/payments.ts | 20 ++++\n 1 file changed, 20 insertions(+)",
+    roundsCount: 2,
+    modelUsed: "provider/gemini-flash-high",
+  });
+
+  assert.ok(fs.existsSync(handoffPath));
+  assert.equal(handoffPath, path.join(tmpDir, "odd", "handoff.md"));
+  const content = fs.readFileSync(handoffPath, "utf8");
+  assert.ok(content.includes("# Recibo de Entrega / Handoff Receipt"));
+  assert.ok(content.includes("**Issue**: #92 - Crear endpoint de pagos"));
+  assert.ok(content.includes("**Rama**: `feat/issue-92`"));
+  assert.ok(content.includes("**Rondas de ejecución**: 2"));
+  assert.ok(content.includes("**Modelo / Taxi**: provider/gemini-flash-high"));
+  assert.ok(content.includes("- `npm run typecheck` → exit 0"));
+  assert.ok(content.includes("- `npm run test` → exit 0"));
+  assert.ok(content.includes("- `src/payments.ts`"));
+  assert.ok(content.includes("src/payments.ts | 20 ++++"));
+  assert.ok(content.includes("Plan de Rollback y Preservación"));
+  assert.ok(content.includes("git revert <commit-hash>"));
+
+  fs.rmSync(tmpDir, { recursive: true, force: true });
+});
+
+test("dc-pr-delivery: deliverIssue garantiza existencia de odd/handoff.md antes de commit", async () => {
+  const delivery = new DcPrDelivery();
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "dc-delivery-handoff-test-"));
+
+  const originalRun = dcWorkerRunner.runInWorktree;
+  let handoffExistsAtAdd = false;
+
+  dcWorkerRunner.runInWorktree = async (cwd, command, args) => {
+    if (command === "git" && args[0] === "add") {
+      const handoffFile = path.join(cwd, "odd", "handoff.md");
+      handoffExistsAtAdd = fs.existsSync(handoffFile);
+      return { stdout: "", stderr: "", exitCode: 0 };
+    }
+    if (command === "git" && args[0] === "commit") return { stdout: "[feat 1234567] commit", stderr: "", exitCode: 0 };
+    if (command === "git" && args[0] === "fetch") return { stdout: "", stderr: "", exitCode: 0 };
+    if (command === "git" && args[0] === "rev-parse") return { stdout: "1111111\n", stderr: "", exitCode: 0 };
+    if (command === "git" && args[0] === "merge") return { stdout: "Already up to date.", stderr: "", exitCode: 0 };
+    if (command === "git" && args[0] === "diff") return { stdout: " src/index.ts | 2 +-\n", stderr: "", exitCode: 0 };
+    if (command === "git" && args[0] === "push") return { stdout: "", stderr: "", exitCode: 0 };
+    if (command === "gh" && args[0] === "pr" && args[1] === "create") {
+      return { stdout: "https://github.com/davidcoachdev/dc-pi/pull/105\n", stderr: "", exitCode: 0 };
+    }
+    if (command === "gh" && args[0] === "issue") return { stdout: "", stderr: "", exitCode: 0 };
+    return { stdout: "", stderr: "", exitCode: 0 };
+  };
+
+  try {
+    const res = await delivery.deliverIssue({
+      worktreePath: tmpDir,
+      taskSlug: "issue-105",
+      issueNumber: 105,
+      issueTitle: "Verificación de persistencia de handoff",
+      branchName: "feat/issue-105",
+      baseBranch: "master",
+    });
+
+    assert.equal(res.ok, true);
+    assert.equal(handoffExistsAtAdd, true, "odd/handoff.md debe haberse generado antes de git add");
+  } finally {
+    dcWorkerRunner.runInWorktree = originalRun;
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
 });

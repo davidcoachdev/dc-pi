@@ -1,8 +1,8 @@
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { dcWorkerRunner, updateWorktreeOddRoadmap, completeOddDirectives } from "./dc-worker-runner.ts";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+import { dcWorkerRunner, updateWorktreeOddRoadmap, completeOddDirectives, generateHandoffReceipt } from "./dc-worker-runner.ts";
 import { getCollaboratorsDatabase } from "./dc-collaborators-db.ts";
 const execFileAsync = promisify(execFile);
 
@@ -70,6 +70,20 @@ export class DcPrDelivery {
 
     // Marcar directivas como completadas en el roadmap ODD antes de commit para que queden registradas en Git
     completeOddDirectives(worktreePath, taskSlug);
+
+    // Asegurar que el recibo de entrega auditable exista en odd/handoff.md antes del commit
+    const oddHandoffPath = path.join(worktreePath, "odd", "handoff.md");
+    if (!fs.existsSync(oddHandoffPath)) {
+      generateHandoffReceipt({
+        worktreePath,
+        taskSlug,
+        issueNumber,
+        issueTitle,
+        branchName,
+        filesModified: [],
+        verificationCommands: [],
+      });
+    }
 
     // --- DELIVERY RECEIPT ---
     // Genera odd/receipts/<taskSlug>-receipt.json antes del git add para que
@@ -261,6 +275,7 @@ npm run test
 
 ## 🧩 Checklist de validación
 - [x] Verificación determinista aprobada en worktree aislado (exit code 0)
+- [x] Recibo de entrega auditable persistido en \`odd/handoff.md\`
 - [x] Sin conflictos con \`origin/${baseBranch}\`
 - [x] Commits semánticos y convenciones de Git aplicadas
 - [x] Sin lockfiles parásitos ni artefactos residuales
