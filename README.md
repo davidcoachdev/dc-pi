@@ -111,6 +111,8 @@ All extensions are unified under the canonical `dcStudioExtension` entrypoint.
 | `6` | MEM | Engram daemon and memory sentinel |
 | `7` | SYS | Model profiles and MCP servers |
 
+`[Abrir visor]` streams the device screen at about one frame per second from `adb` through a detached child process, so the TUI itself never runs adb or a timer. It needs a connected device in `device` state; when a capture fails, the viewer window shows the reason in text instead of staying blank.
+
 ---
 
 ## Specialized LLM Tools / Herramientas Especializadas para Agentes

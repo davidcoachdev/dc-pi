@@ -15,11 +15,12 @@ import {
   type DcMobileSupervisorResult,
 } from "../core/dc-mobile-supervisor.ts";
 import {
+  getLatestFrameMtime,
   getLiveViewerPid,
   openLiveViewer,
+  type DcLiveViewerFailureHandler,
   type DcLiveViewerResult,
 } from "../core/dc-mobile-viewer.ts";
-import { getLastInspection } from "../tools/dc-mobile-tools.ts";
 import {
   formatMobileActivity,
   getMobileActivity,
@@ -63,7 +64,10 @@ export interface DcMobileSidebarDeps {
   loadPrefs: () => DcMobileConnectionPrefs;
   reconnect: () => DcMobileSupervisorResult;
   disconnect: (serial: string) => string | Promise<string>;
-  openViewer: (serial: string) => DcLiveViewerResult;
+  openViewer: (
+    serial: string,
+    onFailure?: DcLiveViewerFailureHandler,
+  ) => DcLiveViewerResult;
   getViewerPid: (serial: string) => number | undefined;
   getLastFrameAt: (serial: string) => number | undefined;
   now: () => number;
@@ -131,6 +135,19 @@ function readLastFrameAt(deps: DcMobileSidebarDeps, serial: string): number | un
   } catch {
     return undefined;
   }
+}
+
+/**
+ * S5/T3: freshness is the mtime of `latest.png`, never an in-memory inspection
+ * timestamp. Undefined when the frame file does not exist, which is the only
+ * case that may render `sin frames`. Exported so the default is testable
+ * against a temporary cache root.
+ */
+export function readLatestFrameAt(
+  serial: string,
+  cacheRoot?: string,
+): number | undefined {
+  return getLatestFrameMtime(serial, cacheRoot);
 }
 
 /**
@@ -210,9 +227,10 @@ function defaultDeps(): DcMobileSidebarDeps {
     loadPrefs: () => loadConnectionPrefs(),
     reconnect: () => ensureConnection(createDcMobileSupervisedDriver()),
     disconnect: (serial: string) => disconnectViaAdb(serial),
-    openViewer: (serial: string) => openLiveViewer(serial),
+    openViewer: (serial: string, onFailure?: DcLiveViewerFailureHandler) =>
+      openLiveViewer(serial, { onFailure }),
     getViewerPid: (serial: string) => getLiveViewerPid(serial),
-    getLastFrameAt: (serial: string) => getLastInspection(serial)?.capturedAt,
+    getLastFrameAt: (serial: string) => readLatestFrameAt(serial),
     now: () => Date.now(),
   };
 }
@@ -408,12 +426,16 @@ class DcMobileSidebarCardComponent implements Component {
       }
 
       recordMobileActivity("viewer", "capturando pantalla");
-      const result = this.deps.openViewer(serial);
+      const result = this.deps.openViewer(serial, (reason, message) => {
+        // S4/T2: an async spawn failure is recorded instead of discarded.
+        recordMobileActivity("error", message || reason);
+      });
       if (typeof result.pid === "number") {
         recordMobileActivity("viewer", `visor abierto (pid ${result.pid})`);
         return;
       }
-      recordMobileActivity("viewer", result.message);
+      // S4: the failure reason reaches the log; the window must never be blank.
+      recordMobileActivity("error", result.message);
     });
   }
 

@@ -1,19 +1,26 @@
 import { execFileSync, spawn } from "node:child_process";
-import { copyFileSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, statSync, writeFileSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 
 /**
- * Event-driven live viewer for dc-mobile (S5).
+ * Event-driven live viewer for dc-mobile (S1–S4, S7).
  *
  * Frames are written to `~/.cache/dc-mobile/<serial>/latest.png`. A single
  * detached Kitty window per serial runs `scripts/dc-mobile-viewer.mjs`, which
- * watches the frame directory with `fs.watch` and redraws only on change.
- * No polling and no timers are used.
+ * owns the capture loop: one `adb exec-out screencap -p` at a time, about one
+ * frame per second (measured cost 0.75 s), atomic `latest.png` writes and text
+ * errors inside the window. This module never starts a timer and never runs adb
+ * inside `render()`: it validates adb once, then hands the work to the child.
  */
 
 export const DC_MOBILE_CACHE_ROOT = path.join(os.homedir(), ".cache", "dc-mobile");
+
+/** Measured cost of one capture is 0.75 s; one frame per second is the ceiling. */
+export const DC_MOBILE_VIEWER_INTERVAL_MS = 1_000;
+
+export const DC_MOBILE_DEFAULT_ADB = "adb";
 
 export const DC_MOBILE_VIEWER_SCRIPT = fileURLToPath(
   new URL("../scripts/dc-mobile-viewer.mjs", import.meta.url),
@@ -35,10 +42,51 @@ export interface DcSavedFrame {
 
 export type DcLiveViewerState = "started" | "reused" | "unavailable";
 
+/**
+ * Why the viewer could not start (T2/S4). A blank window with a silent spawn
+ * error is the defect: every failure maps to one of these reasons and the card
+ * records the resulting message in its activity log.
+ */
+export type DcLiveViewerFailureReason =
+  | "serial-vacio"
+  | "adb-no-disponible"
+  | "kitty-no-disponible"
+  | "script-ausente"
+  | "spawn-fallido";
+
+/** Records a failure that happens after `openLiveViewer` returned (async spawn). */
+export type DcLiveViewerFailureHandler = (
+  reason: DcLiveViewerFailureReason,
+  message: string,
+) => void;
+
 export interface DcLiveViewerResult extends DcSavedFrame {
   viewer: DcLiveViewerState;
   message: string;
   pid?: number;
+  /** Present only when `viewer` is `unavailable` (T2/S4). */
+  failureReason?: DcLiveViewerFailureReason;
+}
+
+/** One reason → one Spanish line, so the card log and the window agree. */
+export function formatViewerFailure(
+  reason: DcLiveViewerFailureReason,
+  detail = "",
+): string {
+  const suffix = detail ? `: ${detail}` : "";
+
+  switch (reason) {
+    case "serial-vacio":
+      return "serial vacío: no se puede abrir el visor en vivo.";
+    case "adb-no-disponible":
+      return `adb no disponible${suffix}; conectá el dispositivo y verificá adb.`;
+    case "kitty-no-disponible":
+      return `kitty no está disponible${suffix}.`;
+    case "script-ausente":
+      return `no se encontró el script del visor${suffix}.`;
+    case "spawn-fallido":
+      return `no se pudo iniciar el visor Kitty${suffix}.`;
+  }
 }
 
 export type DcViewerExecFn = (
@@ -55,9 +103,15 @@ export interface DcLiveViewerOptions {
   cacheRoot?: string;
   scriptPath?: string;
   kittyBin?: string;
+  /** adb binary handed to the child capture loop (S1/T1). */
+  adbBin?: string;
+  /** Capture cadence; clamped to >= 1 s by the child (S3). */
+  intervalMs?: number;
   title?: string;
   spawnFn?: typeof spawn;
   execFn?: DcViewerExecFn;
+  /** Async-only failures (spawn `error`); sync failures are in the result. */
+  onFailure?: DcLiveViewerFailureHandler;
 }
 
 /** Live viewer PID per serial, tracked in-process (S5: reuse, never duplicate). */
@@ -99,6 +153,22 @@ export function resolveFrameDir(serial: string, cacheRoot = DC_MOBILE_CACHE_ROOT
 
 export function getLatestFramePath(serial: string, cacheRoot = DC_MOBILE_CACHE_ROOT): string {
   return path.join(resolveFrameDir(serial, cacheRoot), "latest.png");
+}
+
+/**
+ * mtime of `latest.png`, the only freshness source for the card's
+ * `último frame hace Ns` (S5/T3). Undefined when no frame file exists.
+ */
+export function getLatestFrameMtime(
+  serial: string,
+  cacheRoot = DC_MOBILE_CACHE_ROOT,
+): number | undefined {
+  try {
+    const stats = statSync(getLatestFramePath(serial, cacheRoot));
+    return stats.mtimeMs;
+  } catch {
+    return undefined;
+  }
 }
 
 /** Writes the timestamped frame and refreshes latest.png (S3/S5). */
@@ -148,6 +218,16 @@ function canRunKitty(kittyBin: string, execFn: DcViewerExecFn): boolean {
   }
 }
 
+/** T2: adb is validated up front so a missing adb never opens a blank window. */
+function canRunAdb(adbBin: string, execFn: DcViewerExecFn): boolean {
+  try {
+    execFn(adbBin, ["version"], { timeout: 2_000 });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function refreshLatest(saved: DcSavedFrame): void {
   if (saved.framePath !== saved.latestPath && existsSync(saved.framePath)) {
     try {
@@ -158,16 +238,45 @@ function refreshLatest(saved: DcSavedFrame): void {
   }
 }
 
-function buildKittyArgs(title: string, scriptPath: string, framePath: string): string[] {
-  const options = DC_MOBILE_KITTY_OPTIONS.flatMap((option) => ["-o", option]);
+function failLiveViewer(
+  saved: DcSavedFrame,
+  reason: DcLiveViewerFailureReason,
+  detail = "",
+): DcLiveViewerResult {
+  return {
+    ...saved,
+    viewer: "unavailable",
+    failureReason: reason,
+    message: formatViewerFailure(reason, detail),
+  };
+}
+
+/**
+ * Script arguments for the detached capture loop (T1/T2): the child receives the
+ * raw serial (adb needs it verbatim), the shared frame path, the adb binary and
+ * the cadence. Exported so the mapping is testable without spawning anything.
+ */
+export function buildViewerScriptArgs(params: {
+  serial: string;
+  framePath: string;
+  adbBin?: string;
+  intervalMs?: number;
+}): string[] {
   return [
-    "--title",
-    title,
-    ...options,
-    process.execPath,
-    scriptPath,
-    framePath,
+    "--serial",
+    params.serial,
+    "--frame",
+    params.framePath,
+    "--adb",
+    params.adbBin ?? DC_MOBILE_DEFAULT_ADB,
+    "--interval",
+    String(params.intervalMs ?? DC_MOBILE_VIEWER_INTERVAL_MS),
   ];
+}
+
+function buildKittyArgs(title: string, scriptPath: string, scriptArgs: string[]): string[] {
+  const options = DC_MOBILE_KITTY_OPTIONS.flatMap((option) => ["-o", option]);
+  return ["--title", title, ...options, process.execPath, scriptPath, ...scriptArgs];
 }
 
 /**
@@ -190,7 +299,8 @@ export function openLiveViewer(
       framePath: latestPath,
       latestPath,
       viewer: "unavailable",
-      message: "serial vacío: no se puede abrir el visor en vivo.",
+      failureReason: "serial-vacio",
+      message: formatViewerFailure("serial-vacio"),
     };
   }
 
@@ -222,26 +332,33 @@ export function openLiveViewer(
 
   const execFn = options.execFn ?? defaultExecFn;
   const kittyBin = options.kittyBin ?? "kitty";
+  const adbBin = options.adbBin ?? DC_MOBILE_DEFAULT_ADB;
+
+  if (!canRunAdb(adbBin, execFn)) {
+    return failLiveViewer(saved, "adb-no-disponible", `(${adbBin})`);
+  }
 
   if (!canRunKitty(kittyBin, execFn)) {
-    return {
-      ...saved,
-      viewer: "unavailable",
-      message: `kitty no está disponible. El frame quedó guardado en ${saved.latestPath}.`,
-    };
+    return failLiveViewer(
+      saved,
+      "kitty-no-disponible",
+      `el frame quedó guardado en ${saved.latestPath}`,
+    );
   }
 
   const scriptPath = options.scriptPath ?? DC_MOBILE_VIEWER_SCRIPT;
   if (!existsSync(scriptPath)) {
-    return {
-      ...saved,
-      viewer: "unavailable",
-      message: `no se encontró el script del visor en ${scriptPath}.`,
-    };
+    return failLiveViewer(saved, "script-ausente", scriptPath);
   }
 
   const title = options.title ?? `dc-mobile ${serialId}`;
-  const args = buildKittyArgs(title, scriptPath, saved.latestPath);
+  const scriptArgs = buildViewerScriptArgs({
+    serial: serialId,
+    framePath: saved.latestPath,
+    adbBin,
+    intervalMs: options.intervalMs,
+  });
+  const args = buildKittyArgs(title, scriptPath, scriptArgs);
 
   try {
     const spawnFn = options.spawnFn ?? spawn;
@@ -250,8 +367,17 @@ export function openLiveViewer(
       stdio: "ignore",
     });
 
-    child.on?.("error", () => {
-      // Asynchronous spawn failures (ENOENT/EACCES) are non-fatal.
+    child.on?.("error", (error: unknown) => {
+      // Async spawn failures (ENOENT/EACCES) never reach the caller's return
+      // value, so they are recorded through the handler instead of discarded.
+      try {
+        options.onFailure?.(
+          "spawn-fallido",
+          formatViewerFailure("spawn-fallido", errorMessage(error)),
+        );
+      } catch {
+        // A broken handler must never surface as a throw.
+      }
     });
     child.unref?.();
 
@@ -266,10 +392,6 @@ export function openLiveViewer(
       message: `Visor en vivo iniciado para ${serialId}.`,
     };
   } catch (error) {
-    return {
-      ...saved,
-      viewer: "unavailable",
-      message: `No se pudo abrir el visor Kitty: ${errorMessage(error)}`,
-    };
+    return failLiveViewer(saved, "spawn-fallido", errorMessage(error));
   }
 }
