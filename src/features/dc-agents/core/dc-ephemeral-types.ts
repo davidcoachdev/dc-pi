@@ -295,6 +295,7 @@ export const DC_TOOL_BRICKS: Record<DcToolBrick, string[]> = {
   ],
   "mobile-controller": [
     "dc_adb_devices",
+    "dc_mobile_connect",
     "dc_mobile_screen_inspect",
     "dc_mobile_action",
   ],
@@ -321,7 +322,7 @@ export const DC_TOOL_BRICK_GUIDELINES: Record<DcToolBrick, string> = {
   "api": "Inspecciona contratos con 'dc_api_swagger' o 'graphql' antes de enviar peticiones HTTP con 'dc_api_rest'.",
   "security": "Audita fragmentos de código o git diffs con 'dc_owasp_audit' y consulta mitigaciones con 'dc_owasp_query'.",
   "lazyweb": "Consulta patrones reales de UI/UX, pantallas, flujos y experimentos A/B con 'dc_lazyweb_search' (activa openPreview: true solo cuando el usuario pida ver las capturas).",
-  "mobile-controller": "Ejecuta 'dc_mobile_screen_inspect' antes de cualquier 'dc_mobile_action' y opera sobre ids '@eN' en vez de coordenadas crudas; re-inspecciona tras cada acción, nunca adivines una coordenada que no esté en el último dump y pídele al humano que tome el control físico para biometría o 2FA.",
+  "mobile-controller": "Ejecuta 'dc_mobile_connect' para dejar el dispositivo en estado 'device' (USB o Wi-Fi) antes de operar. Después ejecuta 'dc_mobile_screen_inspect' antes de cualquier 'dc_mobile_action' y opera sobre ids '@eN' en vez de coordenadas crudas; re-inspecciona tras cada acción, nunca adivines una coordenada que no esté en el último dump y pídele al humano que tome el control físico para biometría o 2FA.",
 };
 
 export type DcBehaviorBrick =
