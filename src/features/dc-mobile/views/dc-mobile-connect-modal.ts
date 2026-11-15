@@ -26,7 +26,6 @@ import {
   pairWifiAsync,
   type DcMobileAdbRunner,
 } from "../core/dc-mobile-async-connection.ts";
-import { readWirelessDebuggingAddress } from "../core/dc-mobile-settings-discovery.ts";
 import {
   discoverMdnsAddresses,
   ensureUsbAutoAttach,
@@ -135,8 +134,6 @@ export class DcMobileConnectWizard implements Component {
   private notice = "";
   /** A prefilled address is replaced on the first keystroke instead of appended. */
   private addressSelected = false;
-  /** S1/S5: true while the `d` detection is running on the address step. */
-  private detectingAddress = false;
   /** S10: hosts already paired on this computer (session + persisted prefs). */
   private readonly pairedHosts: Set<string>;
   /** S11: host paired during this run, returned even when the retry failed. */
@@ -149,7 +146,9 @@ export class DcMobileConnectWizard implements Component {
 
   constructor(private readonly options: DcMobileConnectWizardOptions) {
     this.selectedIndex = options.prefs.mode === "wifi" ? 1 : 0;
-    this.address = options.prefs.lastWifiAddress;
+    // Prefill `host:` so the user only types the port, which rotates on every activation.
+    const savedHost = hostOfAddress(options.prefs.lastWifiAddress ?? "");
+    this.address = savedHost ? `${savedHost}:` : "";
     this.addressSelected = this.address.length > 0;
     this.pairedHosts = new Set(
       (options.prefs.pairedHosts ?? [])
@@ -273,10 +272,6 @@ export class DcMobileConnectWizard implements Component {
   private submitAddress(): void {
     const address = this.address.trim();
 
-    // A detection still in flight must not fill the field after the user
-    // decided to continue with what they have.
-    this.detectingAddress = false;
-
     if (!isValidWifiAddress(address)) {
       this.error = "Dirección inválida: usá host:puerto, por ejemplo 192.168.1.50:5555 (puerto 1-65535).";
       this.requestRender();
@@ -345,38 +340,6 @@ export class DcMobileConnectWizard implements Component {
     this.error = message;
     this.notice =
       `No se pudo conectar a ${mainAddress}. Vinculá el dispositivo y reintentamos.`;
-    this.requestRender();
-  }
-
-  /**
-   * S1/S5: `d` reads the current `IP:port` from the phone without blocking the
-   * TUI. The field the detection starts with is remembered so a late result
-   * never replaces text the user typed meanwhile.
-   */
-  private async detectWirelessAddress(): Promise<void> {
-    const startValue = this.address;
-    this.detectingAddress = true;
-    this.error = "";
-    this.notice = "Detectando la dirección en el teléfono…";
-    this.requestRender();
-
-    const runner = this.options.runner ?? createAdbRunner();
-    const detected = await readWirelessDebuggingAddress(runner, (line) => this.addLog(line));
-
-    if (!this.detectingAddress || this.step !== "address") return;
-    this.detectingAddress = false;
-
-    // S4/S5: a missing value is silent, and a late result is discarded when
-    // the user already changed the field.
-    if (!detected || this.address !== startValue) {
-      this.notice = "";
-      this.requestRender();
-      return;
-    }
-
-    this.address = detected.address;
-    this.addressSelected = true;
-    this.notice = `Detectado en el teléfono: ${detected.address}. Enter para conectar.`;
     this.requestRender();
   }
 
@@ -543,19 +506,6 @@ export class DcMobileConnectWizard implements Component {
       return true;
     }
 
-    // S1: `d` detects the address only while there is no hostname to type yet,
-    // so a normal address can still contain the letter.
-    const addressValue = this.address.trim();
-    if (
-      matchesKey(data, "d") &&
-      this.step === "address" &&
-      !this.detectingAddress &&
-      (addressValue === "" || addressValue.endsWith(":"))
-    ) {
-      void this.detectWirelessAddress();
-      return true;
-    }
-
     if (this.step === "choose") {
       const total = DC_MOBILE_CONNECT_OPTIONS.length;
 
@@ -687,7 +637,6 @@ export class DcMobileConnectWizard implements Component {
       lines.push(`  ${t.fg("dim", "Ejemplo: 192.168.100.222:41779")}`);
       lines.push("");
       lines.push(`  ${this.renderField(this.address, true, t)}`);
-      lines.push(`  ${t.fg("dim", "d: Detectar en el teléfono")}`);
     } else {
       lines.push(`  ${t.fg("muted", "IP:puerto del diálogo de vinculación:")}`);
       lines.push(`  ${this.renderField(this.pairUrl, this.pairFocus === "url", t)}`);
