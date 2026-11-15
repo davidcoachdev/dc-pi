@@ -181,10 +181,14 @@ function draw(force = false) {
     drawStatus();
 
     const place = `${Math.max(1, columns - 2)}x${Math.max(1, rows - 3)}@1x2`;
-    const result = spawnSync("kitten", ["icat", "--place", place, framePath], {
-      stdio: ["ignore", "inherit", "pipe"],
-      encoding: "utf8",
-    });
+    const result = spawnSync(
+      "kitten",
+      ["icat", "--stdin", "no", "--place", place, framePath],
+      {
+        stdio: ["ignore", "inherit", "pipe"],
+        encoding: "utf8",
+      },
+    );
 
     if (result.error) {
       statusText = `kitten icat no está disponible: ${firstLine(result.error.message)}`;
