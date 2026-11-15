@@ -2,6 +2,8 @@
 
 Feature document for ODD. Read `## Specs` and the assigned task only, then act.
 
+**Estado: revertido (L6).** La tecla `d` y `core/dc-mobile-settings-discovery.ts` se retiraron del producto; el wizard ahora prellena `host:` y el usuario escribe sólo el puerto. Este documento queda como historial de la mecánica verificada en el dispositivo.
+
 ## Specs
 
 **S1.** El wizard abre una ventana `address` que hoy solo ofrece escribir o aceptar la última dirección conocida. Se agrega una acción explícita, tecla `d` en el paso `address`, rotulada `Detectar en el teléfono`, que lee del dispositivo el `IP:puerto` vigente de depuración inalámbrica y rellena el campo. No hay detección automática ni se abre Settings sin que el usuario lo pida.
@@ -25,10 +27,10 @@ Feature document for ODD. Read `## Specs` and the assigned task only, then act.
 
 ## Tasks
 
-- T1 — core: `readWirelessDebuggingAddress` + tests. Cubre S2, S3, S4, S5, S7a-c.
-- T2 — wizard: tecla `d` en `address`, prefill y descarte de resultados tardíos + tests. Cubre S1, S5, S7d-e.
-- T3 — documentación: sección en `skills/dc-mobile-testing/SKILL.md` con la mecánica y su límite. Cubre S2, S6.
-- T4 — bug real de hardware: el matcher `clickable && text` no encontraba la fila y podía tocar el switch. Corregido a etiqueta-sin-toggle + fixture fiel al dump real. Cubre S2, S7.
+- ~~T1~~ — core: `readWirelessDebuggingAddress` + tests. Cubre S2, S3, S4, S5, S7a-c. *(revertido, L6)*
+- ~~T2~~ — wizard: tecla `d` en `address`, prefill y descarte de resultados tardíos + tests. Cubre S1, S5, S7d-e. *(revertido, L6)*
+- ~~T3~~ — documentación: sección en `skills/dc-mobile-testing/SKILL.md` con la mecánica y su límite. Cubre S2, S6. *(revertido, L6)*
+- ~~T4~~ — bug real de hardware: el matcher `clickable && text` no encontraba la fila y podía tocar el switch. Corregido a etiqueta-sin-toggle + fixture fiel al dump real. Cubre S2, S7. *(revertido, L6)*
 
 ## Log
 
@@ -37,3 +39,5 @@ Feature document for ODD. Read `## Specs` and the assigned task only, then act.
 - L3 (prueba física, dispositivo `192.168.100.222:37271`): la primera corrida devolvió `undefined` tras 6 swipes y 0 taps. El dump real muestra dos nodos: título `clickable="false"` con texto y switch `clickable="true"` con `text=""` y `content-desc`. El matcher viejo exigía ambas cosas en el mismo nodo.
 - L4 (prueba física post-fix): `RESULT: {"address":"192.168.100.222:37271","host":"192.168.100.222","port":37271}`, tap en `300 1492` (título) y la sesión ADB siguió en `device`. Coincide con el `192.168.100.222:37271` que mostraba la pantalla del teléfono. 85/85 en el cuarteto.
 - L5 (frontera de la rebanada): esta unidad entra en un solo commit de 692 líneas, por encima de la guía de ~400. Se mantiene atómica porque el módulo, la tecla del wizard y los fixtures describen un único comportamiento y separarlos dejaría tests que no compilan o código sin cobertura. La próxima unidad arranca en una rama nueva.
+- L6 (verbatim, dueño del producto): «oye pero segun el cell esta ciculado pero si el puerto cambia asi que no le veo utilida a eso si solo cambia erl puerto puedes poner el texto como ejemplo [192.168.100.22:}asi solo pongo el p[uerto porque cada vez que inicia cambia el puerto pilas  a ese atajo no ,o veo uil elimnalo». Decisión: se elimina la tecla `d` y el módulo de descubrimiento (T1-T4 revertidos, 8 tests de descubrimiento y 3 tests de la tecla `d` borrados); el campo `address` abre prellenado con `host:` tomado de `prefs.lastWifiAddress` y el usuario escribe sólo el puerto. Motivo admitido: un atajo que necesita un transporte ADB vivo para leer un valor que rota en cada activación no paga su costo. Nueva prueba en `test/dc-mobile.test.ts`; 76/76 en el trío dc-mobile.
+- L7 (frontera de la rebanada): el commit de la reversión mide 682 líneas cambiadas (51 inserciones, 631 eliminaciones), por encima de la guía de ~400. Se mantiene en un solo commit porque es una eliminación de feature: partirla dejaría imports colgando o tests sin módulo. La próxima unidad arranca en una rama nueva.
