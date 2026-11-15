@@ -13,13 +13,20 @@ Rediseño del wizard de conexión: una sola ruta Wi-Fi (conectar → vincular so
 - **S7 — Reintento automático tras vincular.** Tras una vinculación correcta se reintenta el connect contra la URL principal ya ingresada, sin pedirla de nuevo. Texto del usuario: «verifique la vinculación y vuelvo a intentar conectarse y me dé OK».
 - **S8 — Sin regresiones fuera del wizard.** El flujo USB, los tools (`dc_mobile_connect` y compañía), el supervisor y las funciones síncronas `connectWifi`/`pairWifi` conservan su comportamiento y sus firmas.
 
+- **S9 — Tras vincular, nunca reusar el puerto viejo.** Si la vinculación fue correcta pero el connect posterior falla, la pantalla de dirección vuelve con **host y puerto vacío** (`host:`), nunca con el puerto anterior precargado, y con el aviso de que el puerto de depuración inalámbrica cambia al vincular. Síntoma reportado: «si se vincula pero me pide vincularlo ... el ui me pido que me vincule otra vez»; causa: el reintento usaba el mismo `host:puerto` viejo y Enter lo repetía, así que el fallo volvía a abrir la vinculación en bucle.
+- **S10 — Un host ya vinculado no vuelve a pedir vinculación.** El wizard recuerda los hosts vinculados (preferencia persistida + estado de sesión). Si el connect falla contra un host ya vinculado, se queda en la pantalla de dirección con un error explícito sobre el puerto, y la pantalla de vinculación solo se abre si el usuario la pide de forma explícita con la tecla `p`.
+- **S11 — La vinculación sobrevive al reload.** Una vinculación correcta devuelve `pairedHost` en el resultado y el panel lo persiste en `prefs.pairedHosts` (lista de hosts, sin duplicados).
+
 ## Tasks
 
 - T1 · Wizard de un solo camino: menú de 3 opciones, pantalla URL principal, pantalla URL+código, transiciones S1–S4, S7 · inline/worker · commit pendiente
 - T2 · Ejecución asíncrona con log: módulo core con `execFile` asíncrono + estado de progreso con spinner y log incremental (S5) · worker · commit pendiente
+- T4 · Anti-bucle de vinculación: puerto vacío tras vincular, hosts recordados, re-vinculación explícita con `p`, persistencia de `pairedHost` (S9–S11) · worker · commit pendiente
 - T3 · Verificación: tests de los flujos (connect directo, connect falla → vincular → reintento, error de código), tsc, build, archivos de test de dc-mobile (S6, S8) · worker · commit pendiente
 
 ## Log
 
 - L1: «avre antes de continuar esta mal la parte de la coneccion con wifi debe ser un unico camnino en este moeento hay dos y eso esta mal debe ser o usb o wifi Si escojo Wifi, debe de abrirme para ingresar el URL que me sale en la pantalla de la pantalla de encima y darle Enter. Si es que no se puede conectar, debería salirme otra pantalla pidiéndome el URL y el código. Y en lo que yo diente, debería irme a otra pantalla que tenga como un slider, un logger, mientras se conecta, que me vaya conectando. Y una vez que me esté conectado, salga conectado. Y listo. Si yo pongo Wifi y pongo el URL de oyente y ya está vinculado, automáticamente se tiene que saltar, me tiene que seguir conectado y listo. Así que arreglemos eso. Revisa y me avisa.»
 - L2: «sigue bb»
+- L3: «a ver hay un probelma cuando se conecta por el url directo si se vicncula pero me pide vincularlo no se por que porque sunado lo hace si se vinculo pero el ui me pido que me vincule otra vez puede revisar eso»
+- L4: «sigue»
