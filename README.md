@@ -57,7 +57,7 @@ All extensions are unified under the canonical `dcStudioExtension` entrypoint.
 | `/dc-tts` | `Alt+U` | Monitor y control de voz TTS y Asistente / TTS monitor & voice control | `dc-tts` |
 | `/inbox` | — | Buzón estructurado de subagentes en background / Background subagent report inbox | `dc-agents` |
 | `/dc-lazyweb` | — | Búsqueda e inspección de UI/UX en Lazyweb / Lazyweb UI/UX patterns explorer | `dc-lazyweb` |
-| `/dc-mobile` | — | Control de dispositivos Android por ADB y visor en vivo / Android device control & live viewer | `dc-mobile` |
+| `/dc-mobile` | `Alt+Shift+M` | Control de dispositivos Android por ADB y visor en vivo / Android device control & live viewer | `dc-mobile` |
 | `/dc-changes` | `Alt+F` | Visor a 2 columnas de cambios git y diffs / Two-column Git diff & changes viewer | `dc-changes` |
 | `/dc-models` | `Alt+M` | Selector a 3 columnas de modelos, cuentas y reasoning effort / Model & effort selector | `dc-models` |
 | `/dc-quota` | `Alt+Shift+Q` | Monitor interactivo de cuotas y tokens de CLIProxy / Token quota dashboard | `dc-quota` |
