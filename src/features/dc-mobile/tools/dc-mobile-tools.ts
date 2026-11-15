@@ -13,11 +13,11 @@ import { openLiveViewer, saveFrame } from "../core/dc-mobile-viewer.ts";
 import {
   connectUsb,
   connectWifi,
-  createDcMobileConnectionDriver,
   pairWifi,
   saveConnectionPrefs,
 } from "../core/dc-mobile-connection.ts";
 import {
+  createDcMobileSupervisedDriver,
   discoverMdnsAddresses,
   ensureConnection,
   ensureUsbAutoAttach,
@@ -119,7 +119,7 @@ export function registerDcMobileTools(pi: ExtensionAPI): void {
       }
 
       // S15: the supervisor runs before any device-specific call.
-      const connection = ensureConnection(createDcMobileConnectionDriver());
+      const connection = ensureConnection(createDcMobileSupervisedDriver());
       if (!connection.ok) {
         return supervisorFailure(connection);
       }
@@ -165,7 +165,7 @@ export function registerDcMobileTools(pi: ExtensionAPI): void {
       }
 
       // S15: the supervisor runs before any device-specific call.
-      const connection = ensureConnection(createDcMobileConnectionDriver());
+      const connection = ensureConnection(createDcMobileSupervisedDriver());
       if (!connection.ok) {
         return supervisorFailure(connection);
       }
@@ -247,7 +247,7 @@ export function registerDcMobileTools(pi: ExtensionAPI): void {
       }
 
       // S15: the supervisor runs before any device-specific call.
-      const connection = ensureConnection(createDcMobileConnectionDriver());
+      const connection = ensureConnection(createDcMobileSupervisedDriver());
       if (!connection.ok) {
         return supervisorFailure(connection);
       }
@@ -399,7 +399,7 @@ export function registerDcMobileTools(pi: ExtensionAPI): void {
         return errorResult("modo inválido: usá usb o wifi.", { mode });
       }
 
-      const driver = createDcMobileConnectionDriver();
+      const driver = createDcMobileSupervisedDriver();
 
       try {
         if (!driver.isAvailable()) {

@@ -7,6 +7,7 @@ import {
   DEFAULT_DC_MOBILE_CONNECTION_PREFS,
   classifyTransport,
   connectWifi,
+  createDcMobileConnectionDriver,
   loadConnectionPrefs,
   type DcMobileConnectionDriver,
   type DcMobileConnectionPrefs,
@@ -255,6 +256,23 @@ export function discoverMdnsAddresses(deps: DcMobileMdnsDeps = {}): string[] {
   } catch {
     return [];
   }
+}
+
+/**
+ * Production connection driver with mDNS discovery attached (S12).
+ *
+ * Pairing alone never yields a usable serial: `adb pair` closes its port as
+ * soon as it finishes, and the port that accepts `adb connect` is the one the
+ * phone advertises over mDNS. Wiring discovery here keeps the pair flow to a
+ * single address typed by the user; without it the wizard has to ask again.
+ */
+export function createDcMobileSupervisedDriver(
+  options: Parameters<typeof createDcMobileConnectionDriver>[0] = {},
+): DcMobileConnectionDriver {
+  return {
+    ...createDcMobileConnectionDriver(options),
+    discover: () => discoverMdnsAddresses(),
+  };
 }
 
 export interface DcMobileUsbipdDeps {
