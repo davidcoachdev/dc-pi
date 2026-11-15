@@ -126,6 +126,7 @@ All extensions are unified under the canonical `dcStudioExtension` entrypoint.
 | `dc_ptc_run` | Programmatic Tool Calling (PTC): Ejecuta código JS/TS en Node.js aislado con bindings nativos (`pi.fs`, `pi.bash`) en 1 solo turno. |
 | `dc_lazyweb_search` | Consulta +281k pantallas reales, flujos de producto y experimentos A/B de Lazyweb. |
 | `dc_mobile_*` | Control soberano de dispositivos Android por ADB: dispositivos, mapa semántico `@eN` y acciones (tap, texto, teclas, swipe). |
+| `dc_takeover_request` | Abre el modal de intervención humana (CAPTCHA, 2FA, biometría, validación física) y retorna `continued`, `retry` o `aborted`. |
 | `dc_owasp_query` | Consulta directivas y snippets de seguridad de OWASP Cheat Sheets. |
 | `dc_owasp_audit` | Audita código fuente o git diffs contra vectores OWASP (SQLi, XSS, TLS, Secrets). |
 | `dc_browser_*` | Automatización de navegador vía Chrome CDP (navegación, capturas PNG, evaluación JS). |
