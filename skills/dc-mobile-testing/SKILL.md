@@ -183,6 +183,14 @@ Pedile al humano que tome el control físico del dispositivo cuando aparezca:
 
 Mientras esperás el takeover, no simules el paso ni lo marques como aprobado: registralo como `[Unknown / Unverifiable]` hasta que el humano confirme que lo completó y una nueva inspección muestre la pantalla esperada.
 
+Abrí el modal interactivo con la tool `dc_takeover_request` (`title`, `reason`, `suggestedAction`). La tool queda bloqueada hasta que el humano decida:
+
+- `continued`: el humano completó la acción manual; volvé a inspeccionar la pantalla antes de continuar.
+- `retry`: el humano pidió repetir el paso anterior.
+- `aborted`: cancelá la tarea y reportá el motivo.
+
+En entornos headless (CI, sin TUI) la tool devuelve `aborted` con una nota explicativa; no hay takeover posible.
+
 ## Veredicto
 
 El reporte final debe seguir el orden del ciclo y citar evidencia concreta:
