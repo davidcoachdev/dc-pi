@@ -52,7 +52,10 @@ Para seguir la pantalla mientras se prueba:
 
 - El comando `/dc-mobile` o el atajo `Alt+Shift+M` abren el panel del dispositivo en una ventana flotante, sin decoraciones, al estilo del visor de Herdr.
 - El mismo panel es la puerta de conexión: elegís `USB · detectar dispositivo` o `Wi-Fi · conectar`, y en Wi-Fi el intento muestra el log de adb en vivo. Si la conexión falla y el teléfono no confía en esta computadora, el panel abre la vinculación; después de vincular vuelve a la dirección con el puerto vacío porque Android rotó el puerto.
-- El visor se refresca por evento al cambiar el frame guardado en `~/.cache/dc-mobile/<serial>/latest.png`; no hace polling ni abre ventanas duplicadas para el mismo serial.
+- El visor no espera un inspect previo: al abrirlo, un proceso hijo desacoplado captura la pantalla por `adb` a razón de ~1 frame por segundo (el costo medido de `adb exec-out screencap -p` es 0.75 s) y refresca `~/.cache/dc-mobile/<serial>/latest.png` con escritura atómica. Necesita un dispositivo conectado en estado `device`.
+- El bucle de captura vive solo en ese proceso hijo: el TUI no ejecuta adb ni usa timers. Una captura a la vez; si un tick llega mientras la anterior corre, se descarta y no se encola. Al cerrar la ventana el bucle termina y no queda `adb` huérfano.
+- Si la captura falla, la ventana lo dice en texto (`adb`, `offline`, exit status, primera línea de stderr) en lugar de quedar en blanco.
+- El visor se refresca por evento al cambiar `latest.png`; no abre ventanas duplicadas para el mismo serial.
 - Al inspeccionar con `preview: true` se mantiene la captura visible en el visor, útil para observar transiciones y confirmar visualmente el resultado de una acción.
 
 Usá el visor como evidencia complementaria: el veredicto se basa en el dump semántico, la imagen solo confirma lo que el árbol de UI puede ocultar.
@@ -66,7 +69,7 @@ Qué muestra:
 - Encabezado con el conteo (`1 dispositivo`, `2 dispositivos`, `sin dispositivos`) y el transporte dominante (`USB`, `Wi-Fi`, `mixto`).
 - Una fila por teléfono con `serial`, estado (`device`, `offline`, `unauthorized`) y `model` cuando adb lo reporta.
 - Una **bitácora en vivo** de lo que pasa en el teléfono, con hora `HH:MM:SS`: `conectando <host:puerto>`, `conectado (device)`, `buscando dispositivos`, `eligiendo @eN en pantalla`, `capturando pantalla`, `visor abierto (pid N)`, `vínculo apagado`. Se guardan 200 eventos en memoria y se ven los últimos ocho.
-- `visor: abierto (pid N)` o `último frame hace Ns`. La imagen sigue viviendo en la ventana flotante.
+- `visor: abierto (pid N)` (solo mientras el pid sigue vivo) o `último frame hace Ns`, calculado desde el mtime de `latest.png`. `sin frames` aparece solo cuando el archivo de frame no existe. La imagen sigue viviendo en la ventana flotante.
 - Tres acciones de mouse: `[Reconectar]`, `[Apagar vínculo]`, `[Abrir visor]`.
 
 Reglas que no se negocian:

@@ -1,7 +1,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
+import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import * as path from "node:path";
+
 import type { DcAdbDevice } from "../src/features/dc-mobile/core/dc-adb-driver.ts";
+import { getLatestFramePath, type DcLiveViewerFailureHandler } from "../src/features/dc-mobile/core/dc-mobile-viewer.ts";
 import {
   clearMobileActivity,
   getMobileActivity,
@@ -11,6 +16,7 @@ import {
   createDcMobileSidebarCard,
   flushMobileSidebarActions,
   flushMobileSidebarSnapshot,
+  readLatestFrameAt,
   refreshMobileSidebarSnapshot,
   resetDcMobileSidebarStateForTesting,
   type DcMobileSidebarDeps,
@@ -355,4 +361,100 @@ test("card S9: adb unavailable renders a notice and disables every action", asyn
 
   assert.equal(actions, 0, "no action ran");
   assert.doesNotThrow(() => card.render(50), "render never throws");
+});
+
+test("card T3/S5: freshness comes from the frame file mtime; sin frames only when absent", async () => {
+  reset();
+
+  const cacheRoot = mkdtempSync(path.join(tmpdir(), "dc-mobile-card-"));
+  const now = Date.now();
+
+  try {
+    const deps = baseDeps({
+      now: () => now,
+      listDevices: () => [{ serial: "USB123", state: "device", model: "Pixel 7" }],
+      getViewerPid: () => undefined,
+      getLastFrameAt: (serial: string) => readLatestFrameAt(serial, cacheRoot),
+    });
+
+    const card = createDcMobileSidebarCard(undefined, deps);
+    await flushMobileSidebarSnapshot();
+
+    let lines = plain(card.render(50));
+    assert.ok(
+      lines.some((line) => /visor:\s+sin frames/.test(line)),
+      "sin frames while no frame file exists",
+    );
+
+    const framePath = getLatestFramePath("USB123", cacheRoot);
+    mkdirSync(path.dirname(framePath), { recursive: true });
+    writeFileSync(framePath, Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+
+    const sevenSecondsAgo = new Date(now - 7_000);
+    utimesSync(framePath, sevenSecondsAgo, sevenSecondsAgo);
+    await refreshMobileSidebarSnapshot(deps);
+
+    lines = plain(card.render(50));
+    assert.ok(
+      lines.some((line) => /visor:\s+último frame hace 7s/.test(line)),
+      "N comes from latest.png mtime",
+    );
+    assert.ok(
+      !lines.some((line) => /visor:\s+sin frames/.test(line)),
+      "an existing frame file is never reported as sin frames",
+    );
+
+    const fortyTwoSecondsAgo = new Date(now - 42_000);
+    utimesSync(framePath, fortyTwoSecondsAgo, fortyTwoSecondsAgo);
+    await refreshMobileSidebarSnapshot(deps);
+
+    lines = plain(card.render(50));
+    assert.ok(
+      lines.some((line) => /visor:\s+último frame hace 42s/.test(line)),
+      "the age follows the file, not a cached timestamp",
+    );
+  } finally {
+    rmSync(cacheRoot, { recursive: true, force: true });
+  }
+});
+
+test("card T2/S4: a viewer failure reason reaches the activity log as an error", async () => {
+  reset();
+
+  let notify: DcLiveViewerFailureHandler | undefined;
+
+  const deps = baseDeps({
+    listDevices: () => [{ serial: "USB123", state: "device", model: "Pixel 7" }],
+    openViewer: (serial: string, onFailure?: DcLiveViewerFailureHandler) => {
+      notify = onFailure;
+      return {
+        serial,
+        framePath: "/tmp/frame.png",
+        latestPath: "/tmp/latest.png",
+        viewer: "unavailable",
+        failureReason: "adb-no-disponible",
+        message: "adb no disponible: (adb); conectá el dispositivo y verificá adb.",
+      };
+    },
+  });
+
+  const card = createDcMobileSidebarCard(undefined, deps);
+  await flushMobileSidebarSnapshot();
+
+  const lines = plain(card.render(50));
+  assert.deepEqual(clickLine(card, lines, "[Abrir visor]"), { handled: true });
+  await flushMobileSidebarActions();
+
+  const failure = getMobileActivity().find((event) =>
+    event.message.includes("adb no disponible"),
+  );
+  assert.ok(failure, "the failure reason is a recorded event");
+  assert.equal(failure.kind, "error");
+
+  // Async failures (spawn `error`) arrive after the call returned.
+  notify?.("spawn-fallido", "no se pudo iniciar el visor Kitty: ENOENT");
+  assert.ok(
+    getMobileActivity().some((event) => event.message.includes("ENOENT")),
+    "the async spawn error is no longer discarded",
+  );
 });
