@@ -69,6 +69,7 @@ import dcGitGraphExtension from "./features/dc-git-graph/dc-git-graph.ts";
 import dcSentinelExtension from "./features/dc-sentinel/index.ts";
 import dcOwaspExtension from "./features/dc-owasp/index.ts";
 import dcLazywebExtension from "./features/dc-lazyweb/index.ts";
+import dcMobileExtension from "./features/dc-mobile/index.ts";
 import dcStateMonitorExtension from "./core/dc-agent-state/index.ts";
 import dcPtcExtension from "./features/dc-ptc/index.ts";
 import dcApprovalExtension from "./features/dc-approval/index.ts";
@@ -126,6 +127,7 @@ export {
   dcSentinelExtension,
   dcOwaspExtension,
   dcLazywebExtension,
+  dcMobileExtension,
   dcStateMonitorExtension,
   dcPtcExtension,
   dcApprovalExtension,
@@ -154,6 +156,7 @@ export * from "./features/dc-handoff/index.ts";
 export * from "./features/dc-sentinel/index.ts";
 export * from "./features/dc-owasp/index.ts";
 export * from "./features/dc-lazyweb/index.ts";
+export * from "./features/dc-mobile/index.ts";
 export * from "./features/dc-ptc/index.ts";
 export * from "./features/dc-approval/index.ts";
 export * from "./features/dc-ice/index.ts";
@@ -209,6 +212,7 @@ export function dcStudioExtension(pi: ExtensionAPI, ctx?: ExtensionContext): voi
   dcSentinelExtension(pi);
   dcOwaspExtension(pi);
   dcLazywebExtension(pi);
+  dcMobileExtension(pi);
   dcPtcExtension(pi);
   dcApprovalExtension(pi);
   dcIceExtension(pi);

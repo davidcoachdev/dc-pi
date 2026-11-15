@@ -57,6 +57,7 @@ All extensions are unified under the canonical `dcStudioExtension` entrypoint.
 | `/dc-tts` | `Alt+U` | Monitor y control de voz TTS y Asistente / TTS monitor & voice control | `dc-tts` |
 | `/inbox` | — | Buzón estructurado de subagentes en background / Background subagent report inbox | `dc-agents` |
 | `/dc-lazyweb` | — | Búsqueda e inspección de UI/UX en Lazyweb / Lazyweb UI/UX patterns explorer | `dc-lazyweb` |
+| `/dc-mobile` | — | Control de dispositivos Android por ADB y visor en vivo / Android device control & live viewer | `dc-mobile` |
 | `/dc-changes` | `Alt+F` | Visor a 2 columnas de cambios git y diffs / Two-column Git diff & changes viewer | `dc-changes` |
 | `/dc-models` | `Alt+M` | Selector a 3 columnas de modelos, cuentas y reasoning effort / Model & effort selector | `dc-models` |
 | `/dc-quota` | `Alt+Shift+Q` | Monitor interactivo de cuotas y tokens de CLIProxy / Token quota dashboard | `dc-quota` |
@@ -108,6 +109,7 @@ All extensions are unified under the canonical `dcStudioExtension` entrypoint.
 | `dc_subagent_inbox_*` | Buzón estructurado para consultar y leer reportes de subagentes ejecutados en background. |
 | `dc_ptc_run` | Programmatic Tool Calling (PTC): Ejecuta código JS/TS en Node.js aislado con bindings nativos (`pi.fs`, `pi.bash`) en 1 solo turno. |
 | `dc_lazyweb_search` | Consulta +281k pantallas reales, flujos de producto y experimentos A/B de Lazyweb. |
+| `dc_mobile_*` | Control soberano de dispositivos Android por ADB: dispositivos, mapa semántico `@eN` y acciones (tap, texto, teclas, swipe). |
 | `dc_owasp_query` | Consulta directivas y snippets de seguridad de OWASP Cheat Sheets. |
 | `dc_owasp_audit` | Audita código fuente o git diffs contra vectores OWASP (SQLi, XSS, TLS, Secrets). |
 | `dc_browser_*` | Automatización de navegador vía Chrome CDP (navegación, capturas PNG, evaluación JS). |
