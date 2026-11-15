@@ -50,6 +50,7 @@ import dcEngramExtension from "./features/dc-engram/dc-engram.ts";
 import { dcBodyExtension } from "./features/dc-body/dc-body.ts";
 import { dcPlanExtension } from "./features/dc-plan/dc-plan.ts";
 import dcAgentsExtension from "./features/dc-agents/dc-agents.ts";
+import { registerDcGroundingTools } from "./features/dc-agents/tools/dc-grounding-tools.ts";
 import dcWebsearchExtension from "./features/dc-websearch/dc-websearch.ts";
 import dcGitSyncExtension from "./features/dc-git-sync/dc-git-sync.ts";
 import dcContext7Extension from "./features/dc-context7/dc-context7.ts";
@@ -192,6 +193,7 @@ export function dcStudioExtension(pi: ExtensionAPI, ctx?: ExtensionContext): voi
   dcBodyExtension(pi);
   dcPlanExtension(pi);
   dcAgentsExtension(pi);
+  registerDcGroundingTools(pi);
   dcWebsearchExtension(pi);
   dcGitSyncExtension(pi);
   dcContext7Extension(pi);

@@ -1,5 +1,9 @@
 import { AgentSession } from "@earendil-works/pi-coding-agent";
 import { dcNotifier } from "../../../integrations/dc-notify/dc-notifier.ts";
+import {
+  auditReportGrounding,
+  type GroundingAuditResult,
+} from "./dc-grounding-ledger.ts";
 
 export const ORIGINAL_SEND_CUSTOM_MESSAGE = Symbol.for("dc.inbox.original-send-custom-message");
 export const PASSIVE_INBOX_PATCHED = Symbol.for("dc.inbox.patched");
@@ -19,6 +23,7 @@ export interface BackgroundTaskReport {
     falsifiedPremises?: string[];
     recoverySteps?: string[];
   };
+  groundingAudit?: GroundingAuditResult;
 }
 
 class SubagentInboxManager {
@@ -26,21 +31,28 @@ class SubagentInboxManager {
   private listeners: Set<(report: BackgroundTaskReport) => void> = new Set();
 
   deposit(report: BackgroundTaskReport): boolean {
+    const auditedReport: BackgroundTaskReport = report.groundingAudit
+      ? report
+      : {
+        ...report,
+        groundingAudit: auditReportGrounding(report.outcomeText, report.taskId),
+      };
     const existing = this.reports.get(report.taskId);
     if (existing) {
       this.reports.set(report.taskId, {
         ...existing,
-        label: existing.label || report.label,
-        outcomeText: report.outcomeText.length > existing.outcomeText.length
-          ? report.outcomeText : existing.outcomeText,
-        errorDetails: existing.errorDetails || report.errorDetails,
+        label: existing.label || auditedReport.label,
+        outcomeText: auditedReport.outcomeText.length > existing.outcomeText.length
+          ? auditedReport.outcomeText : existing.outcomeText,
+        errorDetails: existing.errorDetails || auditedReport.errorDetails,
+        groundingAudit: existing.groundingAudit || auditedReport.groundingAudit,
       });
       return false;
     }
-    this.reports.set(report.taskId, report);
+    this.reports.set(report.taskId, auditedReport);
     for (const listener of this.listeners) {
       try {
-        listener(report);
+        listener(auditedReport);
       } catch {
         /* best-effort notification */
       }
@@ -133,6 +145,7 @@ export function installSubagentInboxInterceptor(): boolean {
         outcomeText,
         receivedAt: Date.now(),
         read: false,
+        groundingAudit: auditReportGrounding(outcomeText, taskId),
       };
 
       const firstDelivery = subagentInboxManager.deposit(report);
@@ -140,11 +153,13 @@ export function installSubagentInboxInterceptor(): boolean {
       // Notificación visual no invasiva en UI
       try {
         if (firstDelivery) {
-        const badge = status === "completed" ? "✅" : "⚠️";
-        dcNotifier.notifyHerdr(
-          `${badge} Subagente ${agent} finalizado`,
-          label ? `Tarea: ${label} (ID: ${taskId})` : `ID: ${taskId}`,
-        );
+          const badge = report.groundingAudit?.status === "FLAGGED"
+            ? "⚠️ [UNGROUNDED]"
+            : status === "completed" ? "✅" : "⚠️";
+          dcNotifier.notifyHerdr(
+            `${badge} Subagente ${agent} finalizado`,
+            label ? `Tarea: ${label} (ID: ${taskId})` : `ID: ${taskId}`,
+          );
         }
       } catch {
         /* best-effort */
