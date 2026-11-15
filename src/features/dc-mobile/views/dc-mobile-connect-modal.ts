@@ -104,10 +104,15 @@ export class DcMobileConnectWizard implements Component {
   private mode: "wifi" | "pair" = "wifi";
   private pairAddress = "";
   private retryConnect = false;
+  /** Main-screen address the user typed before pairing was required. */
+  private pendingMainAddress = "";
+  /** A prefilled address is replaced on the first keystroke instead of appended. */
+  private addressSelected = false;
 
   constructor(private readonly options: DcMobileConnectWizardOptions) {
     this.selectedIndex = options.prefs.mode === "wifi" ? 1 : 0;
     this.address = options.prefs.lastWifiAddress;
+    this.addressSelected = this.address.length > 0;
   }
 
   invalidate(): void {}
@@ -173,6 +178,7 @@ export class DcMobileConnectWizard implements Component {
       const discovered = discoverMdnsAddresses()[0];
       if (discovered) {
         this.address = discovered;
+        this.addressSelected = true;
         this.notice = `Detectado por mDNS: ${discovered}. Enter para conectar.`;
       } else {
         this.notice = "";
@@ -196,7 +202,25 @@ export class DcMobileConnectWizard implements Component {
 
     if (this.mode === "wifi" || this.retryConnect) {
       const outcome = connectWifi(this.options.driver, address);
-      this.finish(this.wifiResult(address, outcome));
+
+      if (outcome.ok) {
+        this.finish(this.wifiResult(address, outcome));
+        return;
+      }
+
+      // A refused connect means this computer is not paired for the current
+      // wireless session. Stay in the wizard and ask for the pairing data
+      // instead of closing with an error only the phone can resolve.
+      this.pendingMainAddress = address;
+      this.retryConnect = false;
+      this.mode = "pair";
+      this.address = "";
+      this.addressSelected = false;
+      this.error = "";
+      this.notice =
+        `No se pudo conectar a ${address}. Vinculá el dispositivo y reintentamos: ` +
+        "ingresá la IP:puerto que muestra el diálogo de vinculación.";
+      this.requestRender();
       return;
     }
 
@@ -215,7 +239,12 @@ export class DcMobileConnectWizard implements Component {
     }
 
     this.error = "";
-    const outcome = pairWifi(this.options.driver, this.pairAddress, this.code);
+    const outcome = pairWifi(
+      this.options.driver,
+      this.pairAddress,
+      this.code,
+      this.pendingMainAddress || this.options.prefs.lastWifiAddress,
+    );
 
     if (outcome.ok) {
       this.finish(this.wifiResult(this.pairAddress, outcome));
@@ -227,16 +256,40 @@ export class DcMobileConnectWizard implements Component {
       return;
     }
 
-    // Pairing worked but the follow-up connect failed (S12): the pairing port
-    // closes, so ask for the port shown on the main wireless-debugging screen.
-    const host = this.pairAddress.slice(0, this.pairAddress.lastIndexOf(":"));
-    this.address = `${host}:`;
+    // Paired, but the follow-up connect did not land. Two ways out: retry the
+    // main address the user already typed (connect-first flow), or ask for it
+    // now (pair-first flow). Both keep the wizard open.
+    if (this.pendingMainAddress) {
+      const retry = connectWifi(this.options.driver, this.pendingMainAddress);
+      if (retry.ok) {
+        this.finish({
+          ok: true,
+          mode: "wifi",
+          serial: retry.serial,
+          lastWifiAddress: this.pendingMainAddress,
+          message: `Vinculado y conectado a ${this.pendingMainAddress}.`,
+        });
+        return;
+      }
+      this.address = this.pendingMainAddress;
+      this.notice = `${outcome.message} Reintentá con la dirección de la pantalla principal.`;
+    } else {
+      const host = this.pairAddress.slice(0, this.pairAddress.lastIndexOf(":"));
+      const saved = String(this.options.prefs.lastWifiAddress ?? "").trim();
+      const savedPort = saved.startsWith(`${host}:`)
+        ? saved.slice(host.length + 1)
+        : "";
+      this.address = `${host}:${savedPort}`;
+      this.notice =
+        `${outcome.message} Ingresá ahora la IP:puerto de la pantalla principal.`;
+    }
+
     this.retryConnect = true;
+    this.mode = "wifi";
     this.step = "address";
     this.code = "";
     this.error = "";
-    this.notice =
-      `${outcome.message} Ingresá ahora el puerto de la pantalla principal.`;
+    this.addressSelected = this.address.length > 0;
     this.requestRender();
   }
 
@@ -265,6 +318,10 @@ export class DcMobileConnectWizard implements Component {
       if (!digits) return;
       this.code = (this.code + digits).slice(0, 6);
     } else {
+      if (this.addressSelected) {
+        this.address = "";
+        this.addressSelected = false;
+      }
       this.address = (this.address + clean).slice(0, 80);
     }
     this.requestRender();
@@ -314,6 +371,7 @@ export class DcMobileConnectWizard implements Component {
         }
       } else if (this.address.length > 0) {
         this.address = this.address.slice(0, -1);
+        this.addressSelected = false;
         this.requestRender();
       }
       return true;
@@ -353,7 +411,12 @@ export class DcMobileConnectWizard implements Component {
     }
 
     if (this.step === "address") {
-      lines.push(`  ${t.fg("muted", "Dirección IP:puerto del dispositivo:")}`);
+      const label = this.mode === "pair"
+        ? "IP:puerto del diálogo de vinculación:"
+        : this.retryConnect
+          ? "IP:puerto de la pantalla principal (Dirección IP y puerto):"
+          : "Dirección IP:puerto del dispositivo:";
+      lines.push(`  ${t.fg("muted", label)}`);
       lines.push(`  ${t.fg("dim", "Ejemplo: 192.168.100.222:41779")}`);
       lines.push("");
       lines.push(`  ${t.fg("accent", "❯ ")}${t.fg("text", this.address)}${t.fg("accent", "█")}`);

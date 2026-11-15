@@ -250,6 +250,7 @@ export function pairWifi(
   },
   address: string,
   code: string,
+  fallbackAddress?: string,
 ): DcMobileConnectionOutcome {
   const value = typeof address === "string" ? address.trim() : "";
   const pairingCode = typeof code === "string" ? code.trim() : "";
@@ -305,6 +306,23 @@ export function pairWifi(
         paired: true,
         message:
           `Vinculado y conectado a ${candidate}, puerto principal descubierto por mDNS.`,
+      };
+    }
+  }
+
+  // WSL's NAT drops multicast, so mDNS often answers nothing here. The last
+  // address that worked is the next best source: wireless debugging keeps the
+  // same port until it is toggled off.
+  const saved = typeof fallbackAddress === "string" ? fallbackAddress.trim() : "";
+  const host = value.slice(0, value.lastIndexOf(":"));
+  if (saved && isValidWifiAddress(saved) && saved.startsWith(`${host}:`)) {
+    const attempt = connectWifi(driver, saved);
+    if (attempt.ok) {
+      return {
+        ok: true,
+        serial: attempt.serial,
+        paired: true,
+        message: `Vinculado y conectado a ${saved}, la última dirección conocida.`,
       };
     }
   }
