@@ -6,9 +6,10 @@ export const SIDEBAR_TABS: readonly DcTabItem[] = [
   { id: "main", key: "1", label: "MAIN" },
   { id: "fleet", key: "2", label: "FLEET" },
   { id: "ctrl", key: "3", label: "CTRL" },
-  { id: "tree", key: "4", label: "TREE" },
-  { id: "mem", key: "5", label: "MEM" },
-  { id: "sys", key: "6", label: "SYS" },
+  { id: "mobile", key: "4", label: "MOBILE" },
+  { id: "tree", key: "5", label: "TREE" },
+  { id: "mem", key: "6", label: "MEM" },
+  { id: "sys", key: "7", label: "SYS" },
 ];
 
 export class DcSidebarTabs implements Component {
