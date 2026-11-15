@@ -14,6 +14,11 @@ import {
   formatElementMap,
   parseUiHierarchy,
 } from "../src/features/dc-mobile/core/dc-ui-hierarchy-parser.ts";
+import type { DcMobileAdbRunner } from "../src/features/dc-mobile/core/dc-mobile-async-connection.ts";
+import {
+  DcMobileConnectWizard,
+  type DcMobileConnectResult,
+} from "../src/features/dc-mobile/views/dc-mobile-connect-modal.ts";
 
 interface RecordedCall {
   file: string;
@@ -194,4 +199,163 @@ test("dc-mobile: isAvailable is true when adb answers", () => {
   const { execFn } = recordingExecFn("Android Debug Bridge version 1.0.41");
 
   assert.equal(new DcAdbDriver({ execFn }).isAvailable(), true);
+});
+
+const SETTINGS_SCREEN_WITH_ROW = `<?xml version='1.0' encoding='UTF-8' standalone='yes' ?>
+<hierarchy rotation="0">
+  <node index="0" text="" resource-id="" class="android.widget.FrameLayout" clickable="false" bounds="[0,0][1080,1920]">
+    <node index="0" text="" content-desc="Depuración inalámbrica" resource-id="android:id/title" clickable="true" bounds="[40,1200][1040,1320]" />
+  </node>
+</hierarchy>`;
+
+const SETTINGS_SCREEN_WITH_ADDRESS = `<?xml version='1.0' encoding='UTF-8' standalone='yes' ?>
+<hierarchy rotation="0">
+  <node index="0" text="" resource-id="" class="android.widget.FrameLayout" clickable="false" bounds="[0,0][1080,1920]">
+    <node index="0" text="Dirección IP y puerto" resource-id="android:id/title" clickable="false" bounds="[40,300][1040,380]" />
+    <node index="1" text="192.168.100.222:44523" resource-id="android:id/summary" clickable="false" bounds="[40,380][1040,460]" />
+  </node>
+</hierarchy>`;
+
+interface DiscoveryHarness {
+  wizard: DcMobileConnectWizard;
+  results: DcMobileConnectResult[];
+  adbCalls: string[][];
+  renderText(): string;
+  type(text: string): void;
+  /** Lets a detection held on its first adb call continue. */
+  release(): void;
+}
+
+/** Detection waits on real settings transitions, so tests give it room. */
+async function waitForDetection(): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, 900));
+}
+
+function createDiscoveryWizard(options: { holdStart?: boolean } = {}): DiscoveryHarness {
+  const results: DiscoveryHarness["results"] = [];
+  const adbCalls: string[][] = [];
+  let release: () => void = () => {};
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let dumps = 0;
+
+  const runner: DcMobileAdbRunner = async (args, log) => {
+    adbCalls.push([...args]);
+    log(`adb ${args.join(" ")}`);
+
+    if (args[0] === "shell" && args[1] === "am") {
+      if (options.holdStart) await gate;
+      return { ok: true, output: "Starting: Intent" };
+    }
+
+    if (args[0] === "exec-out" || args[1] === "exec-out") {
+      dumps += 1;
+      return {
+        ok: true,
+        output: dumps === 1 ? SETTINGS_SCREEN_WITH_ROW : SETTINGS_SCREEN_WITH_ADDRESS,
+      };
+    }
+
+    return { ok: true, output: "" };
+  };
+
+  const driver = {
+    isAvailable: () => true,
+    listDevices: () => [],
+    connect: () => {
+      throw new Error("the wizard must use the async runner");
+    },
+    pair: () => {
+      throw new Error("the wizard must use the async runner");
+    },
+    discover: () => [],
+  };
+
+  const wizard = new DcMobileConnectWizard({
+    driver: driver as never,
+    prefs: {
+      mode: "wifi",
+      lastSerial: "",
+      lastWifiAddress: "",
+      pairedHosts: [],
+    } as never,
+    theme: { fg: (_color: string, text: string) => text, bold: (text: string) => text } as never,
+    done: (result) => results.push(result),
+    requestRender: () => {},
+    runner,
+  });
+
+  return {
+    wizard,
+    results,
+    adbCalls,
+    renderText: () => wizard.render(60).join("\n"),
+    type(text: string) {
+      for (const char of text) wizard.handleInput(char);
+    },
+    release() {
+      release();
+    },
+  };
+}
+
+test("dc-mobile wizard: S7d 'd' detects the address and fills the field", async () => {
+  const h = createDiscoveryWizard();
+
+  h.wizard.handleInput("\r");
+  h.wizard.handleInput("d");
+  await waitForDetection();
+
+  const screen = h.renderText();
+  assert.match(screen, /❯ 192\.168\.100\.222:44523/);
+  assert.match(screen, /d: Detectar en el teléfono/, "the S1 action label is visible");
+  assert.match(screen, /Detectado en el teléfono: 192\.168\.100\.222:44523/);
+  assert.equal(h.results.length, 0, "detecting must not close the wizard");
+  assert.deepEqual(h.adbCalls[0], [
+    "shell",
+    "am",
+    "start",
+    "-a",
+    "android.settings.APPLICATION_DEVELOPMENT_SETTINGS",
+  ]);
+  assert.deepEqual(h.adbCalls.at(-1), [
+    "shell",
+    "input",
+    "keyevent",
+    "KEYCODE_BACK",
+  ]);
+});
+
+test("dc-mobile wizard: S7e a late detection result never overwrites typed text", async () => {
+  const h = createDiscoveryWizard({ holdStart: true });
+
+  h.wizard.handleInput("\r");
+  h.wizard.handleInput("d");
+  // The detection is suspended on its first adb call while the user types.
+  h.type("192.168.1.9:44523");
+
+  h.release();
+  await waitForDetection();
+
+  const screen = h.renderText();
+  assert.match(screen, /192\.168\.1\.9:44523/, "the typed address is kept");
+  assert.doesNotMatch(
+    screen,
+    /192\.168\.100\.222:44523/,
+    "the detected value is discarded",
+  );
+  assert.doesNotMatch(screen, /Detectando la dirección/, "the pending notice is cleared");
+  assert.equal(h.results.length, 0);
+});
+
+test("dc-mobile wizard: `d` types normally inside an address or hostname", async () => {
+  const h = createDiscoveryWizard();
+
+  h.wizard.handleInput("\r");
+  h.type("phone.local:5555");
+  h.wizard.handleInput("d");
+
+  assert.match(h.renderText(), /phone\.local:5555d/);
+  assert.deepEqual(h.adbCalls, [], "a normal address must never start the detection");
 });
