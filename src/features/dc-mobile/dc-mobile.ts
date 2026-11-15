@@ -6,7 +6,11 @@ import {
 } from "./core/dc-adb-driver.ts";
 import { getLatestFramePath } from "./core/dc-mobile-viewer.ts";
 import { saveConnectionPrefs } from "./core/dc-mobile-connection.ts";
-import { ensureUsbAutoAttach } from "./core/dc-mobile-supervisor.ts";
+import {
+  createDcMobileSupervisedDriver,
+  discoverMdnsAddresses,
+  ensureUsbAutoAttach,
+} from "./core/dc-mobile-supervisor.ts";
 import { openDcMobileConnectModal } from "./views/dc-mobile-connect-modal.ts";
 import { registerDcMobileTools } from "./tools/dc-mobile-tools.ts";
 import { existsSync } from "node:fs";
@@ -63,7 +67,9 @@ async function runDcMobilePanel(ctx: ExtensionContext): Promise<void> {
         return;
       }
 
-      const result = await openDcMobileConnectModal(ctx);
+      // Discovery is wired in so a successful pairing reaches the
+      // advertised connect port without a second address prompt.
+      const result = await openDcMobileConnectModal(ctx, createDcMobileSupervisedDriver());
 
       if (!result || result.cancelled) {
         dcNotifier.notify(

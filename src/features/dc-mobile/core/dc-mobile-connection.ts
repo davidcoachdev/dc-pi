@@ -69,6 +69,11 @@ export interface DcMobileConnectionDriver {
   listDevices(): DcAdbDevice[];
   connect(address: string): string;
   pair(address: string, code: string): string;
+  /**
+   * mDNS-declared `host:port` endpoints (`_adb-tls-connect._tcp`). Optional:
+   * without it the flow falls back to asking for the main-screen port.
+   */
+  discover?: () => string[];
 }
 
 /** A serial containing `:` belongs to wireless debugging (S11). */
@@ -240,7 +245,9 @@ export function connectWifi(
  * pairing port closes and asks for the main-screen port.
  */
 export function pairWifi(
-  driver: Pick<DcMobileConnectionDriver, "connect" | "pair">,
+  driver: Pick<DcMobileConnectionDriver, "connect" | "pair"> & {
+    discover?: () => string[];
+  },
   address: string,
   code: string,
 ): DcMobileConnectionOutcome {
@@ -283,6 +290,25 @@ export function pairWifi(
     };
   }
 
+  // The pairing port closes as soon as pairing ends, so the same address can
+  // never accept the follow-up connect. Before asking the user to read the
+  // main-screen port, ask the phone itself over mDNS. Only endpoints on the
+  // same host are eligible: a discovered address belongs to whichever phone
+  // announced it, never to a phone on another host.
+  const discovered = resolveSameHostEndpoints(driver, value);
+  for (const candidate of discovered) {
+    const attempt = connectWifi(driver, candidate);
+    if (attempt.ok) {
+      return {
+        ok: true,
+        serial: attempt.serial,
+        paired: true,
+        message:
+          `Vinculado y conectado a ${candidate}, puerto principal descubierto por mDNS.`,
+      };
+    }
+  }
+
   return {
     ok: false,
     paired: true,
@@ -290,6 +316,40 @@ export function pairWifi(
       `Vinculación correcta, pero el connect posterior falló: ${connected.message} ` +
       "El puerto de vinculación se cierra al terminar; ingresá el puerto que muestra la pantalla principal de depuración inalámbrica.",
   };
+}
+
+/**
+ * Discovery is best-effort by design: a broken or slow `adb mdns` must never
+ * turn a successful pairing into a failure. Any endpoint whose host differs
+ * from the paired host is discarded.
+ */
+function resolveSameHostEndpoints(
+  driver: { discover?: () => string[] },
+  pairedAddress: string,
+): string[] {
+  if (!driver.discover) return [];
+
+  const host = pairedAddress.slice(0, pairedAddress.lastIndexOf(":"));
+  const seen = new Set<string>();
+  const endpoints: string[] = [];
+
+  let advertised: string[];
+  try {
+    const raw = driver.discover();
+    advertised = Array.isArray(raw) ? raw : [];
+  } catch {
+    return [];
+  }
+
+  for (const entry of advertised) {
+    const candidate = typeof entry === "string" ? entry.trim() : "";
+    if (!candidate || !isValidWifiAddress(candidate) || seen.has(candidate)) continue;
+    if (!candidate.startsWith(`${host}:`)) continue;
+    seen.add(candidate);
+    endpoints.push(candidate);
+  }
+
+  return endpoints;
 }
 
 function normalizePrefs(raw: unknown): DcMobileConnectionPrefs {

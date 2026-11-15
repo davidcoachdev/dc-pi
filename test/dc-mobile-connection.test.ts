@@ -619,3 +619,71 @@ test("dc-mobile connection: connectUsb keeps the S11 help when no Android node i
   assert.equal(outcome.ok, false);
   assert.equal(outcome.message, DC_MOBILE_USB_HELP);
 });
+
+interface DiscoveryDriverOptions {
+  discover?: () => string[];
+  refusedAddresses?: string[];
+}
+
+/** Pair succeeds, the pairing port always refuses, discovery answers. */
+function createDiscoveryDriver(options: DiscoveryDriverOptions = {}) {
+  const connects: string[] = [];
+  const refused = new Set(options.refusedAddresses ?? ["192.168.1.5:37000"]);
+
+  const driver = {
+    isAvailable: () => true,
+    listDevices: () => [],
+    connect(address: string): string {
+      connects.push(address);
+      if (refused.has(address)) {
+        return `failed to connect to '${address}': Connection refused`;
+      }
+      return `connected to ${address}`;
+    },
+    pair: (address: string) => `Successfully paired to ${address}`,
+    ...(options.discover ? { discover: options.discover } : {}),
+  };
+
+  return { driver, connects };
+}
+
+test("dc-mobile connection: pairWifi connects to the mDNS port after pairing closes", () => {
+  const { driver, connects } = createDiscoveryDriver({
+    discover: () => ["192.168.1.5:41000"],
+  });
+
+  const outcome = pairWifi(driver, "192.168.1.5:37000", "123456");
+
+  assert.deepEqual(connects, ["192.168.1.5:37000", "192.168.1.5:41000"]);
+  assert.equal(outcome.ok, true);
+  assert.equal(outcome.serial, "192.168.1.5:41000");
+  assert.match(outcome.message, /mDNS/);
+  assert.equal(outcome.paired, true);
+});
+
+test("dc-mobile connection: pairWifi ignores discovered endpoints on another host", () => {
+  const { driver, connects } = createDiscoveryDriver({
+    discover: () => ["192.168.1.9:41000", "192.168.1.5:41000:extra"],
+  });
+
+  const outcome = pairWifi(driver, "192.168.1.5:37000", "123456");
+
+  assert.deepEqual(connects, ["192.168.1.5:37000"]);
+  assert.equal(outcome.ok, false);
+  assert.equal(outcome.paired, true);
+  assert.match(outcome.message, /pantalla principal/);
+});
+
+test("dc-mobile connection: pairWifi survives a discovery failure and keeps the manual prompt", () => {
+  const { driver } = createDiscoveryDriver({
+    discover: () => {
+      throw new Error("adb mdns services unavailable");
+    },
+  });
+
+  const outcome = pairWifi(driver, "192.168.1.5:37000", "123456");
+
+  assert.equal(outcome.ok, false);
+  assert.equal(outcome.paired, true);
+  assert.match(outcome.message, /pantalla principal/);
+});
