@@ -17,6 +17,7 @@ import {
   pairWifi,
   saveConnectionPrefs,
   type DcMobileConnectionDriver,
+  type DcMobileConnectionPrefs,
 } from "../src/features/dc-mobile/core/dc-mobile-connection.ts";
 import type {
   DcAdbDevice,
@@ -311,6 +312,7 @@ test("dc-mobile connection: prefs roundtrip uses an atomic write under the given
     lastSerial: "",
     mode: "usb",
     lastWifiAddress: "",
+    pairedHosts: [],
   });
 
   const saved = saveConnectionPrefs(
@@ -326,6 +328,7 @@ test("dc-mobile connection: prefs roundtrip uses an atomic write under the given
     lastSerial: "192.168.100.222:41779",
     mode: "wifi",
     lastWifiAddress: "192.168.100.222:41779",
+    pairedHosts: [],
   });
   assert.deepEqual(loadConnectionPrefs(configPath), saved);
   assert.deepEqual(
@@ -355,6 +358,7 @@ test("dc-mobile connection: saveConnectionPrefs merges without dropping previous
     lastSerial: "192.168.1.5:5555",
     mode: "wifi",
     lastWifiAddress: "192.168.1.5:5555",
+    pairedHosts: [],
   });
 });
 
@@ -369,6 +373,7 @@ test("dc-mobile connection: corrupt or partial JSON falls back to defaults", (t)
     lastSerial: "",
     mode: "usb",
     lastWifiAddress: "",
+    pairedHosts: [],
   });
 
   fs.writeFileSync(
@@ -380,6 +385,7 @@ test("dc-mobile connection: corrupt or partial JSON falls back to defaults", (t)
     lastSerial: "",
     mode: "usb",
     lastWifiAddress: "",
+    pairedHosts: [],
   });
 });
 
@@ -734,6 +740,7 @@ interface WizardRunnerOptions {
   /** Initial connect attempts that fail before the fake adb starts accepting. */
   connectFailures?: number;
   pairOutput?: string;
+  prefs?: Partial<DcMobileConnectionPrefs>;
 }
 
 /** Lets the wizard's async run settle before the assertions. */
@@ -782,7 +789,13 @@ function createWizard(options: WizardRunnerOptions = {}): WizardHarness {
 
   const wizard = new DcMobileConnectWizard({
     driver: driver as never,
-    prefs: { mode: "usb", lastSerial: "", lastWifiAddress: "" } as never,
+    prefs: {
+      mode: "usb",
+      lastSerial: "",
+      lastWifiAddress: "",
+      pairedHosts: [],
+      ...options.prefs,
+    } as never,
     theme: { fg: (_c: string, s: string) => s, bold: (s: string) => s } as never,
     done: (result) => results.push(result),
     requestRender: () => {},
@@ -895,4 +908,180 @@ test("dc-mobile wizard: S6 a wrong code keeps the pairing screen with values and
     ["connect", "192.168.1.5:44523"],
     ["pair", "192.168.1.5:37000", "123456"],
   ]);
+});
+
+test("dc-mobile connection: pairedHosts are trimmed, deduplicated and ignore non-strings", (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "dc-mobile-connection-"));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+
+  const configPath = path.join(dir, "dc-mobile.json");
+
+  fs.writeFileSync(
+    configPath,
+    JSON.stringify({
+      lastSerial: "",
+      mode: "wifi",
+      lastWifiAddress: "",
+      pairedHosts: [" 192.168.1.5 ", "192.168.1.5", "", "   ", 42, "device.local"],
+    }),
+    "utf8",
+  );
+
+  assert.deepEqual(loadConnectionPrefs(configPath).pairedHosts, [
+    "192.168.1.5",
+    "device.local",
+  ]);
+
+  const saved = saveConnectionPrefs({ pairedHosts: ["10.0.0.2", " 10.0.0.2 "] }, configPath);
+
+  assert.deepEqual(saved.pairedHosts, ["10.0.0.2"]);
+  assert.equal(saved.mode, "wifi", "normalizing pairedHosts must keep the other prefs");
+});
+
+test("dc-mobile wizard: S9 a paired retry failure clears the port instead of reopening pairing", async () => {
+  // first connect fails, the retry after pairing also fails, then the new port works.
+  const h = createWizard({ connectFailures: 2 });
+
+  h.wizard.handleInput("\u001b[B");
+  h.wizard.handleInput("\r");
+  h.type("192.168.1.5:44523");
+  h.wizard.handleInput("\r");
+  await settle();
+
+  h.type("37000");
+  h.wizard.handleInput("\t");
+  h.type("123456");
+  h.wizard.handleInput("\r");
+  await settle();
+
+  assert.equal(h.results.length, 0, "a failed retry must keep the wizard open");
+  assert.deepEqual(h.adbCalls, [
+    ["connect", "192.168.1.5:44523"],
+    ["pair", "192.168.1.5:37000", "123456"],
+    ["connect", "192.168.1.5:44523"],
+  ]);
+
+  const addressScreen = h.renderText();
+  assert.match(addressScreen, /IP:puerto que muestra la pantalla principal/);
+  assert.doesNotMatch(
+    addressScreen,
+    /❯ 192\.168\.1\.5:\d/,
+    "the stale port must never be prefilled after pairing",
+  );
+  assert.match(addressScreen, /❯ 192\.168\.1\.5:█/, "the host is kept with an empty port");
+  assert.match(addressScreen, /Connection\s+refused/, "the adb error is kept");
+  assert.match(
+    addressScreen,
+    /puerto de depuración\s+inalámbrica\s+cambia al vincular/,
+  );
+  assert.match(addressScreen, /pantalla principal/, "the user is told where to copy the new URL");
+
+  // Enter with an empty port must still fail validation.
+  h.wizard.handleInput("\r");
+  await settle();
+  assert.equal(h.results.length, 0);
+  assert.match(h.renderText(), /Dirección inválida/);
+  assert.equal(h.adbCalls.length, 3, "an invalid address must not reach adb");
+
+  // The new port is appended to the host that is still selected.
+  h.type("51234");
+  h.wizard.handleInput("\r");
+  await settle();
+
+  assert.deepEqual(h.adbCalls[3], ["connect", "192.168.1.5:51234"]);
+  assert.equal(h.results.length, 1);
+  assert.equal(h.results[0]?.ok, true);
+  assert.equal(h.results[0]?.serial, "192.168.1.5:51234");
+  assert.equal(h.results[0]?.pairedHost, "192.168.1.5");
+});
+
+test("dc-mobile wizard: S10 a known host never reopens pairing unless 'p' is pressed", async () => {
+  const h = createWizard({
+    connectFailures: 1,
+    prefs: { pairedHosts: ["192.168.1.5"] },
+  });
+
+  h.wizard.handleInput("\u001b[B");
+  h.wizard.handleInput("\r");
+  h.type("192.168.1.5:41779");
+  h.wizard.handleInput("\r");
+  await settle();
+
+  assert.equal(h.results.length, 0);
+  assert.deepEqual(h.adbCalls, [["connect", "192.168.1.5:41779"]]);
+
+  const addressScreen = h.renderText();
+  assert.match(addressScreen, /IP:puerto que muestra la pantalla principal/);
+  assert.doesNotMatch(addressScreen, /Código de 6 dígitos/, "pairing must not open by itself");
+  assert.match(addressScreen, /ya está vinculado/i);
+  assert.match(addressScreen, /puerto/i);
+  assert.match(addressScreen, /presioná p/i);
+
+  h.wizard.handleInput("p");
+
+  const pairingScreen = h.renderText();
+  assert.equal(h.results.length, 0);
+  assert.match(pairingScreen, /IP:puerto del diálogo de vinculación/);
+  assert.match(pairingScreen, /192\.168\.1\.5:/, "the pairing host is prefilled");
+  assert.doesNotMatch(pairingScreen, /p192/, "'p' must never be inserted as a character");
+  assert.deepEqual(h.adbCalls, [["connect", "192.168.1.5:41779"]]);
+
+  // On the pairing screen `p` is ignored instead of being typed.
+  h.wizard.handleInput("p");
+  assert.doesNotMatch(h.renderText(), /p192/, "'p' must stay a command key");
+});
+
+test("dc-mobile wizard: S11 a successful pairing reports the pairing host", async () => {
+  const h = createWizard({ connectFailures: 1 });
+
+  h.wizard.handleInput("\u001b[B");
+  h.wizard.handleInput("\r");
+  h.type("192.168.1.5:44523");
+  h.wizard.handleInput("\r");
+  await settle();
+
+  h.type("37000");
+  h.wizard.handleInput("\t");
+  h.type("123456");
+  h.wizard.handleInput("\r");
+  await settle();
+
+  assert.equal(h.results.length, 1);
+  assert.equal(h.results[0]?.ok, true);
+  assert.equal(h.results[0]?.pairedHost, "192.168.1.5");
+});
+
+test("dc-mobile wizard: S11 keeps pairedHost when the final connect failed", async () => {
+  const h = createWizard({ connectFailures: 2 });
+
+  h.wizard.handleInput("\u001b[B");
+  h.wizard.handleInput("\r");
+  h.type("192.168.1.5:44523");
+  h.wizard.handleInput("\r");
+  await settle();
+
+  h.type("37000");
+  h.wizard.handleInput("\t");
+  h.type("123456");
+  h.wizard.handleInput("\r");
+  await settle();
+
+  assert.equal(h.results.length, 0);
+  h.wizard.handleInput("\u001b");
+  assert.equal(h.results.length, 1);
+  assert.equal(h.results[0]?.cancelled, true);
+  assert.equal(h.results[0]?.pairedHost, "192.168.1.5");
+});
+
+test("dc-mobile wizard: `p` types normally inside a hostname", async () => {
+  const h = createWizard({ prefs: { mode: "wifi" } });
+
+  h.wizard.handleInput("\r");
+  h.type("phone.local:5555");
+  h.wizard.handleInput("\r");
+  await settle();
+
+  assert.equal(h.results.length, 1);
+  assert.equal(h.results[0]?.ok, true);
+  assert.equal(h.results[0]?.serial, "phone.local:5555");
 });

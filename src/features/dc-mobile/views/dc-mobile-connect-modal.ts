@@ -56,6 +56,8 @@ export interface DcMobileConnectResult {
   mode?: DcMobileConnectionMode;
   serial?: string;
   lastWifiAddress?: string;
+  /** S11: host that completed pairing in this run, even if the retry failed. */
+  pairedHost?: string;
   message: string;
 }
 
@@ -80,6 +82,14 @@ export interface DcMobileConnectWizardOptions {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/** Host part of a `host:port` value; empty when there is no host. */
+function hostOfAddress(address: string): string {
+  const value = address.trim();
+  const index = value.lastIndexOf(":");
+  if (index <= 0) return "";
+  return value.slice(0, index).trim();
 }
 
 function wrapText(text: string, width: number): string[] {
@@ -124,6 +134,10 @@ export class DcMobileConnectWizard implements Component {
   private notice = "";
   /** A prefilled address is replaced on the first keystroke instead of appended. */
   private addressSelected = false;
+  /** S10: hosts already paired on this computer (session + persisted prefs). */
+  private readonly pairedHosts: Set<string>;
+  /** S11: host paired during this run, returned even when the retry failed. */
+  private pairedHost?: string;
 
   private logs: string[] = [];
   private spinnerIdx = 0;
@@ -134,6 +148,11 @@ export class DcMobileConnectWizard implements Component {
     this.selectedIndex = options.prefs.mode === "wifi" ? 1 : 0;
     this.address = options.prefs.lastWifiAddress;
     this.addressSelected = this.address.length > 0;
+    this.pairedHosts = new Set(
+      (options.prefs.pairedHosts ?? [])
+        .map((host) => host.trim())
+        .filter(Boolean),
+    );
   }
 
   invalidate(): void {}
@@ -150,7 +169,13 @@ export class DcMobileConnectWizard implements Component {
     if (this.finished) return;
     this.finished = true;
     this.stopSpinner();
-    this.options.done(result);
+    // S11: a pairing that already happened stays in the result even when the
+    // user leaves before the retry succeeds.
+    this.options.done(
+      this.pairedHost && !result.pairedHost
+        ? { ...result, pairedHost: this.pairedHost }
+        : result,
+    );
   }
 
   private cancel(): void {
@@ -275,26 +300,60 @@ export class DcMobileConnectWizard implements Component {
         return;
       }
 
-      // S4: the pairing screen keeps the log context of the failed connect.
-      this.leaveRunning();
-      this.step = "pair";
-      this.pairUrl = this.pairUrlFromMain(mainAddress);
-      this.pairFocus = "url";
-      this.code = "";
-      this.error = "";
-      this.notice =
-        `No se pudo conectar a ${mainAddress}. Vinculá el dispositivo y reintentamos.`;
-      this.requestRender();
+      this.handleConnectFailure(mainAddress, outcome.message);
     } catch (error) {
       if (this.finished) return;
-      this.leaveRunning();
-      this.step = "pair";
-      this.pairUrl = this.pairUrlFromMain(mainAddress);
-      this.pairFocus = "url";
-      this.code = "";
-      this.error = errorMessage(error);
-      this.requestRender();
+      this.handleConnectFailure(mainAddress, errorMessage(error));
     }
+  }
+
+  /**
+   * S4/S10: a failed connect opens pairing only for a host this computer has
+   * never paired with. A known host stays on the address step with an explicit
+   * error, because the debugging port changes when pairing completes.
+   */
+  private handleConnectFailure(mainAddress: string, message: string): void {
+    this.leaveRunning();
+    const host = hostOfAddress(mainAddress);
+
+    if (host && this.pairedHosts.has(host)) {
+      this.step = "address";
+      this.address = `${host}:`;
+      this.addressSelected = true;
+      this.notice = "";
+      this.error =
+        `No se pudo conectar a ${mainAddress}, pero este equipo ya está vinculado con ${host}: ` +
+        "es posible que el puerto de depuración inalámbrica haya cambiado. " +
+        "Copiá la URL nueva de la pantalla principal y reintentá. " +
+        "Si querés volver a vincular, presioná p.";
+      this.requestRender();
+      return;
+    }
+
+    // S4: the pairing screen keeps the log context of the failed connect.
+    this.step = "pair";
+    this.pairUrl = this.pairUrlFromMain(mainAddress);
+    this.pairFocus = "url";
+    this.code = "";
+    this.error = message;
+    this.notice =
+      `No se pudo conectar a ${mainAddress}. Vinculá el dispositivo y reintentamos.`;
+    this.requestRender();
+  }
+
+  /** S10: `p` on the address step asks for pairing even for a known host. */
+  private openPairingScreen(): void {
+    const host = hostOfAddress(this.address);
+
+    this.step = "pair";
+    this.pairUrl = host ? `${host}:` : "";
+    this.pairFocus = "url";
+    this.code = "";
+    this.error = "";
+    this.notice = host
+      ? `Vinculación manual para ${host}. Ingresá el puerto que muestra el diálogo de vinculación.`
+      : "";
+    this.requestRender();
   }
 
   private submitPair(): void {
@@ -339,6 +398,14 @@ export class DcMobileConnectWizard implements Component {
         return;
       }
 
+      // S10/S11: remember this host immediately. A retry failure must not send
+      // the user back into pairing for a host that is already paired.
+      const pairedHost = hostOfAddress(pairUrl) || hostOfAddress(mainAddress);
+      if (pairedHost) {
+        this.pairedHost = pairedHost;
+        this.pairedHosts.add(pairedHost);
+      }
+
       const retried = await connectWifiAsync(runner, mainAddress, log);
       if (this.finished) return;
 
@@ -347,13 +414,18 @@ export class DcMobileConnectWizard implements Component {
         return;
       }
 
-      // Paired, but the main address still refuses: let the user re-check the
-      // main-screen URL without losing the log or re-entering the code.
+      // S9: paired, but the main address still refuses. The wireless-debugging
+      // port changes when pairing completes (observed :41779 -> :44523), so
+      // never prefill the stale port: pressing Enter would repeat the same
+      // failure forever. Ask for the new main-screen port instead.
       this.leaveRunning();
       this.step = "address";
-      this.address = mainAddress;
+      const host = hostOfAddress(mainAddress);
+      this.address = host ? `${host}:` : "";
       this.addressSelected = true;
-      this.notice = "";
+      this.notice =
+        "La vinculación se completó, pero el puerto de depuración inalámbrica " +
+        "cambia al vincular. Copiá la URL nueva de la pantalla principal y presioná Enter.";
       this.error = `Vinculación correcta, pero el connect posterior falló: ${retried.message}`;
       this.requestRender();
     } catch (error) {
@@ -371,16 +443,15 @@ export class DcMobileConnectWizard implements Component {
       mode: "wifi",
       serial: address,
       lastWifiAddress: address,
+      ...(this.pairedHost ? { pairedHost: this.pairedHost } : {}),
       message: `Conectado a ${address}.`,
     };
   }
 
   /** S4: prefill the pairing host from the main address, port left to the user. */
   private pairUrlFromMain(mainAddress: string): string {
-    const value = mainAddress.trim();
-    const index = value.lastIndexOf(":");
-    if (index <= 0) return "";
-    return `${value.slice(0, index)}:`;
+    const host = hostOfAddress(mainAddress);
+    return host ? `${host}:` : "";
   }
 
   private insertChar(data: string): void {
@@ -401,7 +472,9 @@ export class DcMobileConnectWizard implements Component {
     }
 
     if (this.addressSelected) {
-      this.address = "";
+      // S9: a `host:` value has no port yet, so typing must extend the host
+      // instead of wiping the prefilled address.
+      if (!this.address.endsWith(":")) this.address = "";
       this.addressSelected = false;
     }
     this.address = (this.address + clean).slice(0, 80);
@@ -418,6 +491,18 @@ export class DcMobileConnectWizard implements Component {
 
     // S5: the run owns the screen until it finishes; only Esc leaves.
     if (this.step === "running") return true;
+
+    // S10: `p` is a command key only while the address has no port yet (the
+    // state after a pairing changed the wireless port). Anywhere else it is an
+    // ordinary character, so a hostname can always be typed.
+    if (
+      matchesKey(data, "p") &&
+      this.step === "address" &&
+      this.address.trim().endsWith(":")
+    ) {
+      this.openPairingScreen();
+      return true;
+    }
 
     if (this.step === "choose") {
       const total = DC_MOBILE_CONNECT_OPTIONS.length;
@@ -576,7 +661,7 @@ export class DcMobileConnectWizard implements Component {
       `  ${t.fg(
         "dim",
         this.step === "address"
-          ? "Enter: conectar  ·  Esc: cancelar"
+          ? "Enter: conectar  ·  p: vincular  ·  Esc: cancelar"
           : "Tab/Enter: pasar al código  ·  Enter: vincular  ·  Esc: cancelar",
       )}`,
     );

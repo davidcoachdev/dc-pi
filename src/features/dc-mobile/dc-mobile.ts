@@ -5,7 +5,7 @@ import {
   DcAdbDriver,
 } from "./core/dc-adb-driver.ts";
 import { getLatestFramePath } from "./core/dc-mobile-viewer.ts";
-import { saveConnectionPrefs } from "./core/dc-mobile-connection.ts";
+import { loadConnectionPrefs, saveConnectionPrefs } from "./core/dc-mobile-connection.ts";
 import {
   createDcMobileSupervisedDriver,
   discoverMdnsAddresses,
@@ -71,13 +71,26 @@ async function runDcMobilePanel(ctx: ExtensionContext): Promise<void> {
       // advertised connect port without a second address prompt.
       const result = await openDcMobileConnectModal(ctx, createDcMobileSupervisedDriver());
 
-      if (!result || result.cancelled) {
-        dcNotifier.notify(
-          ctx,
-          "DC Mobile",
-          result?.message ?? "Conexión cancelada.",
-          "warning",
-        );
+      if (!result) {
+        dcNotifier.notify(ctx, "DC Mobile", "Conexión cancelada.", "warning");
+        return;
+      }
+
+      // S11: a pairing that already succeeded survives the reload even when
+      // the final connect failed or the user leaves the wizard afterwards.
+      if (!result.ok && result.pairedHost) {
+        saveConnectionPrefs({
+          pairedHosts: Array.from(
+            new Set([
+              ...(loadConnectionPrefs().pairedHosts ?? []),
+              result.pairedHost,
+            ]),
+          ),
+        });
+      }
+
+      if (result.cancelled) {
+        dcNotifier.notify(ctx, "DC Mobile", result.message, "warning");
         return;
       }
 
@@ -96,6 +109,17 @@ async function runDcMobilePanel(ctx: ExtensionContext): Promise<void> {
         mode: result.mode ?? "usb",
         ...(result.lastWifiAddress
           ? { lastWifiAddress: result.lastWifiAddress }
+          : {}),
+        // S11: a successful pairing survives the reload, without duplicates.
+        ...(result.pairedHost
+          ? {
+              pairedHosts: Array.from(
+                new Set([
+                  ...(loadConnectionPrefs().pairedHosts ?? []),
+                  result.pairedHost,
+                ]),
+              ),
+            }
           : {}),
       });
       if ((result.mode ?? "usb") === "usb") {

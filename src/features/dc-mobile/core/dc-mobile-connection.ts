@@ -37,12 +37,20 @@ export interface DcMobileConnectionPrefs {
   lastSerial: string;
   mode: DcMobileConnectionMode;
   lastWifiAddress: string;
+  /**
+   * Hosts (no port) that completed `adb pair` on this computer (S10/S11).
+   * Optional only so older callers/tests that build a prefs literal keep
+   * type-checking; `normalizePrefs` and the defaults always resolve to an
+   * array.
+   */
+  pairedHosts?: string[];
 }
 
 export const DEFAULT_DC_MOBILE_CONNECTION_PREFS: DcMobileConnectionPrefs = {
   lastSerial: "",
   mode: "usb",
   lastWifiAddress: "",
+  pairedHosts: [],
 };
 
 /** Exact guidance when the phone has not accepted the RSA fingerprint yet. */
@@ -370,9 +378,29 @@ function resolveSameHostEndpoints(
   return endpoints;
 }
 
+/** S11: only non-empty trimmed strings survive; duplicates are dropped. */
+function normalizePairedHosts(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return [];
+
+  const seen = new Set<string>();
+  const hosts: string[] = [];
+
+  for (const entry of raw) {
+    if (typeof entry !== "string") continue;
+
+    const host = entry.trim();
+    if (!host || seen.has(host)) continue;
+
+    seen.add(host);
+    hosts.push(host);
+  }
+
+  return hosts;
+}
+
 function normalizePrefs(raw: unknown): DcMobileConnectionPrefs {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
-    return { ...DEFAULT_DC_MOBILE_CONNECTION_PREFS };
+    return { ...DEFAULT_DC_MOBILE_CONNECTION_PREFS, pairedHosts: [] };
   }
 
   const candidate = raw as Record<string, unknown>;
@@ -383,6 +411,7 @@ function normalizePrefs(raw: unknown): DcMobileConnectionPrefs {
     mode: candidate.mode === "wifi" ? "wifi" : "usb",
     lastWifiAddress:
       typeof candidate.lastWifiAddress === "string" ? candidate.lastWifiAddress : "",
+    pairedHosts: normalizePairedHosts(candidate.pairedHosts),
   };
 }
 
@@ -397,7 +426,7 @@ export function loadConnectionPrefs(
     const raw = fs.readFileSync(configPath, "utf8");
     return normalizePrefs(JSON.parse(raw));
   } catch {
-    return { ...DEFAULT_DC_MOBILE_CONNECTION_PREFS };
+    return { ...DEFAULT_DC_MOBILE_CONNECTION_PREFS, pairedHosts: [] };
   }
 }
 
