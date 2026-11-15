@@ -61,6 +61,7 @@ import dcYoutubeExtension from "./features/dc-youtube/dc-youtube.ts";
 import dcAudioExtension from "./features/dc-audio/dc-audio.ts";
 import dcTtsExtension from "./features/dc-tts/dc-tts.ts";
 import dcDateExtension from "./features/dc-date/dc-date.ts";
+import dcPreambleExtension from "./features/dc-preamble/dc-preamble.ts";
 import dcCodegraphExtension from "./features/dc-codegraph/dc-codegraph.ts";
 import dcScanGuardExtension from "./features/dc-scan-guard/index.ts";
 import dcCheckpointExtension from "./features/dc-checkpoint/index.ts";
@@ -202,6 +203,7 @@ export function dcStudioExtension(pi: ExtensionAPI, ctx?: ExtensionContext): voi
   dcAudioExtension(pi);
   dcTtsExtension(pi);
   dcDateExtension(pi);
+  dcPreambleExtension(pi);
   dcCodegraphExtension(pi);
   dcScanGuardExtension(pi);
   dcCheckpointExtension(pi);
