@@ -165,10 +165,13 @@ function draw(force = false) {
   try {
     const { columns, rows } = terminalSize();
     const label = serial ? `${serial} \u00b7 ${frameName}` : frameName;
+    const hint = " [q/Esc para salir] ";
+    const available = Math.max(0, columns - 14 - label.length);
+    const rightSide = available >= hint.length ? `${DIM}${hint}${RESET}` : "";
 
     writeStdout(CLEAR);
     writeLine(
-      `${BG}${ACCENT}\u258c${FOREGROUND} DC MOBILE ${ACCENT}\u00b7${FOREGROUND} ${label}${RESET}`,
+      `${BG}${ACCENT}\u258c${FOREGROUND} DC MOBILE ${ACCENT}\u00b7${FOREGROUND} ${label}${rightSide}${RESET}`,
     );
     writeLine(`${DEEP_RED}${ACCENT}${"\u2500".repeat(columns)}${RESET}`);
 
@@ -380,6 +383,18 @@ process.on("SIGTERM", () => cleanup(0));
 process.on("SIGINT", () => cleanup(0));
 process.on("SIGHUP", () => cleanup(0));
 process.on("exit", () => stopCapture());
+
+if (process.stdin.isTTY) {
+  process.stdin.setRawMode(true);
+  process.stdin.resume();
+  process.stdin.on("data", (chunk) => {
+    const key = chunk.toString();
+    // q, Q, Escape (\u001b), Ctrl+C (\u0003), Ctrl+W (\u0017)
+    if (key === "q" || key === "Q" || key === "\u001b" || key === "\u0003" || key === "\u0017") {
+      cleanup(0);
+    }
+  });
+}
 
 draw(true);
 
