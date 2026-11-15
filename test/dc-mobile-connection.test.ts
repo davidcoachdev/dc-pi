@@ -24,6 +24,10 @@ import type {
   DcAdbExecOptions,
 } from "../src/features/dc-mobile/core/dc-adb-driver.ts";
 import {
+  DcMobileConnectWizard,
+  type DcMobileConnectResult,
+} from "../src/features/dc-mobile/views/dc-mobile-connect-modal.ts";
+import {
   ensureAndroidUsbWritable,
   findAndroidUsbNodes,
   restartAdbServer,
@@ -686,4 +690,124 @@ test("dc-mobile connection: pairWifi survives a discovery failure and keeps the 
   assert.equal(outcome.ok, false);
   assert.equal(outcome.paired, true);
   assert.match(outcome.message, /pantalla principal/);
+});
+
+test("dc-mobile connection: pairWifi falls back to the last working address when mDNS is silent", () => {
+  const { driver, connects } = createDiscoveryDriver({
+    discover: () => [],
+    refusedAddresses: ["192.168.1.5:37000"],
+  });
+
+  const outcome = pairWifi(driver, "192.168.1.5:37000", "123456", "192.168.1.5:41000");
+
+  assert.deepEqual(connects, ["192.168.1.5:37000", "192.168.1.5:41000"]);
+  assert.equal(outcome.ok, true);
+  assert.equal(outcome.serial, "192.168.1.5:41000");
+  assert.match(outcome.message, /última dirección conocida/);
+});
+
+test("dc-mobile connection: pairWifi never reuses a saved address from another host", () => {
+  const { driver, connects } = createDiscoveryDriver({
+    discover: () => [],
+  });
+
+  const outcome = pairWifi(driver, "192.168.1.5:37000", "123456", "192.168.1.9:41000");
+
+  assert.deepEqual(connects, ["192.168.1.5:37000"]);
+  assert.equal(outcome.ok, false);
+  assert.equal(outcome.paired, true);
+  assert.match(outcome.message, /pantalla principal/);
+});
+
+interface WizardHarness {
+  wizard: DcMobileConnectWizard;
+  results: DcMobileConnectResult[];
+  connects: string[];
+  type(text: string): void;
+}
+
+/** Connect only works after the device was paired, like the real adb. */
+function createWizard(connectable: string[]): WizardHarness {
+  const results: WizardHarness["results"] = [];
+  const connects: string[] = [];
+  const allowed = new Set(connectable);
+  let paired = false;
+
+  const driver = {
+    isAvailable: () => true,
+    listDevices: () => [],
+    connect(address: string): string {
+      connects.push(address);
+      if (!paired || !allowed.has(address)) {
+        throw new Error(`failed to connect to ${address}`);
+      }
+      return `connected to ${address}`;
+    },
+    pair(address: string): string {
+      paired = true;
+      return `Successfully paired to ${address}`;
+    },
+    discover: () => [],
+  };
+
+  const wizard = new DcMobileConnectWizard({
+    driver: driver as never,
+    prefs: { mode: "wifi", lastSerial: "", lastWifiAddress: "" } as never,
+    theme: { fg: (_c: string, s: string) => s, bold: (s: string) => s } as never,
+    done: (result) => results.push(result),
+    requestRender: () => {},
+  });
+
+  return {
+    wizard,
+    results,
+    connects,
+    type(text: string) {
+      for (const char of text) wizard.handleInput(char);
+    },
+  };
+}
+
+test("dc-mobile wizard: a refused connect asks for pairing and retries the typed address", () => {
+  const h = createWizard(["192.168.1.5:44523"]);
+
+  h.wizard.handleInput("\r");
+  h.type("192.168.1.5:44523");
+  h.wizard.handleInput("\r");
+
+  assert.equal(h.results.length, 0, "el wizard debe seguir abierto pidiendo vinculación");
+
+  h.type("192.168.1.5:37000");
+  h.wizard.handleInput("\r");
+  h.type("123456");
+  h.wizard.handleInput("\r");
+
+  assert.equal(h.results.length, 1);
+  assert.equal(h.results[0]?.ok, true);
+  assert.equal(h.results[0]?.serial, "192.168.1.5:44523");
+  assert.deepEqual(h.connects, [
+    "192.168.1.5:44523",
+    "192.168.1.5:37000",
+    "192.168.1.5:44523",
+  ]);
+});
+
+test("dc-mobile wizard: pairing first asks for the main address afterwards", () => {
+  const h = createWizard(["192.168.1.5:44523"]);
+
+  h.wizard.handleInput("\u001b[B");
+  h.wizard.handleInput("\r");
+  h.type("192.168.1.5:37000");
+  h.wizard.handleInput("\r");
+  h.type("123456");
+  h.wizard.handleInput("\r");
+
+  assert.equal(h.results.length, 0, "tras vincular debe pedir la pantalla principal");
+
+  h.type("192.168.1.5:44523");
+  h.wizard.handleInput("\r");
+
+  assert.equal(h.results.length, 1);
+  assert.equal(h.results[0]?.ok, true);
+  assert.equal(h.results[0]?.serial, "192.168.1.5:44523");
 });
