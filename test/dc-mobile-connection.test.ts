@@ -24,9 +24,11 @@ import type {
   DcAdbExecOptions,
 } from "../src/features/dc-mobile/core/dc-adb-driver.ts";
 import {
+  DC_MOBILE_CONNECT_OPTIONS,
   DcMobileConnectWizard,
   type DcMobileConnectResult,
 } from "../src/features/dc-mobile/views/dc-mobile-connect-modal.ts";
+import type { DcMobileAdbRunner } from "../src/features/dc-mobile/core/dc-mobile-async-connection.ts";
 import {
   ensureAndroidUsbWritable,
   findAndroidUsbNodes,
@@ -722,92 +724,175 @@ test("dc-mobile connection: pairWifi never reuses a saved address from another h
 interface WizardHarness {
   wizard: DcMobileConnectWizard;
   results: DcMobileConnectResult[];
-  connects: string[];
+  /** Every adb argument list the wizard asked the runner to execute. */
+  adbCalls: string[][];
+  renderText(): string;
   type(text: string): void;
 }
 
-/** Connect only works after the device was paired, like the real adb. */
-function createWizard(connectable: string[]): WizardHarness {
+interface WizardRunnerOptions {
+  /** Initial connect attempts that fail before the fake adb starts accepting. */
+  connectFailures?: number;
+  pairOutput?: string;
+}
+
+/** Lets the wizard's async run settle before the assertions. */
+async function settle(): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, 0));
+}
+
+function createWizard(options: WizardRunnerOptions = {}): WizardHarness {
   const results: WizardHarness["results"] = [];
-  const connects: string[] = [];
-  const allowed = new Set(connectable);
-  let paired = false;
+  const adbCalls: string[][] = [];
+  let remainingFailures = options.connectFailures ?? 0;
+
+  const runner: DcMobileAdbRunner = async (args, log) => {
+    adbCalls.push([...args]);
+    log(`adb ${args.join(" ")}`);
+
+    if (args[0] === "connect") {
+      const address = args[1]!;
+      if (remainingFailures > 0) {
+        remainingFailures -= 1;
+        return {
+          ok: false,
+          output: `failed to connect to '${address}': Connection refused`,
+        };
+      }
+      return { ok: true, output: `connected to ${address}` };
+    }
+
+    return {
+      ok: true,
+      output: options.pairOutput ?? `Successfully paired to ${args[1]}`,
+    };
+  };
 
   const driver = {
     isAvailable: () => true,
     listDevices: () => [],
-    connect(address: string): string {
-      connects.push(address);
-      if (!paired || !allowed.has(address)) {
-        throw new Error(`failed to connect to ${address}`);
-      }
-      return `connected to ${address}`;
+    connect: () => {
+      throw new Error("the wizard must use the async runner");
     },
-    pair(address: string): string {
-      paired = true;
-      return `Successfully paired to ${address}`;
+    pair: () => {
+      throw new Error("the wizard must use the async runner");
     },
     discover: () => [],
   };
 
   const wizard = new DcMobileConnectWizard({
     driver: driver as never,
-    prefs: { mode: "wifi", lastSerial: "", lastWifiAddress: "" } as never,
+    prefs: { mode: "usb", lastSerial: "", lastWifiAddress: "" } as never,
     theme: { fg: (_c: string, s: string) => s, bold: (s: string) => s } as never,
     done: (result) => results.push(result),
     requestRender: () => {},
+    runner,
   });
 
   return {
     wizard,
     results,
-    connects,
+    adbCalls,
+    renderText: () => wizard.render(60).join("\n"),
     type(text: string) {
       for (const char of text) wizard.handleInput(char);
     },
   };
 }
 
-test("dc-mobile wizard: a refused connect asks for pairing and retries the typed address", () => {
-  const h = createWizard(["192.168.1.5:44523"]);
-
-  h.wizard.handleInput("\r");
-  h.type("192.168.1.5:44523");
-  h.wizard.handleInput("\r");
-
-  assert.equal(h.results.length, 0, "el wizard debe seguir abierto pidiendo vinculación");
-
-  h.type("192.168.1.5:37000");
-  h.wizard.handleInput("\r");
-  h.type("123456");
-  h.wizard.handleInput("\r");
-
-  assert.equal(h.results.length, 1);
-  assert.equal(h.results[0]?.ok, true);
-  assert.equal(h.results[0]?.serial, "192.168.1.5:44523");
-  assert.deepEqual(h.connects, [
-    "192.168.1.5:44523",
-    "192.168.1.5:37000",
-    "192.168.1.5:44523",
-  ]);
+test("dc-mobile wizard: S1 has a single Wi-Fi path with no pairing option", () => {
+  assert.equal(DC_MOBILE_CONNECT_OPTIONS.length, 3);
+  assert.deepEqual(
+    DC_MOBILE_CONNECT_OPTIONS.map((option) => option.label),
+    ["USB · detectar dispositivo", "Wi-Fi · conectar", "Cancelar"],
+  );
+  assert.deepEqual(
+    DC_MOBILE_CONNECT_OPTIONS.map((option) => option.id),
+    ["usb", "wifi", "cancel"],
+  );
+  assert.ok(
+    !DC_MOBILE_CONNECT_OPTIONS.some((option) => (option.id as string) === "pair"),
+    "no separate pairing option may be offered",
+  );
 });
 
-test("dc-mobile wizard: pairing first asks for the main address afterwards", () => {
-  const h = createWizard(["192.168.1.5:44523"]);
+test("dc-mobile wizard: S3 a successful connect skips pairing and closes ok", async () => {
+  const h = createWizard();
 
   h.wizard.handleInput("\u001b[B");
   h.wizard.handleInput("\r");
-  h.type("192.168.1.5:37000");
-  h.wizard.handleInput("\r");
-  h.type("123456");
-  h.wizard.handleInput("\r");
-
-  assert.equal(h.results.length, 0, "tras vincular debe pedir la pantalla principal");
-
   h.type("192.168.1.5:44523");
   h.wizard.handleInput("\r");
+  await settle();
 
+  assert.deepEqual(h.adbCalls, [["connect", "192.168.1.5:44523"]]);
+  assert.equal(h.results.length, 1);
+  assert.deepEqual(h.results[0], {
+    ok: true,
+    mode: "wifi",
+    serial: "192.168.1.5:44523",
+    lastWifiAddress: "192.168.1.5:44523",
+    message: "Conectado a 192.168.1.5:44523.",
+  });
+});
+
+test("dc-mobile wizard: S4/S7 a failed connect asks URL+code and retries the main address", async () => {
+  const h = createWizard({ connectFailures: 1 });
+
+  h.wizard.handleInput("\u001b[B");
+  h.wizard.handleInput("\r");
+  h.type("192.168.1.5:44523");
+  h.wizard.handleInput("\r");
+  await settle();
+
+  assert.equal(h.results.length, 0, "el wizard debe seguir abierto pidiendo vinculación");
+  const pairingScreen = h.renderText();
+  assert.match(pairingScreen, /IP:puerto del diálogo de vinculación/);
+  assert.match(pairingScreen, /Código de 6 dígitos/);
+  assert.match(pairingScreen, /192\.168\.1\.5:/, "precarga el host de vinculación");
+
+  h.type("37000");
+  h.wizard.handleInput("\t");
+  h.type("123456");
+  h.wizard.handleInput("\r");
+  await settle();
+
+  assert.deepEqual(h.adbCalls, [
+    ["connect", "192.168.1.5:44523"],
+    ["pair", "192.168.1.5:37000", "123456"],
+    ["connect", "192.168.1.5:44523"],
+  ]);
   assert.equal(h.results.length, 1);
   assert.equal(h.results[0]?.ok, true);
   assert.equal(h.results[0]?.serial, "192.168.1.5:44523");
+  assert.equal(h.results[0]?.message, "Conectado a 192.168.1.5:44523.");
+});
+
+test("dc-mobile wizard: S6 a wrong code keeps the pairing screen with values and error", async () => {
+  const h = createWizard({
+    connectFailures: 1,
+    pairOutput: "Failed: Wrong password or connection was dropped.",
+  });
+
+  h.wizard.handleInput("\u001b[B");
+  h.wizard.handleInput("\r");
+  h.type("192.168.1.5:44523");
+  h.wizard.handleInput("\r");
+  await settle();
+
+  h.type("37000");
+  h.wizard.handleInput("\t");
+  h.type("123456");
+  h.wizard.handleInput("\r");
+  await settle();
+
+  assert.equal(h.results.length, 0, "un código incorrecto no debe cerrar el wizard");
+  const screen = h.renderText();
+  assert.match(screen, /Wrong password/);
+  assert.match(screen, /192\.168\.1\.5:37000/, "conserva la URL de vinculación");
+  assert.match(screen, /123456/, "conserva el código");
+  assert.deepEqual(h.adbCalls, [
+    ["connect", "192.168.1.5:44523"],
+    ["pair", "192.168.1.5:37000", "123456"],
+  ]);
 });
