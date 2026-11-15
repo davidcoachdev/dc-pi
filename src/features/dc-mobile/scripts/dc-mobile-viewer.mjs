@@ -37,6 +37,7 @@ const DEFAULT_ADB = "adb";
 
 const RESET = "\x1b[0m";
 const CLEAR = "\x1b[2J\x1b[H";
+const DIM = "\x1b[2m";
 const BG = "\x1b[48;2;16;10;13m";
 const ACCENT = "\x1b[38;2;255;51;51m";
 const FOREGROUND = "\x1b[38;2;255;204;204m";
