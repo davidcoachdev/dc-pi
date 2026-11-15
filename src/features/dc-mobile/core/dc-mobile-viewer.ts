@@ -27,7 +27,7 @@ export const DC_MOBILE_VIEWER_SCRIPT = fileURLToPath(
 );
 
 export const DC_MOBILE_KITTY_OPTIONS: ReadonlyArray<string> = [
-  "hide_window_decorations=yes",
+  "hide_window_decorations=no",
   "remember_window_size=no",
   "confirm_os_window_close=0",
   "background=#100a0d",
