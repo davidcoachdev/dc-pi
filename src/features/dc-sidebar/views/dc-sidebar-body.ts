@@ -13,6 +13,7 @@ import { createAgentsCard } from "../components/dc-sidebar-agents-card.ts";
 import { createContextCard } from "../components/dc-sidebar-context-card.ts";
 import { createProjectTreeCard } from "../components/dc-sidebar-tree-card.ts";
 import { createSuperAgentsSidebarCard } from "../components/dc-sidebar-super-agents-card.ts";
+import { createDcMobileSidebarCard } from "../../dc-mobile/views/dc-mobile-sidebar-card.ts";
 import { readSidebarPrefs } from "../core/dc-sidebar-prefs.ts";
 
 export class DcPadding implements Component {
@@ -128,18 +129,23 @@ export class DcSidebarPagedBody implements Component {
         const ctrlCard = createSuperAgentsSidebarCard(this.reqRender);
         return new DcPadding(ctrlCard, 0, 0, 1);
       }
+      case "mobile": {
+        // [4:MOBILE] Supervisor dc-mobile: conexión, bitácora y visor
+        const mobileCard = createDcMobileSidebarCard(this.reqRender);
+        return new DcPadding(mobileCard, 0, 0, 1);
+      }
       case "tree": {
-        // [4:TREE] Explorador de Archivos del Proyecto
+        // [5:TREE] Explorador de Archivos del Proyecto
         const treeCard = createProjectTreeCard(this.projectRoot, undefined, this.reqRender);
         return new DcPadding(treeCard, 0, 0, 1);
       }
       case "mem": {
-        // [5:MEM] Memoria Soberana: Engram Daemon + Centinela
+        // [6:MEM] Memoria Soberana: Engram Daemon + Centinela
         const memCard = createMemoryVaultCard(this.reqRender);
         return new DcPadding(memCard, 0, 0, 1);
       }
       case "sys": {
-        // [6:SYS] Perfiles de Modelo + MCP Servers
+        // [7:SYS] Perfiles de Modelo + MCP Servers
         const sysCard = createSystemCard(this.reqRender);
         return new DcPadding(sysCard, 0, 0, 1);
       }
