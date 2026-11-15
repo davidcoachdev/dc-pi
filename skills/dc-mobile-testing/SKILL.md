@@ -4,7 +4,7 @@ description: "Trigger: mobile testing, probar app android, emulador, adb, celula
 license: MIT
 metadata:
   author: dc-studio
-  version: "1.4"
+  version: "1.5"
 ---
 
 # dc-mobile-testing: Probar Apps Android con ADB desde dc-pi
@@ -56,6 +56,25 @@ Para seguir la pantalla mientras se prueba:
 - Al inspeccionar con `preview: true` se mantiene la captura visible en el visor, útil para observar transiciones y confirmar visualmente el resultado de una acción.
 
 Usá el visor como evidencia complementaria: el veredicto se basa en el dump semántico, la imagen solo confirma lo que el árbol de UI puede ocultar.
+
+## Pestaña `[4] MOBILE` del Sidebar
+
+El sidebar gana esta pestaña con `Alt+4` o `/dc-sidebar 4`; las demás se corrieron un número (`TREE` 5, `MEM` 6, `SYS` 7). Es una tarjeta supervisora, no un visor de imagen: el rail mide 50 columnas y renderiza solo texto.
+
+Qué muestra:
+
+- Encabezado con el conteo (`1 dispositivo`, `2 dispositivos`, `sin dispositivos`) y el transporte dominante (`USB`, `Wi-Fi`, `mixto`).
+- Una fila por teléfono con `serial`, estado (`device`, `offline`, `unauthorized`) y `model` cuando adb lo reporta.
+- Una **bitácora en vivo** de lo que pasa en el teléfono, con hora `HH:MM:SS`: `conectando <host:puerto>`, `conectado (device)`, `buscando dispositivos`, `eligiendo @eN en pantalla`, `capturando pantalla`, `visor abierto (pid N)`, `vínculo apagado`. Se guardan 200 eventos en memoria y se ven los últimos ocho.
+- `visor: abierto (pid N)` o `último frame hace Ns`. La imagen sigue viviendo en la ventana flotante.
+- Tres acciones de mouse: `[Reconectar]`, `[Apagar vínculo]`, `[Abrir visor]`.
+
+Reglas que no se negocian:
+
+- **Sin sondeo**: la tarjeta no llama a adb dentro de `render()` ni usa `setInterval`. El snapshot se toma asíncrono al montar la pestaña y después de cada acción, vive en alcance de módulo y el repintado llega por suscripción a eventos.
+- Si `adb` no está disponible la tarjeta dice `adb no disponible` y las acciones no se dibujan como accionables. `render()` nunca lanza excepción.
+- El todo de la sesión sigue viviendo en `[1] MAIN`; esta pestaña no lo duplica.
+- La tarjeta no tiene teclas propias: el sidebar no maneja teclado y no se inventan atajos para ella.
 
 ## Conexión del Dispositivo
 

@@ -97,6 +97,20 @@ All extensions are unified under the canonical `dcStudioExtension` entrypoint.
 | `/dc-audio` | — | Diagnóstico del sintetizador de voz TTS / Local TTS audio synthesizer status | `dc-audio` |
 | `/dc-git-sync` | — | Auditoría de sincronización de rama contra upstream / Git upstream sync auditor | `dc-git-sync` |
 
+### Sidebar Tabs / Pestañas del Sidebar
+
+`Alt+1..7` or `/dc-sidebar <n>` jump straight to a tab; both resolve to the same tab, and the rail is 50 columns wide with text-only rendering.
+
+| Key | Tab | Content |
+| :--- | :--- | :--- |
+| `1` | MAIN | Project, context and the session todo |
+| `2` | FLEET | Provider quotas, taxi fleet and ephemeral subagents |
+| `3` | CTRL | Central Office of Super-Agents |
+| `4` | MOBILE | dc-mobile supervisor: devices, live activity log, `[Reconectar]` / `[Apagar vínculo]` / `[Abrir visor]` |
+| `5` | TREE | Project file explorer |
+| `6` | MEM | Engram daemon and memory sentinel |
+| `7` | SYS | Model profiles and MCP servers |
+
 ---
 
 ## Specialized LLM Tools / Herramientas Especializadas para Agentes

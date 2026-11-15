@@ -23,6 +23,7 @@ import {
   ensureUsbAutoAttach,
   type DcMobileSupervisorResult,
 } from "../core/dc-mobile-supervisor.ts";
+import { recordMobileActivity } from "../core/dc-mobile-activity.ts";
 
 /** Last inspect per serial, used to resolve `@eN` element ids in tap (S4). */
 export interface DcMobileInspection {
@@ -67,6 +68,9 @@ function errorMessage(error: unknown): string {
  * else is surfaced as `isError: true` (S15).
  */
 function supervisorFailure(result: DcMobileSupervisorResult): any {
+  // S3/S10: the sidebar timeline mirrors what the supervisor decided.
+  recordMobileActivity(result.guided ? "discover" : "error", result.message);
+
   if (result.guided) {
     return textResult(result.message, {
       guided: true,
@@ -115,8 +119,11 @@ export function registerDcMobileTools(pi: ExtensionAPI): void {
       const driver = new DcAdbDriver();
 
       if (!driver.isAvailable()) {
+        recordMobileActivity("error", "adb no disponible");
         return errorResult(DC_ADB_UNAVAILABLE_MESSAGE, { adbAvailable: false });
       }
+
+      recordMobileActivity("discover", "buscando dispositivos");
 
       // S15: the supervisor runs before any device-specific call.
       const connection = ensureConnection(createDcMobileSupervisedDriver());
@@ -126,11 +133,18 @@ export function registerDcMobileTools(pi: ExtensionAPI): void {
 
       try {
         const devices = driver.listDevices();
+        const online = devices.find((device) => device.state === "device");
+        recordMobileActivity(
+          online ? "connect" : "discover",
+          online ? "conectado (device)" : "sin dispositivos",
+        );
+
         return textResult(
           `Dispositivos conectados (${devices.length}):\n${deviceLines(devices)}`,
           { adbAvailable: true, devices },
         );
       } catch (error) {
+        recordMobileActivity("error", errorMessage(error));
         return errorResult(`Error en dc_adb_devices: ${errorMessage(error)}`);
       }
     },
@@ -161,6 +175,7 @@ export function registerDcMobileTools(pi: ExtensionAPI): void {
 
       const driver = new DcAdbDriver();
       if (!driver.isAvailable()) {
+        recordMobileActivity("error", "adb no disponible");
         return errorResult(DC_ADB_UNAVAILABLE_MESSAGE, { adbAvailable: false });
       }
 
@@ -171,6 +186,7 @@ export function registerDcMobileTools(pi: ExtensionAPI): void {
       }
 
       try {
+        recordMobileActivity("inspect", "capturando pantalla");
         const png = driver.captureScreen(serial);
         const saved = saveFrame(serial, png);
         const xml = driver.dumpHierarchy(serial);
@@ -190,6 +206,15 @@ export function registerDcMobileTools(pi: ExtensionAPI): void {
             ? openLiveViewer(serial, { framePath: saved.framePath })
             : undefined;
 
+        if (viewer) {
+          recordMobileActivity(
+            "viewer",
+            typeof viewer.pid === "number"
+              ? `visor abierto (pid ${viewer.pid})`
+              : viewer.message,
+          );
+        }
+
         return textResult(formatElementMap(elements), {
           serial,
           elementCount: elements.length,
@@ -199,6 +224,7 @@ export function registerDcMobileTools(pi: ExtensionAPI): void {
           ...(viewer ? { viewer } : {}),
         });
       } catch (error) {
+        recordMobileActivity("error", errorMessage(error));
         return errorResult(`Error en dc_mobile_screen_inspect: ${errorMessage(error)}`);
       }
     },
@@ -243,6 +269,7 @@ export function registerDcMobileTools(pi: ExtensionAPI): void {
 
       const driver = new DcAdbDriver();
       if (!driver.isAvailable()) {
+        recordMobileActivity("error", "adb no disponible");
         return errorResult(DC_ADB_UNAVAILABLE_MESSAGE, { adbAvailable: false });
       }
 
@@ -273,6 +300,7 @@ export function registerDcMobileTools(pi: ExtensionAPI): void {
 
               x = element.center.x;
               y = element.center.y;
+              recordMobileActivity("action", `eligiendo ${elementId} en pantalla`);
             } else {
               x = readNumber(params?.x);
               y = readNumber(params?.y);
@@ -283,6 +311,7 @@ export function registerDcMobileTools(pi: ExtensionAPI): void {
             }
 
             driver.inputTap(serial, x, y);
+            recordMobileActivity("action", `tocando (${x}, ${y})`);
             return textResult(`tap en (${x}, ${y}) ejecutado en ${serial}.`, {
               serial,
               action,
@@ -299,12 +328,14 @@ export function registerDcMobileTools(pi: ExtensionAPI): void {
             }
 
             driver.inputText(serial, text);
+            recordMobileActivity("action", "escribiendo texto");
             return textResult(`texto escrito en ${serial}.`, { serial, action });
           }
 
           case "key": {
             const key = String(params?.key ?? "").trim();
             driver.inputKey(serial, key);
+            recordMobileActivity("action", `tecla ${key}`);
             return textResult(`tecla ${key} enviada a ${serial}.`, { serial, action, key });
           }
 
@@ -320,6 +351,10 @@ export function registerDcMobileTools(pi: ExtensionAPI): void {
 
             const durationMs = readNumber(params?.durationMs) ?? 300;
             driver.swipe(serial, x1, y1, x2, y2, durationMs);
+            recordMobileActivity(
+              "action",
+              `deslizando (${x1}, ${y1}) → (${x2}, ${y2})`,
+            );
 
             return textResult(
               `swipe (${x1}, ${y1}) → (${x2}, ${y2}) en ${durationMs}ms ejecutado en ${serial}.`,
@@ -334,6 +369,7 @@ export function registerDcMobileTools(pi: ExtensionAPI): void {
             }
 
             driver.launch(serial, packageName);
+            recordMobileActivity("action", `lanzando ${packageName}`);
             return textResult(`paquete ${packageName} lanzado en ${serial}.`, {
               serial,
               action,
@@ -348,6 +384,7 @@ export function registerDcMobileTools(pi: ExtensionAPI): void {
             }
 
             driver.forceStop(serial, packageName);
+            recordMobileActivity("action", `deteniendo ${packageName}`);
             return textResult(`paquete ${packageName} detenido en ${serial}.`, {
               serial,
               action,
@@ -362,6 +399,7 @@ export function registerDcMobileTools(pi: ExtensionAPI): void {
             );
         }
       } catch (error) {
+        recordMobileActivity("error", errorMessage(error));
         return errorResult(`Error en dc_mobile_action: ${errorMessage(error)}`);
       }
     },
@@ -403,13 +441,16 @@ export function registerDcMobileTools(pi: ExtensionAPI): void {
 
       try {
         if (!driver.isAvailable()) {
+          recordMobileActivity("error", "adb no disponible");
           return errorResult(DC_ADB_UNAVAILABLE_MESSAGE, { adbAvailable: false });
         }
 
         if (mode === "usb") {
+          recordMobileActivity("discover", "buscando dispositivos");
           const outcome = connectUsb(driver);
 
           if (!outcome.ok) {
+            recordMobileActivity(outcome.guided ? "discover" : "error", outcome.message);
             if (outcome.guided) {
               // A pending RSA fingerprint is a guided next step, not an error.
               return textResult(outcome.message, {
@@ -422,6 +463,7 @@ export function registerDcMobileTools(pi: ExtensionAPI): void {
           }
 
           const serial = outcome.serial ?? "";
+          recordMobileActivity("connect", "conectado (device)");
           saveConnectionPrefs({ lastSerial: serial, mode: "usb" });
           ensureUsbAutoAttach();
 
@@ -434,15 +476,21 @@ export function registerDcMobileTools(pi: ExtensionAPI): void {
           address = discoverMdnsAddresses()[0] ?? "";
         }
         if (!address) {
+          recordMobileActivity("error", "address requerido para mode wifi.");
           return errorResult("address requerido para mode wifi.", { mode: "wifi" });
         }
 
         const code = String(params?.code ?? "").trim();
+        recordMobileActivity(
+          code ? "pair" : "connect",
+          code ? `vinculando ${address}` : `conectando ${address}`,
+        );
         const outcome = code
           ? pairWifi(driver, address, code)
           : connectWifi(driver, address);
 
         if (!outcome.ok) {
+          recordMobileActivity("error", outcome.message);
           return errorResult(outcome.message, {
             mode: "wifi",
             address,
@@ -450,6 +498,7 @@ export function registerDcMobileTools(pi: ExtensionAPI): void {
           });
         }
 
+        recordMobileActivity("connect", "conectado (device)");
         saveConnectionPrefs({
           lastSerial: outcome.serial,
           mode: "wifi",
@@ -462,6 +511,7 @@ export function registerDcMobileTools(pi: ExtensionAPI): void {
           address,
         });
       } catch (error) {
+        recordMobileActivity("error", errorMessage(error));
         return errorResult(`Error en dc_mobile_connect: ${errorMessage(error)}`, {
           mode,
         });
