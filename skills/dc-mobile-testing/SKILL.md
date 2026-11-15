@@ -4,7 +4,7 @@ description: "Trigger: mobile testing, probar app android, emulador, adb, celula
 license: MIT
 metadata:
   author: dc-studio
-  version: "1.1"
+  version: "1.3"
 ---
 
 # dc-mobile-testing: Probar Apps Android con ADB desde dc-pi
@@ -134,6 +134,26 @@ Límites que hay que reportar, no disimular:
 
 - Con **mensajes temporales** activos el historial se borra por diseño: encontrar solo avisos de sistema y llamadas no es un fallo de extracción.
 - Un dump no trae el contenido de audio ni de video. Sin transcripción aparte, la evidencia es «nota de voz de N segundos a las HH:MM», no el texto hablado.
+
+## Descubrir el Puerto Wi-Fi en el Teléfono
+
+El puerto de depuración inalámbrica rota al vincular y no vive en `settings`. Se lee de la propia pantalla:
+
+1. `adb shell am start -a android.settings.APPLICATION_DEVELOPMENT_SETTINGS` abre Opciones de desarrollador.
+2. La fila `Depuración inalámbrica` suele quedar debajo del fold: `input swipe 540 1600 540 600 300` hasta verla (en el SM_G781U1 alcanza un swipe).
+3. El tap sobre esa fila abre la pantalla que muestra `Dirección IP y puerto`.
+4. Se extrae con `(\d{1,3}(\.\d{1,3}){3}):(\d{1,5})` y se valida puerto 1-65535 con host privado o link-local.
+
+Trampas verificadas en este host:
+
+- `adb shell exec-out uiautomator dump` falla con `exec-out: inaccessible or not found`: `exec-out` es flag del **host**, no del shell del teléfono. La forma correcta es `adb exec-out uiautomator dump /dev/tty`.
+- El intent directo al fragmento (`--es ":settings:show_fragment" com.android.settings.development.WirelessDebuggingFragment`) tira `SecurityException` en Samsung. No insistas por esa vía.
+- Abrir Settings secuestra la pantalla del usuario. Sólo con acción explícita (tecla `d` en el wizard) y devolviendo las pantallas con `back` al terminar.
+- La fila `Depuración inalámbrica` son **dos nodos**: el título `android:id/title` tiene el texto y `clickable="false"`; el switch `com.android.settings:id/switchWidget` es clickeable pero su texto está vacío y la etiqueta vive en `content-desc`. Buscar `clickable && text` nunca encuentra el título y sí encuentra el switch.
+- **Nunca tapes el switch**: apaga la depuración inalámbrica y con ella el puerto que estabas buscando. Tapeá el centro del título (en el SM_G781U1, `300 1492`).
+- Un puerto abierto no implica ADB: el puerto de **vinculación** acepta TCP y habla TLS/SPAKE2, así que `adb connect` lo deja `offline` y `adb pair` responde `protocol fault`. El puerto principal es otro y se lee en la pantalla principal, no en el diálogo.
+- Los puertos rotan con cada activación y un escaneo de rango puede dar falsos negativos: verificá con `adb -s <host>:<puerto> get-state`, no con un solo barrido.
+- El teléfono duerme la depuración inalámbrica con la pantalla: `adb shell svc power stayon true` antes de una corrida larga.
 
 ## Takeover Humano
 
