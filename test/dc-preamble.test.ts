@@ -50,6 +50,74 @@ test("replaceSystemPreambles leaves messages without a preamble section alone", 
   assert.equal("preamble" in result[0]!.sections!, false, "must not create missing preamble sections");
 });
 
+function publicHook(env: Record<string, string | undefined> = {}) {
+  const handlers = new Map<string, (event: any) => any>();
+  const pi = { on: (name: string, fn: (event: any) => any) => handlers.set(name, fn) } as unknown as ExtensionAPI;
+  dcPreambleExtension(pi, env);
+  return handlers.get("context_with_system")!;
+}
+
+test("public hook normalizes only the four approved prose labels in structured system sections", () => {
+  const sections = {
+    preamble: "old preamble",
+    docs: "# Pi documentation\nUse Pi SDK with the Pi runtime and Pi-specific coding-agent harness.",
+    rules: "Pi documentation: consult Pi documentation.",
+    cwd: "/workspace/Pi documentation",
+    extra: { label: "Pi SDK" },
+  };
+  const messages = [{ role: "system", content: "Pi documentation", sections }];
+  const original = structuredClone(messages);
+  const result = publicHook({ DC_PREAMBLE: "Pi SDK override" })({ messages });
+
+  assert.equal(result.messages[0].sections.docs, "# Documentation\nUse SDK with the runtime and coding-agent harness.");
+  assert.equal(result.messages[0].sections.rules, "Documentation: consult Documentation.");
+  assert.equal(result.messages[0].sections.preamble, "Pi SDK override", "explicit override stays verbatim");
+  assert.equal(result.messages[0].sections.cwd, sections.cwd);
+  assert.equal(result.messages[0].sections.extra, sections.extra);
+  assert.equal(result.messages[0].content, "Pi documentation");
+  assert.deepEqual(messages, original, "original messages and sections stay unchanged");
+});
+
+test("public hook preserves technical identifiers, code, non-system messages and opaque text", () => {
+  const technical = [
+    "/opt/pi/docs /opt/Pi documentation/readme.md",
+    "@earendil-works/pi-coding-agent pi -e ./extension.ts PI_MODEL DC_PREAMBLE",
+    "spin pipeline raspberrypi pi documentation Pi SDKHelper Pi runtime_config",
+    "`Pi documentation` and `Pi SDK`",
+    "```text\nPi runtime\nPi-specific coding-agent harness\n```",
+  ].join("\n");
+  const messages = [
+    { role: "system", sections: { docs: technical, cwd: "Pi SDK" } },
+    { role: "system", content: "Pi documentation Pi SDK" },
+    { role: "user", content: "Pi documentation", sections: { docs: "Pi SDK" } },
+    { role: "toolResult", content: "Pi runtime", sections: { docs: "Pi documentation" } },
+  ];
+  const original = structuredClone(messages);
+  const result = publicHook()({ messages });
+  assert.deepEqual(result.messages, original);
+  assert.deepEqual(messages, original);
+});
+
+test("public hook preserves indented Markdown code while normalizing surrounding prose", () => {
+  const docs = "Pi documentation\n\n    Pi SDK\n     Pi runtime\n\tPi-specific coding-agent harness\n\n   Pi SDK\nPi runtime\n";
+  const messages = [{ role: "system", sections: { docs } }];
+  const result = publicHook()({ messages });
+  assert.equal(
+    result.messages[0].sections.docs,
+    "Documentation\n\n    Pi SDK\n     Pi runtime\n\tPi-specific coding-agent harness\n\n   SDK\nruntime\n",
+  );
+  assert.equal(messages[0].sections.docs, docs, "original indented code stays unchanged");
+});
+
+test("public hook handles labels without a preamble and is idempotent", () => {
+  const handler = publicHook();
+  const messages = [{ role: "system", sections: { docs: "Pi documentation" } }];
+  const first = handler({ messages });
+  assert.deepEqual(first.messages, [{ role: "system", sections: { docs: "Documentation" } }]);
+  assert.deepEqual(handler(first), first);
+  assert.deepEqual(messages[0].sections, { docs: "Pi documentation" });
+});
+
 test("DEFAULT_PREAMBLE matches the audited third-party replacement", () => {
   assert.equal(
     DEFAULT_PREAMBLE,
