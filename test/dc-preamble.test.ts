@@ -118,11 +118,16 @@ test("public hook handles labels without a preamble and is idempotent", () => {
   assert.deepEqual(messages[0].sections, { docs: "Pi documentation" });
 });
 
-test("DEFAULT_PREAMBLE matches the audited third-party replacement", () => {
-  assert.equal(
-    DEFAULT_PREAMBLE,
-    "You are a coding assistant. Help users inspect files, run commands, and modify code.",
-  );
+test("public hook uses the minimal default preamble and preserves project instructions", () => {
+  const messages = baseMessages();
+  const original = structuredClone(messages);
+  const result = publicHook()({ messages });
+
+  assert.equal(DEFAULT_PREAMBLE, "You are an expert coding assistant.");
+  assert.equal(result.messages[0].sections.preamble, "You are an expert coding assistant.");
+  assert.equal(result.messages[0].sections.rules, messages[0]!.sections!.rules);
+  assert.equal(result.messages[0].sections.cwd, messages[0]!.sections!.cwd);
+  assert.deepEqual(messages, original);
 });
 
 test("extension wires context_with_system and honors DC_PREAMBLE override", () => {
