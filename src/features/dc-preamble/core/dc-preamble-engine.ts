@@ -4,8 +4,7 @@
  * Opaque content, cwd, non-string sections and non-system messages stay intact.
  */
 
-export const DEFAULT_PREAMBLE =
-  "You are a coding assistant. Help users inspect files, run commands, and modify code.";
+export const DEFAULT_PREAMBLE = "You are an expert coding assistant.";
 
 export interface SectionedSystemMessage {
   role: string;
