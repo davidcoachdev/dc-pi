@@ -45,11 +45,7 @@ export function formatModelDisplayName(modelId: string): string {
 export function convertCliProxyToModelItem(raw: CliProxyModelItem, provider = "cpam"): ModelItem {
   const id = raw.id;
   const isReasoning =
-    id.toLowerCase().includes("thinking") ||
-    id.toLowerCase().includes("reasoning") ||
-    id.toLowerCase().includes("opus") ||
-    id.toLowerCase().includes("o1") ||
-    id.toLowerCase().includes("o3");
+    /thinking|reasoning|opus|o1|o3|gemini|flash|argon|hydrogen|carbon|tiered/i.test(id);
 
   const contextWindow = resolveRecommendedContextWindow(id, typeof raw.context_window === "number" ? raw.context_window : undefined);
   const maxTokens = resolveSafeMaxTokens(typeof raw.max_tokens === "number" ? raw.max_tokens : undefined);

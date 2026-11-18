@@ -11,6 +11,16 @@ export const MAX_SAFE_OUTPUT_TOKENS = 65_536;
 /**
  * Techos máximos seguros de contexto por familia de modelo para prevenir
  * timeouts de red, desbordes de buffer y fallos de streaming en CLIProxyAPI.
+ *
+ * NOTA DE CALIBRACIÓN DE INGENIERÍA DE CONTEXTO (Gemini / Antigravity):
+ * Aunque Gemini 3.8 y Gemini 4 anuncian hasta 1.048.576 tokens de ventana teórica,
+ * la investigación empírica en sistemas de agentes (Lost-in-the-Middle y "Dumb Zone")
+ * demuestra que el razonamiento y la precisión en llamadas a herramientas comienzan
+ * a degradarse (context rot) al superar los ~350.000 - 400.000 tokens acumulados.
+ *
+ * Calibramos la ventana útil efectiva de Gemini en 370.000 tokens para que Pi
+ * ejecute la compactación y poda de memoria ANTES de entrar en la zona de degradación,
+ * asegurando la máxima fiabilidad en tareas agenticas complejas.
  */
 export const RECOMMENDED_CONTEXT_CAPS: Record<string, number> = {
   gemini: 370_000,
