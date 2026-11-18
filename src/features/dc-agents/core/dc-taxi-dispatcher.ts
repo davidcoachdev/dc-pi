@@ -652,8 +652,6 @@ export function acquireOrchestratorTaxi(
         if (
           lower.startsWith("ac") ||
           lower.startsWith("cc") ||
-          lower.startsWith("nan-") ||
-          lower.startsWith("nan_") ||
           lower.startsWith("uc") ||
           isVipAccount(lower)
         ) {

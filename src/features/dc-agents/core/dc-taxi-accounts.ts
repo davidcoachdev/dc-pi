@@ -88,24 +88,18 @@ export function discoverCpamAccounts(
   );
 }
 
-/** Cuentas VIP reservadas exclusivamente para el orquestador bajo selección manual (cc1..cc4, nan-01..nan-06, uc01...) */
+/** Cuentas VIP reservadas exclusivamente para el orquestador bajo selección manual (cc1..cc4, uc01...) */
 export const DEFAULT_VIP_ACCOUNTS: readonly string[] = [
   "cc1",
   "cc2",
   "cc3",
   "cc4",
-  "nan-01",
-  "nan-02",
-  "nan-03",
-  "nan-04",
-  "nan-05",
-  "nan-06",
   "uc01",
 ];
 
 export const VIP_ACCOUNTS: readonly string[] = DEFAULT_VIP_ACCOUNTS;
 
-const VIP_ACCOUNT_PATTERN = /^(?:cc[-_]?\d+|uc[-_]?\d+|nan(?:[-_]?\d+)?)$/i;
+const VIP_ACCOUNT_PATTERN = /^(?:cc[-_]?\d+|uc[-_]?\d+)$/i;
 
 export function isVipAccount(account?: string): boolean {
   if (!account) return false;

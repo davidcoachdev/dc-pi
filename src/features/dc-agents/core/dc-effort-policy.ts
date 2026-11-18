@@ -208,9 +208,6 @@ export function resolveExecutionModel(
       if (
         firstLower.startsWith("ac") ||
         firstLower.startsWith("cc") ||
-        firstLower.startsWith("nan-") ||
-        firstLower.startsWith("nan_") ||
-        firstLower === "nan" ||
         firstLower.startsWith("uc") ||
         isVipAccount(firstLower)
       ) {

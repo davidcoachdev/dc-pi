@@ -344,7 +344,7 @@ test("TaxiUnitList: pestañas Activas, Taller y VIP filtran correctamente las un
     { account: "ac03", status: "en_taller" as const, tier: "standard" as const, passenger: null, workshopReason: "Permiso Denegado" },
     { account: "ac04", status: "recargando" as const, tier: "standard" as const, passenger: null },
     { account: "cc1", status: "libre" as const, tier: "vip" as const, passenger: null },
-    { account: "nan-01", status: "libre" as const, tier: "vip" as const, passenger: null },
+    { account: "uc01", status: "libre" as const, tier: "vip" as const, passenger: null },
   ];
 
   list.update(mockUnits);
@@ -376,7 +376,7 @@ test("TaxiUnitList: pestañas Activas, Taller y VIP filtran correctamente las un
   assert.ok(list.children.some((c) => c.options.title.includes("ac04")));
   assert.ok(!list.children.some((c) => c.options.title.includes("ac01")));
 
-  // 3. Cambiar a pestaña "vip" (deben mostrarse cc1 y nan-01 y expandir VIP)
+  // 3. Cambiar a pestaña "vip" (deben mostrarse cc1 y uc01 y expandir VIP)
   tabsComp.options.onSelect("vip");
   renderedTabs = tabsComp.options.tabs;
   assert.equal(renderedTabs[0].label, "🚕 2");
@@ -385,7 +385,7 @@ test("TaxiUnitList: pestañas Activas, Taller y VIP filtran correctamente las un
 
   assert.equal(list.children.length, 2);
   assert.ok(list.children.some((c) => c.options.title.includes("cc1")));
-  assert.ok(list.children.some((c) => c.options.title.includes("nan-01")));
+  assert.ok(list.children.some((c) => c.options.title.includes("uc01")));
   assert.ok(!list.children.some((c) => c.options.title.includes("ac01")));
   assert.ok(!list.children.some((c) => c.options.title.includes("ac03")));
 });

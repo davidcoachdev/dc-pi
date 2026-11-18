@@ -14,7 +14,7 @@ import { isVipAccount, VIP_ACCOUNTS, discoverVipAccounts } from "../src/features
 import { resolveExecutionModel } from "../src/features/dc-agents/core/dc-effort-policy.ts";
 import dcAgentsExtension, { extractAccountFromModelId } from "../src/features/dc-agents/dc-agents.ts";
 
-test("dc-taxi-vip: isVipAccount reconoce correctamente cc1..cc5, cuentas uc*, nan* y rechaza falsos positivos", () => {
+test("dc-taxi-vip: isVipAccount reconoce correctamente cc1..cc5, cuentas uc* y rechaza nan y falsos positivos", () => {
   assert.equal(isVipAccount("cc1"), true);
   assert.equal(isVipAccount("cc2"), true);
   assert.equal(isVipAccount("cc3"), true);
@@ -26,9 +26,9 @@ test("dc-taxi-vip: isVipAccount reconoce correctamente cc1..cc5, cuentas uc*, na
   assert.equal(isVipAccount("UC01"), true);
   assert.equal(isVipAccount("uc-01"), true);
   assert.equal(isVipAccount("uc_02"), true);
-  assert.equal(isVipAccount("nan-01"), true);
-  assert.equal(isVipAccount("nan_02"), true);
-  assert.equal(isVipAccount("nan"), true);
+  assert.equal(isVipAccount("nan-01"), false);
+  assert.equal(isVipAccount("nan_02"), false);
+  assert.equal(isVipAccount("nan"), false);
   assert.equal(isVipAccount("ac01"), false);
   assert.equal(isVipAccount("ac44"), false);
   assert.equal(isVipAccount("ucar"), false);
@@ -49,9 +49,9 @@ test("dc-taxi-vip: isVipAccount reconoce correctamente cc1..cc5, cuentas uc*, na
             models: [
               { id: "cc5/gpt-6.1-sol" },
               { id: "uc-02/claude-opus-4-6-thinking" },
-              { id: "nan_07/gemini-3.8-flash-high" },
               { id: "ac01/gemini-3.8-flash-high" },
               { id: "ucar/some-model" },
+              { id: "nan/some-model" },
             ],
           },
         },
@@ -61,7 +61,7 @@ test("dc-taxi-vip: isVipAccount reconoce correctamente cc1..cc5, cuentas uc*, na
     const discovered = discoverVipAccounts(modelsPath);
     assert.ok(discovered.includes("cc5"), "discoverVipAccounts debe incluir cc5");
     assert.ok(discovered.includes("uc-02"), "discoverVipAccounts debe incluir uc-02");
-    assert.ok(discovered.includes("nan_07"), "discoverVipAccounts debe incluir nan_07");
+    assert.ok(!discovered.includes("nan"), "discoverVipAccounts nunca debe incluir nan");
     assert.ok(!discovered.includes("ac01"), "discoverVipAccounts nunca debe incluir ac01");
     assert.ok(!discovered.includes("ucar"), "discoverVipAccounts nunca debe incluir palabras arbitrarias ucar");
     for (const vip of discovered) {
@@ -290,7 +290,7 @@ test("dc-taxi-vip: acquireOrchestratorTaxi asigna uc01 como VIP bajo selección 
   }
 });
 
-test("dc-taxi-vip: resolveExecutionModel reconoce prefijos UC01, CC5, NAN-01 y nan de forma case-insensitive", () => {
+test("dc-taxi-vip: resolveExecutionModel reconoce prefijos UC01 y CC5 de forma case-insensitive", () => {
   const ucRes = resolveExecutionModel({
     requestedModel: "UC01/gemini-3.8-flash-high",
   });
@@ -303,14 +303,10 @@ test("dc-taxi-vip: resolveExecutionModel reconoce prefijos UC01, CC5, NAN-01 y n
   assert.equal(cc5Res.requestedAccount?.toLowerCase(), "cc5");
 
   const nanRes = resolveExecutionModel({
-    requestedModel: "NAN-01/gemini-3.8-flash-high",
-  });
-  assert.equal(nanRes.requestedAccount?.toLowerCase(), "nan-01");
-
-  const bareNanRes = resolveExecutionModel({
     requestedModel: "nan/gemini-3.8-flash-high",
   });
-  assert.equal(bareNanRes.requestedAccount?.toLowerCase(), "nan");
+  assert.equal(nanRes.requestedAccount, undefined, "nan no debe ser parseado como requestedAccount");
+  assert.equal(nanRes.provider, "nan");
 });
 
 test("dc-taxi-vip: dc-agents no filtra listeners duplicados en process.on('exit') y turn_end sincroniza cuentas VIP", async () => {
@@ -368,8 +364,8 @@ test("dc-taxi-vip: dc-agents no filtra listeners duplicados en process.on('exit'
     assert.equal(extractAccountFromModelId("cpam/CC5/gpt-6.1-sol"), "cc5");
     assert.equal(extractAccountFromModelId("cpam/UC-01/claude-opus-4-6-thinking"), "uc-01");
     assert.equal(extractAccountFromModelId("cpam/uc_02/claude-opus-4-6-thinking"), "uc_02");
-    assert.equal(extractAccountFromModelId("cpam/nan-01/gemini-3.8-flash-high"), "nan-01");
-    assert.equal(extractAccountFromModelId("cpam/nan/gemini-3.8-flash-high"), "nan");
+    assert.equal(extractAccountFromModelId("cpam/nan-01/gemini-3.8-flash-high"), undefined);
+    assert.equal(extractAccountFromModelId("cpam/nan/gemini-3.8-flash-high"), undefined);
 
     // EjecutarwithFleetLock sin spin-wait
     const lockRes = withFleetLock(fleetPath, () => "locked-ok");

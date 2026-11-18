@@ -1039,14 +1039,16 @@ test("dc-ephemeral-tools: registerDcEphemeralTools registers tool in ExtensionAP
 
   registerDcEphemeralTools(fakePi);
 
-  assert.equal(registered.length, 3);
+  assert.equal(registered.length, 4);
   const ephemTool = registered.find((t) => t.name === "dc_ephemeral_agent_run");
   const swarmTool = registered.find((t) => t.name === "dc_research_swarm");
   const batchTool = registered.find((t) => t.name === "dc_ephemeral_batch_run");
+  const arenaTool = registered.find((t) => t.name === "dc_arena_run");
 
   assert.ok(ephemTool, "dc_ephemeral_agent_run must be registered");
   assert.ok(swarmTool, "dc_research_swarm must be registered");
   assert.ok(batchTool, "dc_ephemeral_batch_run must be registered");
+  assert.ok(arenaTool, "dc_arena_run must be registered");
 
   assert.ok(ephemTool.parameters.properties.task);
   assert.ok(ephemTool.parameters.properties.archetype);
