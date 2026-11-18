@@ -1,7 +1,8 @@
 export interface ErrorClassificationResult {
-  action: 'retry' | 'failover' | 'hard_quota_abort' | 'fatal_halt' | 'ignore';
+  action: 'retry' | 'failover' | 'hard_quota_abort' | 'fatal_halt' | 'quarantine_account' | 'ignore';
   reason: string;
   cooldownMs?: number;
+  quarantinedAccount?: string;
 }
 
 export class ErrorClassifier {
@@ -14,25 +15,50 @@ export class ErrorClassifier {
     this.cooldownMs = cooldownMs;
   }
 
-  classify(error: any, modelId: string): ErrorClassificationResult {
+  classify(error: any, modelId: string, account?: string): ErrorClassificationResult {
     const message = (error?.message || String(error)).toLowerCase();
     const status = error?.status || error?.statusCode || 0;
+
+    // 0. Quarentine Account: Antigravity / Google 403 VALIDATION_REQUIRED or invalid_grant
+    if (
+      message.includes('validation_required') ||
+      message.includes('not eligible for antigravity') ||
+      message.includes('not eligible') ||
+      message.includes('age verification') ||
+      message.includes('consent_required')
+    ) {
+      return {
+        action: 'quarantine_account',
+        reason: `Account validation or eligibility required (e.g. Antigravity age verification) for account ${account || 'unknown'} on model ${modelId}`,
+        quarantinedAccount: account,
+        cooldownMs: this.cooldownMs * 4,
+      };
+    }
+
+    if (message.includes('invalid_grant') || (account && message.includes('revoked'))) {
+      return {
+        action: 'quarantine_account',
+        reason: `OAuth grant expired or revoked for account ${account || 'unknown'} on model ${modelId}`,
+        quarantinedAccount: account,
+        cooldownMs: this.cooldownMs * 4,
+      };
+    }
 
     // Hard quota exhaustion
     if (
       message.includes('insufficient_quota') ||
       message.includes('quota exceeded') ||
       message.includes('exceeded your current quota') ||
-      status === 429 && message.includes('quota')
+      (status === 429 && message.includes('quota'))
     ) {
       return {
         action: 'hard_quota_abort',
         reason: `Hard quota exhaustion detected for ${modelId}`,
-        cooldownMs: this.cooldownMs * 2
+        cooldownMs: this.cooldownMs * 2,
       };
     }
 
-    // Fatal auth / permissions / model not found
+    // Fatal auth / permissions / model not found (global API key / model unresolvable)
     if (status === 401 || status === 403 || message.includes('revoked') || message.includes('model_not_found')) {
       return {
         action: 'fatal_halt',

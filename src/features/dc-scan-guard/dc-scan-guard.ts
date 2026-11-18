@@ -346,6 +346,177 @@ export function classifyPtcCode(code: unknown, cwd: string = process.cwd()): Sca
   return { block: false };
 }
 
+// Layer 0: Destructive Git Commands
+export function isDestructiveGit(tokens: string[], rawSegment: string): { block: boolean; reason?: string } {
+  const gitIdx = tokens.findIndex((t) => {
+    const clean = t.replace(/^['"]|['"]$/g, "");
+    return clean === "git" || clean.endsWith("/git") || clean === "git.exe";
+  });
+  if (gitIdx === -1 || gitIdx === tokens.length - 1) return { block: false };
+
+  const sub = tokens[gitIdx + 1]?.replace(/^['"]|['"]$/g, "").toLowerCase();
+  const args = tokens.slice(gitIdx + 2).map((t) => t.replace(/^['"]|['"]$/g, ""));
+
+  // 1. git reset --hard
+  if (sub === "reset" && args.some((a) => a === "--hard" || /^-.*hard/.test(a))) {
+    return {
+      block: true,
+      reason: `dc-scan-guard (Layer 0): se bloqueó \`${rawSegment.trim()}\`. \`git reset --hard\` descarta irreversiblemente el árbol de trabajo y modificaciones sin confirmación.`,
+    };
+  }
+
+  // 2. git clean -f / -fd / -fx / --force
+  if (sub === "clean" && args.some((a) => a === "--force" || /^-[a-zA-Z]*f/.test(a))) {
+    return {
+      block: true,
+      reason: `dc-scan-guard (Layer 0): se bloqueó \`${rawSegment.trim()}\`. \`git clean\` con forzado borra permanentemente archivos sin seguimiento en el repositorio.`,
+    };
+  }
+
+  // 3. git checkout/restore wiping whole workspace (targeting . or *)
+  if (
+    (sub === "checkout" && (args.includes(".") || args.includes(".*") || args.includes("*")) && (args.includes("--") || args.includes("-f") || args.includes("--force"))) ||
+    (sub === "restore" && (args.includes(".") || args.includes(".*") || args.includes("*")))
+  ) {
+    return {
+      block: true,
+      reason: `dc-scan-guard (Layer 0): se bloqueó \`${rawSegment.trim()}\`. Descartar todo el workspace con git checkout/restore elimina cambios de código sin respaldo.`,
+    };
+  }
+
+  // 4. git stash drop
+  if (sub === "stash" && args.includes("drop")) {
+    return {
+      block: true,
+      reason: `dc-scan-guard (Layer 0): se bloqueó \`${rawSegment.trim()}\`. \`git stash drop\` destruye snapshots guardados de trabajo local.`,
+    };
+  }
+
+  // 5. git branch -D master / main
+  if (sub === "branch" && args.includes("-D") && args.some((a) => a === "master" || a === "main")) {
+    return {
+      block: true,
+      reason: `dc-scan-guard (Layer 0): se bloqueó \`${rawSegment.trim()}\`. Eliminación forzada de la rama principal de Git prohibida.`,
+    };
+  }
+
+  return { block: false };
+}
+
+// Layer 0: Destructive IaC & DB Commands
+export function isDestructiveIacOrDb(tokens: string[], rawSegment: string): { block: boolean; reason?: string } {
+  const norm = rawSegment.toLowerCase();
+
+  // terraform/pulumi/cdk destroy
+  if (/\b(?:terraform|pulumi|cdk)\s+destroy\b/.test(norm)) {
+    return {
+      block: true,
+      reason: `dc-scan-guard (Layer 0): se bloqueó \`${rawSegment.trim()}\`. La destrucción de infraestructura vía IaC requiere autorización humana explícita.`,
+    };
+  }
+
+  // prisma migrate reset
+  if (norm.includes("prisma") && norm.includes("migrate") && norm.includes("reset")) {
+    return {
+      block: true,
+      reason: `dc-scan-guard (Layer 0): se bloqueó \`${rawSegment.trim()}\`. El reseteo destructivo de base de datos (\`prisma migrate reset\`) está bloqueado.`,
+    };
+  }
+
+  return { block: false };
+}
+
+// Layer 0: OS Keyring Purge (antigravity-fixer antipattern)
+export function isDestructiveCredentialPurge(tokens: string[], rawSegment: string): { block: boolean; reason?: string } {
+  const norm = rawSegment.toLowerCase();
+
+  // cmdkey /delete
+  if (norm.includes("cmdkey") && norm.includes("/delete")) {
+    return {
+      block: true,
+      reason: `dc-scan-guard (Layer 0): se bloqueó \`${rawSegment.trim()}\`. El borrado masivo de credenciales del sistema operativo (\`cmdkey /delete\`) está prohibido.`,
+    };
+  }
+
+  // macOS Keychain delete
+  if (norm.includes("security") && norm.includes("delete-generic-password")) {
+    return {
+      block: true,
+      reason: `dc-scan-guard (Layer 0): se bloqueó \`${rawSegment.trim()}\`. La manipulación destructiva del llavero de macOS está bloqueada.`,
+    };
+  }
+
+  // Linux secret-tool clear
+  if (norm.includes("secret-tool") && norm.includes("clear")) {
+    return {
+      block: true,
+      reason: `dc-scan-guard (Layer 0): se bloqueó \`${rawSegment.trim()}\`. El borrado de credenciales de Linux (\`secret-tool clear\`) está bloqueado.`,
+    };
+  }
+
+  return { block: false };
+}
+
+// Layer 0: Indiscriminate pkill
+export function isDangerousPkill(tokens: string[], rawSegment: string): { block: boolean; reason?: string } {
+  const pkillIdx = tokens.findIndex((t) => {
+    const clean = t.replace(/^['"]|['"]$/g, "");
+    return clean === "pkill" || clean.endsWith("/pkill");
+  });
+  if (pkillIdx === -1) return { block: false };
+
+  const hasF = tokens.some((t, i) => i > pkillIdx && (t === "-f" || /^-.*f/.test(t)));
+  if (hasF) {
+    const patternToken = tokens.slice(pkillIdx + 1).find((t) => !t.startsWith("-"));
+    if (patternToken) {
+      const cleanPat = patternToken.replace(/^['"]|['"]$/g, "").trim();
+      if (cleanPat.length <= 4) {
+        return {
+          block: true,
+          reason: `dc-scan-guard (Layer 0): se bloqueó \`${rawSegment.trim()}\`. \`pkill -f\` con patrones cortos (<= 4 caracteres) es indiscriminado y matará procesos críticos del usuario o del sistema.`,
+        };
+      }
+    }
+  }
+
+  return { block: false };
+}
+
+// Layer 0: Deletion of .git or user critical directories
+export function isDestructiveMetadataRm(tokens: string[], rawSegment: string): { block: boolean; reason?: string } {
+  const rmIdx = tokens.findIndex((t) => {
+    const clean = t.replace(/^['"]|['"]$/g, "");
+    return clean === "rm" || clean.endsWith("/rm") || clean === "del" || clean === "rmdir";
+  });
+  if (rmIdx === -1) return { block: false };
+
+  for (let i = rmIdx + 1; i < tokens.length; i++) {
+    const tok = tokens[i]!.replace(/^['"]|['"]$/g, "").trim();
+    if (tok.startsWith("-")) continue;
+    // .git metadata
+    if (tok === ".git" || tok === ".git/" || tok === "./.git" || tok === "./.git/") {
+      return {
+        block: true,
+        reason: `dc-scan-guard (Layer 0): se bloqueó \`${rawSegment.trim()}\`. La eliminación del directorio \`.git\` destruye la integridad del repositorio y su historial.`,
+      };
+    }
+    // critical user config
+    if (
+      tok === "~/.config" || tok === "~/.config/" ||
+      tok === "~/.pi" || tok === "~/.pi/" ||
+      tok === "~/.gemini" || tok === "~/.gemini/" ||
+      tok === "$HOME/.config" || tok === "$HOME/.pi" || tok === "$HOME/.gemini"
+    ) {
+      return {
+        block: true,
+        reason: `dc-scan-guard (Layer 0): se bloqueó \`${rawSegment.trim()}\`. La eliminación de directorios de configuración del usuario (\`${tok}\`) está mecánicamente prohibida.`,
+      };
+    }
+  }
+
+  return { block: false };
+}
+
 export function classifyShellCommand(command: unknown, depth = 0): ScanGuardDecision {
   if (typeof command !== "string" || command.trim() === "" || depth > 3) {
     return { block: false };
@@ -364,6 +535,37 @@ export function classifyShellCommand(command: unknown, depth = 0): ScanGuardDeci
 
   for (const segment of splitSegments(command)) {
     const tokens = tokenize(segment);
+
+    // Layer 0.1: Destructive Git Commands
+    const gitDecision = isDestructiveGit(tokens, segment);
+    if (gitDecision.block) {
+      return gitDecision;
+    }
+
+    // Layer 0.2: Destructive IaC & DB Commands
+    const iacDecision = isDestructiveIacOrDb(tokens, segment);
+    if (iacDecision.block) {
+      return iacDecision;
+    }
+
+    // Layer 0.3: Destructive Keyring Purge
+    const keyringDecision = isDestructiveCredentialPurge(tokens, segment);
+    if (keyringDecision.block) {
+      return keyringDecision;
+    }
+
+    // Layer 0.4: Indiscriminate pkill
+    const pkillDecision = isDangerousPkill(tokens, segment);
+    if (pkillDecision.block) {
+      return pkillDecision;
+    }
+
+    // Layer 0.5: Deletion of .git or critical user config
+    const metadataDecision = isDestructiveMetadataRm(tokens, segment);
+    if (metadataDecision.block) {
+      return metadataDecision;
+    }
+
     if (isDestructiveRm(tokens)) {
       return { block: true, reason: destructiveRmReason(segment) };
     }
