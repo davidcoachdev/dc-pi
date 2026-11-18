@@ -60,7 +60,7 @@ function handleProcessExit(): void {
 
 export function extractAccountFromModelId(modelId?: string): string | undefined {
   if (!modelId) return undefined;
-  const match = modelId.match(/(?:^|\/|\b)(ac\d+|cc\d+|uc[-_]?\d+|nan[-_]?\d+)(?:\/|\b|$)/i);
+  const match = modelId.match(/(?:^|\/|\b)(ac\d+|cc\d+|uc[-_]?\d+)(?:\/|\b|$)/i);
   if (match) return match[1].toLowerCase();
   for (const part of modelId.split("/")) {
     const lower = part.trim().toLowerCase();
@@ -1506,7 +1506,7 @@ export default function dcAgentsExtension(
         const currentModelId = ctx.model ? `${ctx.model.provider || "cpam"}/${ctx.model.id}` : undefined;
         let activeAccount: string | undefined;
         if (currentModelId) {
-          const match = currentModelId.match(/(ac\d+|cc\d+|uc[-_]?\d+|nan[-_]?\d+)/i);
+          const match = currentModelId.match(/(ac\d+|cc\d+|uc[-_]?\d+)/i);
           activeAccount = match ? match[1].toLowerCase() : extractAccountFromModelId(currentModelId);
         }
         if (!activeAccount) {
@@ -1556,8 +1556,6 @@ export default function dcAgentsExtension(
           if (
             lower.startsWith("ac") ||
             lower.startsWith("cc") ||
-            lower.startsWith("nan-") ||
-            lower.startsWith("nan_") ||
             lower.startsWith("uc") ||
             isVipAccount(lower)
           ) {

@@ -126,7 +126,7 @@ export function getSidebarTaxiFleet(forceReload = false): SidebarTaxiFleetInfo {
       units: [...summary.units].sort((a, b) => {
         const isVipA = a.tier === "vip" || isVipAccount(a.account);
         const isVipB = b.tier === "vip" || isVipAccount(b.account);
-        // Cuentas normales (ac) primero, VIPs (cc, nan, uc) después
+        // Cuentas normales (ac) primero, VIPs (cc, uc) después
         if (isVipA !== isVipB) {
           return isVipA ? 1 : -1;
         }

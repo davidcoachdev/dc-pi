@@ -19,24 +19,20 @@ import {
 } from "../src/features/dc-agents/core/dc-taxi-accounts.ts";
 import type { DcTaxiFleetState, DcTaxiUnit } from "../src/features/dc-agents/core/dc-ephemeral-types.ts";
 
-test("dc-taxi-vip: isVipAccount reconoce correctamente cuentas VIP de NaN y CC", () => {
+test("dc-taxi-vip: isVipAccount reconoce correctamente cuentas VIP de CC y UC, y rechaza nan", () => {
   assert.equal(isVipAccount("cc1"), true);
   assert.equal(isVipAccount("cc4"), true);
-  assert.equal(isVipAccount("nan-01"), true);
-  assert.equal(isVipAccount("nan-02"), true);
-  assert.equal(isVipAccount("nan-03"), true);
-  assert.equal(isVipAccount("nan-04"), true);
-  assert.equal(isVipAccount("nan-05"), true);
-  assert.equal(isVipAccount("nan-06"), true);
-  assert.equal(isVipAccount("nan-07"), true);
-  assert.equal(isVipAccount("NAN-01"), true);
-  assert.equal(isVipAccount("nan_01"), true);
+  assert.equal(isVipAccount("uc01"), true);
+  assert.equal(isVipAccount("nan-01"), false);
+  assert.equal(isVipAccount("nan-02"), false);
+  assert.equal(isVipAccount("nan"), false);
   assert.equal(isVipAccount("ac01"), false);
   assert.equal(isVipAccount("ac50"), false);
   assert.equal(isVipAccount(undefined), false);
 
-  assert.ok(DEFAULT_VIP_ACCOUNTS.includes("nan-01"));
-  assert.ok(DEFAULT_VIP_ACCOUNTS.includes("nan-06"));
+  assert.ok(DEFAULT_VIP_ACCOUNTS.includes("cc1"));
+  assert.ok(DEFAULT_VIP_ACCOUNTS.includes("uc01"));
+  assert.ok(!DEFAULT_VIP_ACCOUNTS.includes("nan-01"));
 });
 
 test("dc-taxi-cycle: rotación estricta sin repetición en flota pequeña (3 taxis)", () => {
@@ -253,8 +249,8 @@ test("dc-taxi-cycle: rotación completa en 50 taxis (ac01..ac50) sin repetir", (
   }
 });
 
-test("dc-taxi-vip: VIPs de NaN (nan-01..nan-06) están estrictamente aisladas del ciclo estándar", () => {
-  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "dc-taxi-nan-vip-test-"));
+test("dc-taxi-vip: VIPs (cc1, cc2) están estrictamente aisladas del ciclo estándar", () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "dc-taxi-cc-vip-test-"));
   const fleetPath = path.join(tmpDir, "dc-taxis.json");
 
   try {
@@ -272,48 +268,48 @@ test("dc-taxi-vip: VIPs de NaN (nan-01..nan-06) están estrictamente aisladas de
             heartbeatAt: Date.now(),
           },
         },
-        "nan-01": { account: "nan-01", status: "libre", tier: "vip", passenger: null },
-        "nan-02": { account: "nan-02", status: "libre", tier: "vip", passenger: null },
+        cc1: { account: "cc1", status: "libre", tier: "vip", passenger: null },
+        cc2: { account: "cc2", status: "libre", tier: "vip", passenger: null },
       },
       lastUpdated: Date.now(),
       cycleDispatched: [],
     };
     saveFleetState(state, fleetPath);
 
-    // 1. Subagente nunca puede arrendar nan-01 o nan-02
+    // 1. Subagente nunca puede arrendar cc1 o cc2
     const leasedSubagent = leaseTaxi(
       { type: "subagent", sessionId: "sub-1", pid: process.pid },
       undefined,
       fleetPath,
       undefined,
-      ["ac01", "nan-01", "nan-02"],
+      ["ac01", "cc1", "cc2"],
     );
-    assert.equal(leasedSubagent, null, "Subagente no debe tener acceso a nan-01 ni nan-02");
+    assert.equal(leasedSubagent, null, "Subagente no debe tener acceso a cc1 ni cc2");
 
-    // 2. Orquestador en startup o balanceo automático NUNCA adquiere nan-01
+    // 2. Orquestador en startup o balanceo automático NUNCA adquiere cc1
     const autoOrch = acquireOrchestratorTaxi(
       "orch-sess-1",
       "cpam/ac01/gemini-3.8-flash-high",
       fleetPath,
       process.pid,
-      ["ac01", "nan-01", "nan-02"],
+      ["ac01", "cc1", "cc2"],
     );
-    assert.equal(autoOrch, null, "Orquestador sin selección explícita jamás debe tomar unidades nan-*");
+    assert.equal(autoOrch, null, "Orquestador sin selección explícita jamás debe tomar unidades vip");
 
-    // 3. Orquestador con selección explícita de modelo nan-01 SÍ adquiere nan-01
+    // 3. Orquestador con selección explícita de modelo cc1 SÍ adquiere cc1
     const explicitOrch = acquireOrchestratorTaxi(
       "orch-sess-1",
-      "nan-01/qwen-3.8-flash",
+      "cc1/gpt-6-luna",
       fleetPath,
       process.pid,
-      ["ac01", "nan-01", "nan-02"],
+      ["ac01", "cc1", "cc2"],
       undefined,
       undefined,
       undefined,
       { isExplicitSelection: true },
     );
     assert.ok(explicitOrch);
-    assert.equal(explicitOrch.account, "nan-01");
+    assert.equal(explicitOrch.account, "cc1");
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
