@@ -298,6 +298,7 @@ test("dc-engram: openEngramExplorer opens modal window even for empty projects",
 test("dc-engram: dcEngramExtension registers commands and shortcut", () => {
   const commands = new Map<string, any>();
   const shortcuts = new Map<string, any>();
+  const tools = new Map<string, any>();
 
   const mockPi = {
     registerCommand(name: string, def: any) {
@@ -306,6 +307,9 @@ test("dc-engram: dcEngramExtension registers commands and shortcut", () => {
     registerShortcut(shortcut: string, def: any) {
       shortcuts.set(shortcut.toLowerCase(), def);
     },
+    registerTool(tool: any) {
+      tools.set(tool.name, tool);
+    },
   } as unknown as ExtensionAPI;
 
   dcEngramExtension(mockPi);
@@ -313,6 +317,7 @@ test("dc-engram: dcEngramExtension registers commands and shortcut", () => {
   assert.ok(commands.has("dc-engram-enroll"));
   assert.ok(commands.has("dc-enroll"));
   assert.ok(shortcuts.has("alt+shift+g"));
+  assert.ok(tools.has("dc_curate_skill"));
 });
 
 test("dc-engram: getProjectObservations sanitizes limit bounds and safely handles SQL injection strings", async (t) => {
