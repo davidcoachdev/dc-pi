@@ -45,6 +45,7 @@ import {
 } from "../core/dc-taxi-supervisor.ts";
 import { formatCanonicalFailureReport } from "../core/dc-subagent-failure-formatter.ts";
 import { subagentInboxManager } from "../core/dc-subagent-inbox.ts";
+import { dcWorktreeManager, type WorktreeHandle } from "../core/dc-worktree-manager.ts";
 
 export interface ExtractedSubagentMetrics {
   tokens?: {
@@ -66,6 +67,7 @@ export interface BackgroundEphemeralTracking {
   handoverCount?: number;
   unprovenCheckCount?: number;
   everObservedRunning?: boolean;
+  worktreeHandle?: WorktreeHandle;
 }
 
 export const activeBackgroundPlans = new Map<string, BackgroundEphemeralTracking>();
@@ -297,6 +299,9 @@ export function sweepBackgroundPlansOnce(tasksDirOverride?: string, fleetPath?: 
       }
       if (item.unprovenCheckCount >= MAX_UNPROVEN_SWEEP_RETRIES) {
         activeBackgroundPlans.delete(key);
+        if (item.worktreeHandle) {
+          item.worktreeHandle.dispose().catch(() => {});
+        }
         try {
           if (item.plan.agentFilePath && fs.existsSync(item.plan.agentFilePath)) {
             fs.unlinkSync(item.plan.agentFilePath);
@@ -483,6 +488,10 @@ export function registerDcEphemeralTools(pi: ExtensionAPI): void {
           enum: ["task", "background"],
           description: "Modo de ejecución: 'task' espera el resultado (default); 'background' retorna inmediatamente.",
         },
+        isolateWorktree: {
+          type: "boolean",
+          description: "Si es true, crea un Git worktree temporal aislado para que el subagente trabaje sin tocar el working directory del usuario ni interferir con otros agentes concurrentes.",
+        },
       },
       required: ["task"],
     } as any,
@@ -538,7 +547,21 @@ export function registerDcEphemeralTools(pi: ExtensionAPI): void {
           toolBricks: params.toolBricks,
         });
 
-        // 2. Ejecutar atómicamente el subagente vía ctx.executeTool si está disponible
+        // 2. Crear worktree aislado si fue solicitado
+        let worktreeHandle: WorktreeHandle | undefined;
+        if (params.isolateWorktree) {
+          try {
+            worktreeHandle = await dcWorktreeManager.createForTask({
+              repoRoot: process.cwd(),
+              taskId: plan.agentName,
+              taskSlug: params.role || params.archetype || "agent-task",
+            });
+          } catch (wtErr: any) {
+            appendTaxiLog("WARN", "WORKTREE_CREATION_FAILED", { error: wtErr.message });
+          }
+        }
+
+        // 3. Ejecutar atómicamente el subagente vía ctx.executeTool si está disponible
         let subagentResult: any;
         let heartbeatTimer: NodeJS.Timeout | undefined;
         let taskStatus: "completed" | "failed" | "cancelled" | "timeout" = "completed";
@@ -568,6 +591,7 @@ export function registerDcEphemeralTools(pi: ExtensionAPI): void {
                 task: params.task,
                 mode: plan.mode,
                 label: params.role || params.task.slice(0, 30),
+                ...(worktreeHandle?.worktreePath ? { workspace_root: worktreeHandle.worktreePath } : {}),
               },
               { signal: _signal, onUpdate: _onUpdate },
             );
@@ -658,6 +682,7 @@ export function registerDcEphemeralTools(pi: ExtensionAPI): void {
                 sessionId,
                 startedAt,
                 taskId: extractedTaskId,
+                worktreeHandle,
               });
               ensureBackgroundSweeper();
 
@@ -670,6 +695,13 @@ export function registerDcEphemeralTools(pi: ExtensionAPI): void {
               });
             } else {
               // Limpieza garantizada sincrónica: libera el taxi, borra el markdown y anota el viaje en el histórico
+              if (worktreeHandle) {
+                try {
+                  await worktreeHandle.dispose();
+                } catch {
+                  /* defensive */
+                }
+              }
               cleanupEphemeralAgent(plan, {
                 sessionId,
                 startedAt,

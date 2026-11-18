@@ -26,6 +26,22 @@ test('ErrorClassifier detects fatal auth errors', () => {
   assert.strictEqual(result.action, 'fatal_halt');
 });
 
+test('ErrorClassifier isolates account validation errors into quarantine_account instead of fatal_halt', () => {
+  const classifier = new ErrorClassifier(3, 1000);
+  const err = { status: 403, message: 'Your current account is not eligible for Antigravity: VALIDATION_REQUIRED' };
+  const result = classifier.classify(err, 'gemini-3.8-flash-high', 'acc-user1@gmail.com');
+  assert.strictEqual(result.action, 'quarantine_account');
+  assert.ok(result.reason.includes('validation or eligibility required'));
+});
+
+test('ErrorClassifier isolates invalid_grant or revoked OAuth tokens into quarantine_account', () => {
+  const classifier = new ErrorClassifier(3, 1000);
+  const err = { status: 400, message: 'invalid_grant: Token has been expired or revoked.' };
+  const result = classifier.classify(err, 'gemini-3.8-flash-high', 'acc-user2@gmail.com');
+  assert.strictEqual(result.action, 'quarantine_account');
+  assert.ok(result.reason.includes('OAuth grant expired or revoked'));
+});
+
 test('ErrorClassifier ignores non-critical errors', () => {
   const classifier = new ErrorClassifier(3, 1000);
   const result = classifier.classify(new Error('Some minor warning message'), 'openai/gpt-4o');
