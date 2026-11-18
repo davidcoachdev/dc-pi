@@ -3,9 +3,9 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { getDcStudioDir } from "../../../core/dc-paths.ts";
-import { callTtsBridge, checkTtsHealth } from "./dc-tts-client.ts";
+import { callTtsBridge, checkTtsHealth, fetchTtsStatus } from "./dc-tts-client.ts";
 import { readTtsPrefs } from "./dc-tts-prefs.ts";
-import { DEFAULT_TTS_HTTP_URL, DEFAULT_TTS_TCP_ADDR } from "./dc-tts-types.ts";
+import { DEFAULT_TTS_HTTP_URL, DEFAULT_TTS_TCP_ADDR, type TtsStatus } from "./dc-tts-types.ts";
 
 export interface TtsDaemonPaths {
   nativeSourceDir: string;
@@ -114,6 +114,55 @@ export async function syncPrefsToDaemon(baseUrl = DEFAULT_TTS_HTTP_URL): Promise
 }
 
 let startInFlight: Promise<boolean> | null = null;
+let sessionSpawnedDaemonPid: number | null = null;
+
+export function getSessionSpawnedTtsDaemonPid(): number | null {
+  return sessionSpawnedDaemonPid;
+}
+
+export function setSessionSpawnedTtsDaemonPid(pid: number | null): void {
+  sessionSpawnedDaemonPid = pid;
+}
+
+export async function terminateOwnedTtsDaemonIfIdle(options?: {
+  baseUrl?: string;
+  paths?: TtsDaemonPaths;
+  fetchStatusFn?: (baseUrl?: string, timeoutMs?: number) => Promise<TtsStatus | null>;
+}): Promise<boolean> {
+  const pid = sessionSpawnedDaemonPid;
+  if (!pid || pid <= 0) return false;
+
+  const baseUrl = options?.baseUrl ?? DEFAULT_TTS_HTTP_URL;
+  const fetchFn = options?.fetchStatusFn ?? fetchTtsStatus;
+  try {
+    const st = await fetchFn(baseUrl, 400);
+    if (st && (st.status === "playing" || (typeof st.queue === "number" && st.queue > 0))) {
+      return false;
+    }
+  } catch {
+    /* ignore status error */
+  }
+
+  try {
+    process.kill(pid, "SIGTERM");
+  } catch {
+    /* process may already be dead */
+  }
+
+  sessionSpawnedDaemonPid = null;
+  const paths = options?.paths ?? resolveTtsDaemonPaths();
+  try {
+    if (fs.existsSync(paths.pidFilePath)) {
+      const recorded = Number(fs.readFileSync(paths.pidFilePath, "utf8").trim());
+      if (recorded === pid) {
+        fs.unlinkSync(paths.pidFilePath);
+      }
+    }
+  } catch {
+    /* best effort pid file cleanup */
+  }
+  return true;
+}
 
 /**
  * Garantiza que el daemon `dc-tts-win` esté corriendo y respondiendo en `127.0.0.1:9877`.
@@ -159,6 +208,7 @@ export async function ensureTtsDaemonRunning(options?: {
       }
 
       if (child.pid) {
+        sessionSpawnedDaemonPid = child.pid;
         try {
           fs.writeFileSync(paths.pidFilePath, String(child.pid), "utf8");
         } catch {

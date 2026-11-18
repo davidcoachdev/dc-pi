@@ -9,7 +9,7 @@ metadata:
 
 # Las 10 Directivas Obligatorias de DC Studio (dc-pi)
 
-Aplica estrictamente estas directivas en todo trabajo sobre `/home/dc-studio/dc-lab/dc-projects/dc-pi`.
+Aplica estrictamente estas directivas en todo trabajo sobre el repositorio `dc-pi` (raíz del proyecto).
 
 ## 1. Desacoplamiento Estricto por Feature (`src/features/<feature>/`)
 - Prohibido código monolítico. Descomponer cada feature en capas con responsabilidad única:
@@ -25,7 +25,7 @@ Aplica estrictamente estas directivas en todo trabajo sobre `/home/dc-studio/dc-
 
 ## 3. Ejecución Enfocada de Pruebas (Test Scoping)
 - Durante desarrollo/refactorización, compilar con `tsc` y correr **únicamente** la prueba unitaria del archivo tocado:
-  `cd /home/dc-studio/dc-lab/dc-projects/dc-pi && npm run build && node --test .test-build/test/<feature>.test.js`
+  `npm run build && node --test .test-build/test/<feature>.test.js`
 - Prohibido correr la suite global completa en cada paso intermedio. La suite completa (200+ tests) solo se corre al cerrar la entrega final.
 
 ## 4. Servicio Unificado de Notificaciones
@@ -33,7 +33,7 @@ Aplica estrictamente estas directivas en todo trabajo sobre `/home/dc-studio/dc-
 - Usar siempre `dcNotifier.notify(ctx, ...)` para integrar con sockets de Herdr y fallback visual nativo de Pi.
 
 ## 5. Repositorio Único y Git Seguro
-- Único destino de escritura: `/home/dc-studio/dc-lab/dc-projects/dc-pi`.
+- Único destino de escritura: la raíz del repositorio `dc-pi`.
 - `lab-cofig-pi` queda estrictamente congelado como snapshot histórico de solo lectura.
 - Prohibido hacer `git commit`, `git push`, reset o mutaciones destructivas en Git sin autorización expresa del usuario.
 
@@ -54,7 +54,7 @@ Aplica estrictamente estas directivas en todo trabajo sobre `/home/dc-studio/dc-
 - Mientras se desarrolle o refactorice en `dc-pi`, NO se toca la instalación global ni los scripts de `~/.pi/agent/extensions/`.
 - Validación en 2 fases:
   1. En frío: Tests unitarios locales simulados (`npm test`).
-  2. En caliente efímero: `pi -e /home/dc-studio/dc-lab/dc-projects/dc-pi` (en memoria para esa sesión de prueba, sin tocar `settings.json`).
+  2. En caliente efímero: `pi -e .` (desde la raíz de `dc-pi`, en memoria para esa sesión de prueba, sin tocar `settings.json`).
 
 ## 10. Ecosistema de Temas Integrado
 - Los temas retro de DC Studio (Rojo Sangre insignia y secundarios) deben vivir versionados dentro de `dc-pi/themes/`.

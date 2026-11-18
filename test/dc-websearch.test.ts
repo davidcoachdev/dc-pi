@@ -106,11 +106,51 @@ test("dc-websearch security: fetchWithDnsPinning intercepts dynamic DNS Rebindin
 });
 
 test("dc-websearch security: redactSecrets masks sensitive credentials", () => {
-  const secretText = "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9 and ghp_1234567890abcdef1234567890abcdef1234";
+  const secretText = [
+    "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9",
+    "ghp_1234567890abcdef1234567890abcdef1234",
+    "sk-proj-abcdefghijklmnopqrstuvwxyz1234567890",
+    "sk-ant-api03-abcdefghijklmnopqrstuvwxyz123456",
+    "github_pat_11ABCDEFG0123456789_abcdefghijklmnopqrstuvwxyz",
+    "AKIAIOSFODNN7EXAMPLE",
+    "ASIAIOSFODNN7EXAMPLE",
+    ["xoxb", "123456789012", "1234567890123", "abcdefghijklmnopqrstuvwx"].join("-"),
+    "-----BEGIN RSA PRIVATE KEY-----\nMIIEpAIBAAKCAQEA...\n-----END RSA PRIVATE KEY-----",
+  ].join(" and ");
   const sanitized = redactSecrets(secretText);
   assert.ok(!sanitized.includes("eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9"));
   assert.ok(!sanitized.includes("ghp_1234567890abcdef"));
+  assert.ok(!sanitized.includes("sk-proj-"));
+  assert.ok(!sanitized.includes("sk-ant-"));
+  assert.ok(!sanitized.includes("github_pat_"));
+  assert.ok(!sanitized.includes("AKIAIOSFODNN7EXAMPLE"));
+  assert.ok(!sanitized.includes("ASIAIOSFODNN7EXAMPLE"));
+  assert.ok(!sanitized.includes("xoxb-123456789012"));
+  assert.ok(!sanitized.includes("BEGIN RSA PRIVATE KEY"));
   assert.ok(sanitized.includes("[REDACTED_SECRET]"));
+});
+
+test("dc-websearch security: fetchWithDnsPinning enforces maxBytes stream limit", async () => {
+  const server = http.createServer((_req, res) => {
+    res.writeHead(200, { "Content-Type": "text/plain" });
+    res.write("A".repeat(1024));
+    res.write("B".repeat(1024));
+    res.end();
+  });
+
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const port = (server.address() as any).port;
+
+  try {
+    await assert.rejects(
+      async () => {
+        await fetchWithDnsPinning(`http://127.0.0.1:${port}/large`, { maxBytes: 512 });
+      },
+      (err: Error) => /exceeds limit/i.test(err.message),
+    );
+  } finally {
+    server.close();
+  }
 });
 
 test("dcWebsearchExtension registers all 6 technical research tools", () => {

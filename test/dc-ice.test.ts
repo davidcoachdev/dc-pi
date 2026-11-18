@@ -259,3 +259,36 @@ test("dc-ice: dcIceExtension registra comando /dc-ice y herramienta dc_ice_valid
   assert.ok(tools.dc_ice_validate, "Debe registrar herramienta dc_ice_validate");
 });
 
+test("dc-ice: no produce falsos positivos con 'E-commerce', 'e-mail' ni el verbo 'go' en minúscula", () => {
+  const validEcommerceIntent: IceIntent = {
+    goal: "Enable E-commerce checkout so customers can go from cart to e-mail receipt safely.",
+    constraints: [
+      "p99 latency under 200ms.",
+      "99.9% uptime against SLO.",
+      "WCAG 2.1 AA compliance.",
+    ],
+    failureConditions: [
+      "Build fails.",
+      "Unit test coverage drops below 90%.",
+      "Lint reports errors.",
+    ],
+    manualBrake: {
+      whoNeedsThis: "E-commerce customers completing orders.",
+      costIfOneWeekDevs: true,
+      refusalOwner: "Checkout Product Owner",
+    },
+  };
+
+  const result = validateIceIntent(validEcommerceIntent);
+  assert.equal(result.valid, true, `No debe fallar por falso positivo en E-commerce/e-mail/go: ${result.errors.join("; ")}`);
+
+  // Pero sí debe seguir rechazando conjunción 'e' española real entre espacios
+  const spanishConjunction = {
+    ...validEcommerceIntent,
+    goal: "Exportar facturas mensuales e importar asientos contables.",
+  };
+  const resultEs = validateIceIntent(spanishConjunction);
+  assert.equal(resultEs.valid, false, "Debe detectar la conjunción copulativa 'e' separada por espacios");
+});
+
+

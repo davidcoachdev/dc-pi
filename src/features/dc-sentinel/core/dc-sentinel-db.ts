@@ -344,129 +344,145 @@ export class SentinelDatabase {
       return JSON.stringify({ ...evidence, revision });
     };
 
-    // 1. Detección de duplicado exacto por normalized_hash
-    const dupStmt = this.db.prepare(`
-      SELECT * FROM notes
-      WHERE project = ? AND normalized_hash = ? AND deleted_at IS NULL
-      LIMIT 1
-    `);
-    const existingDup = dupStmt.get(project, normHash) as any;
-
-    if (existingDup) {
-      const updatedCount = (existingDup.duplicate_count || 1) + 1;
-      this.db
-        .prepare(`
-          UPDATE notes
-          SET duplicate_count = ?, proof_count = ?, status = ?, verification_json = ?, last_seen_at = datetime('now')
-          WHERE id = ?
-        `)
-        .run(updatedCount, note.proofCount ?? 0, note.status || "proposal", verificationFor(existingDup.revision_count), existingDup.id);
-
-      return this.mapNoteRow({
-        ...existingDup,
-        duplicate_count: updatedCount,
-        verification_json: verificationFor(existingDup.revision_count),
-        proof_count: note.proofCount ?? 0,
-        status: note.status || "proposal",
-        last_seen_at: new Date().toISOString(),
-      });
-    }
-
-    // 2. Detección de actualización evolutiva por topic_key
-    if (note.topicKey && note.topicKey.trim().length > 0) {
-      const topicStmt = this.db.prepare(`
+    const executeSave = (): SentinelNote => {
+      // 1. Detección de duplicado exacto por normalized_hash
+      const dupStmt = this.db.prepare(`
         SELECT * FROM notes
-        WHERE project = ? AND topic_key = ? AND deleted_at IS NULL
+        WHERE project = ? AND normalized_hash = ? AND deleted_at IS NULL
         LIMIT 1
       `);
-      const existingTopic = topicStmt.get(project, note.topicKey.trim()) as any;
+      const existingDup = dupStmt.get(project, normHash) as any;
 
-      if (existingTopic) {
-        const nextRev = (existingTopic.revision_count || 1) + 1;
-        const conceptsJson = note.concepts ? JSON.stringify(note.concepts) : existingTopic.concepts_json;
-        const filesJson = note.filesAffected ? JSON.stringify(note.filesAffected) : existingTopic.files_json;
-        const blastRadiusJson = note.blastRadius ? JSON.stringify(note.blastRadius) : existingTopic.blast_radius_json;
-
+      if (existingDup) {
+        const updatedCount = (existingDup.duplicate_count || 1) + 1;
         this.db
           .prepare(`
             UPDATE notes
-            SET title = ?, content = ?, type = ?, glyph = ?,
-                revision_count = ?, normalized_hash = ?,
-                concepts_json = ?, files_json = ?, blast_radius_json = ?, proof_count = ?, status = ?, verification_json = ?,
-                updated_at = datetime('now'), last_seen_at = datetime('now')
+            SET duplicate_count = ?, proof_count = ?, status = ?, verification_json = ?, last_seen_at = datetime('now')
             WHERE id = ?
           `)
-          .run(
-            note.title,
-            note.content,
-            note.type,
-            note.glyph,
-            nextRev,
-            normHash,
-            conceptsJson,
-            filesJson,
-            blastRadiusJson,
-            note.proofCount ?? 0,
-            note.status || "proposal",
-            verificationFor(nextRev),
-            existingTopic.id,
-          );
+          .run(updatedCount, note.proofCount ?? 0, note.status || "proposal", verificationFor(existingDup.revision_count), existingDup.id);
 
         return this.mapNoteRow({
-          ...existingTopic,
-          title: note.title,
-          content: note.content,
-          type: note.type,
-          glyph: note.glyph,
-          revision_count: nextRev,
-          verification_json: verificationFor(nextRev),
-          normalized_hash: normHash,
-          concepts_json: conceptsJson,
-          files_json: filesJson,
-          blast_radius_json: blastRadiusJson,
+          ...existingDup,
+          duplicate_count: updatedCount,
+          verification_json: verificationFor(existingDup.revision_count),
           proof_count: note.proofCount ?? 0,
           status: note.status || "proposal",
-          updated_at: new Date().toISOString(),
           last_seen_at: new Date().toISOString(),
         });
       }
+
+      // 2. Detección de actualización evolutiva por topic_key
+      if (note.topicKey && note.topicKey.trim().length > 0) {
+        const topicStmt = this.db.prepare(`
+          SELECT * FROM notes
+          WHERE project = ? AND topic_key = ? AND deleted_at IS NULL
+          LIMIT 1
+        `);
+        const existingTopic = topicStmt.get(project, note.topicKey.trim()) as any;
+
+        if (existingTopic) {
+          const nextRev = (existingTopic.revision_count || 1) + 1;
+          const conceptsJson = note.concepts ? JSON.stringify(note.concepts) : existingTopic.concepts_json;
+          const filesJson = note.filesAffected ? JSON.stringify(note.filesAffected) : existingTopic.files_json;
+          const blastRadiusJson = note.blastRadius ? JSON.stringify(note.blastRadius) : existingTopic.blast_radius_json;
+
+          this.db
+            .prepare(`
+              UPDATE notes
+              SET title = ?, content = ?, type = ?, glyph = ?,
+                  revision_count = ?, normalized_hash = ?,
+                  concepts_json = ?, files_json = ?, blast_radius_json = ?, proof_count = ?, status = ?, verification_json = ?,
+                  updated_at = datetime('now'), last_seen_at = datetime('now')
+              WHERE id = ?
+            `)
+            .run(
+              note.title,
+              note.content,
+              note.type,
+              note.glyph,
+              nextRev,
+              normHash,
+              conceptsJson,
+              filesJson,
+              blastRadiusJson,
+              note.proofCount ?? 0,
+              note.status || "proposal",
+              verificationFor(nextRev),
+              existingTopic.id,
+            );
+
+          return this.mapNoteRow({
+            ...existingTopic,
+            title: note.title,
+            content: note.content,
+            type: note.type,
+            glyph: note.glyph,
+            revision_count: nextRev,
+            verification_json: verificationFor(nextRev),
+            normalized_hash: normHash,
+            concepts_json: conceptsJson,
+            files_json: filesJson,
+            blast_radius_json: blastRadiusJson,
+            proof_count: note.proofCount ?? 0,
+            status: note.status || "proposal",
+            updated_at: new Date().toISOString(),
+            last_seen_at: new Date().toISOString(),
+          });
+        }
+      }
+
+      // 3. Inserción de nueva nota atómica
+      const conceptsJson = note.concepts ? JSON.stringify(note.concepts) : null;
+      const filesJson = note.filesAffected ? JSON.stringify(note.filesAffected) : null;
+      const blastRadiusJson = note.blastRadius ? JSON.stringify(note.blastRadius) : null;
+
+      const stmt = this.db.prepare(`
+        INSERT INTO notes (
+          project, project_path, scope, type, glyph, title, content, topic_key, normalized_hash,
+          revision_count, duplicate_count, last_seen_at, concepts_json, files_json,
+          blast_radius_json, proof_count, status, pinned, expires_at, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 1, datetime('now'), ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
+      `);
+
+      const result = stmt.run(
+        project,
+        note.project_path ? path.resolve(note.project_path) : this.projectRoot,
+        note.scope || "project",
+        note.type,
+        note.glyph,
+        note.title,
+        note.content,
+        note.topicKey || null,
+        normHash,
+        conceptsJson,
+        filesJson,
+        blastRadiusJson,
+        note.proofCount ?? 1,
+        note.status || "active",
+        note.pinned ? 1 : 0,
+        note.expiresAt || null,
+      );
+
+      const insertedId = Number(result.lastInsertRowid);
+      this.db.prepare("UPDATE notes SET verification_json = ? WHERE id = ?").run(verificationFor(1), insertedId);
+      return this.getNoteById(insertedId)!;
+    };
+
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const saved = executeSave();
+      this.db.exec("COMMIT");
+      return saved;
+    } catch (err) {
+      try {
+        this.db.exec("ROLLBACK");
+      } catch {
+        /* ignore rollback failure */
+      }
+      throw err;
     }
-
-    // 3. Inserción de nueva nota atómica
-    const conceptsJson = note.concepts ? JSON.stringify(note.concepts) : null;
-    const filesJson = note.filesAffected ? JSON.stringify(note.filesAffected) : null;
-    const blastRadiusJson = note.blastRadius ? JSON.stringify(note.blastRadius) : null;
-
-    const stmt = this.db.prepare(`
-      INSERT INTO notes (
-        project, project_path, scope, type, glyph, title, content, topic_key, normalized_hash,
-        revision_count, duplicate_count, last_seen_at, concepts_json, files_json,
-        blast_radius_json, proof_count, status, pinned, expires_at, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 1, datetime('now'), ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
-    `);
-
-    const result = stmt.run(
-      project,
-      note.project_path ? path.resolve(note.project_path) : this.projectRoot,
-      note.scope || "project",
-      note.type,
-      note.glyph,
-      note.title,
-      note.content,
-      note.topicKey || null,
-      normHash,
-      conceptsJson,
-      filesJson,
-      blastRadiusJson,
-      note.proofCount ?? 1,
-      note.status || "active",
-      note.pinned ? 1 : 0,
-      note.expiresAt || null,
-    );
-
-    const insertedId = Number(result.lastInsertRowid);
-    this.db.prepare("UPDATE notes SET verification_json = ? WHERE id = ?").run(verificationFor(1), insertedId);
-    return this.getNoteById(insertedId)!;
   }
 
   getProjectRoot(): string { return this.projectRoot; }

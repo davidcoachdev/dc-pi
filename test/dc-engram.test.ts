@@ -314,3 +314,61 @@ test("dc-engram: dcEngramExtension registers commands and shortcut", () => {
   assert.ok(commands.has("dc-enroll"));
   assert.ok(shortcuts.has("alt+shift+g"));
 });
+
+test("dc-engram: getProjectObservations sanitizes limit bounds and safely handles SQL injection strings", async (t) => {
+  const obsNegative = getProjectObservations(-50, "dc-pi");
+  assert.ok(Array.isArray(obsNegative));
+  assert.ok(obsNegative.length <= 1);
+
+  const obsHuge = getProjectObservations(999999, "dc-pi");
+  assert.ok(Array.isArray(obsHuge));
+  assert.ok(obsHuge.length <= 200);
+
+  const sqliProject = "non-existent' OR '1'='1";
+  const obsSqli = getProjectObservations(50, sqliProject);
+  assert.deepEqual(obsSqli, []);
+
+  // Test SQLite fallback with isolated ENGRAM_DB_PATH and parent/repo disambiguation
+  const { DatabaseSync } = await import("node:sqlite");
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "dc-engram-sqlite-"));
+  t.after(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
+  const dbFile = path.join(tmpDir, "engram.db");
+  const db = new DatabaseSync(dbFile);
+  db.exec(`
+    CREATE TABLE observations (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      project TEXT,
+      type TEXT,
+      title TEXT,
+      content TEXT,
+      scope TEXT,
+      created_at TEXT,
+      deleted_at TEXT
+    );
+    CREATE TABLE sync_enrolled_projects (
+      project TEXT PRIMARY KEY
+    );
+  `);
+  db.prepare(
+    "INSERT INTO observations (project, type, title, content, scope, created_at, deleted_at) VALUES (?, ?, ?, ?, ?, ?, NULL)",
+  ).run("parent-org/my-repo", "decision", "Disambiguated title", "Disambiguated body", "project", "2026-01-01T00:00:00Z");
+  db.prepare("INSERT INTO sync_enrolled_projects (project) VALUES (?)").run("parent-org/my-repo");
+  db.close();
+
+  const origDbEnv = process.env.ENGRAM_DB_PATH;
+  const repoDir = path.join(tmpDir, "parent-org", "my-repo");
+  fs.mkdirSync(repoDir, { recursive: true });
+  try {
+    process.env.ENGRAM_DB_PATH = dbFile;
+    const sqliRes = getProjectObservations(10, "parent-org/my-repo' OR '1'='1");
+    assert.deepEqual(sqliRes, []);
+
+    const disambigObs = getProjectObservations(10, undefined, repoDir);
+    assert.equal(disambigObs.length, 1);
+    assert.equal(disambigObs[0].title, "Disambiguated title");
+    assert.equal(isProjectEnrolled(undefined, repoDir), true);
+  } finally {
+    if (origDbEnv !== undefined) process.env.ENGRAM_DB_PATH = origDbEnv;
+    else delete process.env.ENGRAM_DB_PATH;
+  }
+});

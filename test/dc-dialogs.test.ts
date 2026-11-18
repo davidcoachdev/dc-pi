@@ -494,3 +494,69 @@ test("showExtensionSelector presents CleanExtensionSelectPanel in DcWindow", asy
 
   uninstallDialogsPatch();
 });
+
+test("showExtensionSelector and showExtensionInput dismiss active overlay via done(undefined) when opts.signal aborts", async () => {
+  uninstallDialogsPatch();
+  installDialogsPatch();
+  setDialogsEnabled(true);
+
+  const proto = InteractiveMode.prototype as any;
+  let selectorOverlayHidden = false;
+  let inputOverlayHidden = false;
+
+  const instance: any = Object.create(proto);
+  instance.editor = { getText: () => "", setText: () => {} };
+  instance.editorContainer = { clear: () => {}, addChild: () => {} };
+  instance.keybindings = {};
+
+  // 1. Abort showExtensionSelector
+  const acSelector = new AbortController();
+  instance.ui = {
+    showOverlay: () => ({
+      hide: () => {
+        selectorOverlayHidden = true;
+      },
+    }),
+    hideOverlay: () => {
+      selectorOverlayHidden = true;
+    },
+    setFocus: () => {},
+    requestRender: () => {},
+  };
+
+  const selPromise = instance.showExtensionSelector("Pick one", ["One", "Two"], {
+    signal: acSelector.signal,
+  });
+  await new Promise((r) => setTimeout(r, 15));
+  acSelector.abort();
+  const selResult = await selPromise;
+  assert.equal(selResult, undefined);
+  assert.equal(selectorOverlayHidden, true, "Aborting showExtensionSelector must dismiss the overlay");
+
+  // 2. Abort showExtensionInput
+  const acInput = new AbortController();
+  instance.ui = {
+    showOverlay: () => ({
+      hide: () => {
+        inputOverlayHidden = true;
+      },
+    }),
+    hideOverlay: () => {
+      inputOverlayHidden = true;
+    },
+    setFocus: () => {},
+    requestRender: () => {},
+  };
+
+  const inpPromise = instance.showExtensionInput("Enter name", "placeholder", {
+    signal: acInput.signal,
+  });
+  await new Promise((r) => setTimeout(r, 15));
+  acInput.abort();
+  const inpResult = await inpPromise;
+  assert.equal(inpResult, undefined);
+  assert.equal(inputOverlayHidden, true, "Aborting showExtensionInput must dismiss the overlay");
+
+  uninstallDialogsPatch();
+});
+

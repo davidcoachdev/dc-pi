@@ -57,6 +57,7 @@ export function stopPulseTimer(): void {
     pulseInterval = null;
     pulseTick = 0;
   }
+  pulseCallback = null;
 }
 
 export function ensurePulseTimer(requestRender?: () => void): void {

@@ -1,16 +1,53 @@
 import * as fs from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
 import * as crypto from "node:crypto";
 import { PDFParse } from "pdf-parse";
 import type { PdfExtractOptions, PdfExtractResult } from "./dc-pdf-types.ts";
 import { redactSecrets } from "../../dc-websearch/core/dc-websearch-security.ts";
 
+function isPathWithinRoot(targetPath: string, rootPath: string): boolean {
+  const rel = path.relative(rootPath, targetPath);
+  return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
+}
+
+function resolveExistingAncestorRealpath(targetPath: string): string {
+  let current = path.resolve(targetPath);
+  const tail: string[] = [];
+  while (!fs.existsSync(current)) {
+    const parent = path.dirname(current);
+    if (parent === current) break;
+    tail.unshift(path.basename(current));
+    current = parent;
+  }
+  const realBase = fs.existsSync(current) ? fs.realpathSync(current) : current;
+  return tail.length > 0 ? path.join(realBase, ...tail) : realBase;
+}
+
 /**
  * Extrae texto estructurado, metadatos y hash SHA-256 de un archivo PDF local.
  */
 export async function extractPdf(options: PdfExtractOptions): Promise<PdfExtractResult> {
-  const cwd = options.cwd ?? process.cwd();
-  const resolvedPath = path.isAbsolute(options.path) ? options.path : path.resolve(cwd, options.path);
+  const cwd = path.resolve(options.cwd ?? process.cwd());
+  const tmpDir = path.resolve(os.tmpdir());
+  const resolvedPath = path.isAbsolute(options.path)
+    ? path.resolve(options.path)
+    : path.resolve(cwd, options.path);
+
+  if (!isPathWithinRoot(resolvedPath, cwd) && !isPathWithinRoot(resolvedPath, tmpDir)) {
+    throw new Error(
+      `Acceso denegado: la ruta del archivo PDF debe estar dentro de cwd o tmpdir (${resolvedPath})`,
+    );
+  }
+
+  const realTarget = resolveExistingAncestorRealpath(resolvedPath);
+  const realCwd = resolveExistingAncestorRealpath(cwd);
+  const realTmp = resolveExistingAncestorRealpath(tmpDir);
+  if (!isPathWithinRoot(realTarget, realCwd) && !isPathWithinRoot(realTarget, realTmp)) {
+    throw new Error(
+      `Acceso denegado tras resolver symlinks: la ruta del archivo PDF está fuera de cwd o tmpdir (${resolvedPath})`,
+    );
+  }
 
   if (!fs.existsSync(resolvedPath)) {
     throw new Error(`Archivo PDF no encontrado: ${resolvedPath}`);

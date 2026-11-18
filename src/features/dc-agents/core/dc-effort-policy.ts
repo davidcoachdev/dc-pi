@@ -15,6 +15,7 @@ import type {
   DcReasoningEffort,
 } from "./dc-ephemeral-types.ts";
 import { DEFAULT_DC_AGENTS_CONFIG } from "./dc-ephemeral-types.ts";
+import { isVipAccount } from "./dc-taxi-accounts.ts";
 
 const CONFIG_FILE_PATH = path.join(os.homedir(), ".pi", "agent", "dc-studio", "dc-agents.json");
 
@@ -199,17 +200,21 @@ export function resolveExecutionModel(
     if (parts.length >= 3) {
       // Formato provider/account/model (ej: cpam/ac01/gemini-3.8-flash-high)
       parsedProvider = parts[0];
-      parsedAccount = parts[1];
+      parsedAccount = parts[1].toLowerCase();
       parsedBaseModel = parts.slice(2).join("/");
     } else if (parts.length === 2) {
       // Formato provider/model o account/model
+      const firstLower = parts[0].toLowerCase();
       if (
-        parts[0].startsWith("ac") ||
-        parts[0].startsWith("cc") ||
-        parts[0].startsWith("nan-") ||
-        parts[0].startsWith("nan_")
+        firstLower.startsWith("ac") ||
+        firstLower.startsWith("cc") ||
+        firstLower.startsWith("nan-") ||
+        firstLower.startsWith("nan_") ||
+        firstLower === "nan" ||
+        firstLower.startsWith("uc") ||
+        isVipAccount(firstLower)
       ) {
-        parsedAccount = parts[0];
+        parsedAccount = firstLower;
         parsedBaseModel = parts[1];
       } else {
         parsedProvider = parts[0];

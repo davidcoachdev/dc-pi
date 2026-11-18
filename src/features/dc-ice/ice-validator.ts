@@ -5,8 +5,9 @@
 
 import type { IceIntent, IceValidationResult } from "./types.ts";
 
-const CONJUNCTION_REGEX = /\b(and|y|e|as well as|además de|ademas de)\b/i;
-const TECH_IN_GOAL_REGEX = /\b(Go|Golang|Node|Node\.js|Python|React|Vue|Angular|PostgreSQL|Postgres|MySQL|Redis|MongoDB|gRPC|GraphQL|Express|Envoy|FastAPI|Django|Flask|Spring Boot|Kafka|RabbitMQ)\b|\.(ts|js|go|py|rs|java|cpp|cs)\b/i;
+const CONJUNCTION_REGEX = /(?:^|[\s,;])(and|y|e|as well as|además de|ademas de)(?=[\s,;]|$)/i;
+const TECH_IN_GOAL_REGEX = /\b(Golang|Node\.js|Node|Python|React|Vue|Angular|PostgreSQL|Postgres|MySQL|Redis|MongoDB|gRPC|GraphQL|Envoy|FastAPI|Django|Flask|Spring Boot|Kafka|RabbitMQ)\b|\b[\w-]+\.(ts|js|go|py|rs|java|cpp|cs)\b/i;
+const CASE_SENSITIVE_TECH_IN_GOAL_REGEX = /\b(Go|Express)\b/;
 const FAILURE_IN_CONSTRAINT_REGEX = /\b(coverage|test coverage|unit test|build fails?|lint(ing)?|sonar(qube)?|quality gate)\b/i;
 const EXPERIMENT_OR_NOBODY_REGEX = /\b(nobody|nadie|no one|ninguno|just experimenting|solo experimentando|nada en particular|nobody in particular)\b/i;
 
@@ -45,7 +46,7 @@ export function validateIceIntent(raw: unknown): IceValidationResult {
     }
 
     // Test de las 2 implementaciones: el Goal no debe atar tecnologías ni arquitecturas internas
-    const techMatch = goal.match(TECH_IN_GOAL_REGEX);
+    const techMatch = goal.match(TECH_IN_GOAL_REGEX) ?? goal.match(CASE_SENSITIVE_TECH_IN_GOAL_REGEX);
     if (techMatch) {
       errors.push(`Violación del test de 2 implementaciones: El 'goal' pre-fija tecnologías o arquitecturas (${techMatch[0]}). Las herramientas y stacks pertenecen al 'Context' del harness, no al Goal del Intent.`);
       remediation.push(`Reformula el Goal enfocándote exclusivamente en el resultado para el usuario/negocio, moviendo '${techMatch[0]}' al Context.`);

@@ -162,3 +162,77 @@ test("dc-body: registers canonical /dc-body command", async () => {
   dcBodyExtension(mockPi);
   assert.deepEqual(registeredCommands, ["dc-body"]);
 });
+
+test("dc-body and dc-sidebar-host coordinate layoutRoot[LAYOUT_NODE] without stomping each other on restoreNative", async () => {
+  const { tryAttachBodyFrame, restoreNative: restoreBody } = await import("../src/features/dc-body/dc-body.ts");
+  const { tryWrap: tryWrapSidebar, restoreNative: restoreSidebar } = await import(
+    "../src/features/dc-sidebar/runtime/dc-sidebar-host.ts"
+  );
+  const { writeSidebarPrefs } = await import("../src/features/dc-sidebar/core/dc-sidebar-prefs.ts");
+
+  writeSidebarPrefs({ hidden: false, minWidth: 140 });
+  (globalThis as unknown as Record<symbol, boolean>)[G_BANNER_ACTIVE] = false;
+
+  const mockChatComp: Component = { render: () => ["chat"], invalidate: () => {} };
+  const mockDockComp: Component = { render: () => ["dock"], invalidate: () => {} };
+  const nativeLayout = () => ({
+    type: "vstack",
+    entries: [
+      { component: mockChatComp, basis: 0, grow: 1, shrink: 1 },
+      { component: mockDockComp, basis: "auto", grow: 0, shrink: 0 },
+    ],
+  });
+
+  const tui: any = {
+    terminal: { rows: 40, columns: 160 },
+    requestRender: () => {},
+    layoutRoot: {
+      render: () => [],
+      invalidate: () => {},
+      [LAYOUT_NODE]: nativeLayout,
+    },
+  };
+  (globalThis as any)[Symbol.for("dc.sidebar.tui-ref")] = tui;
+
+  // Order 1: Sidebar wraps first, then Body wraps, then Sidebar unmounts -> Body must stay active
+  assert.equal(tryWrapSidebar(tui), true);
+  assert.equal(tryAttachBodyFrame(tui), true);
+
+  const bothLayout1 = tui.layoutRoot[LAYOUT_NODE]();
+  assert.equal(bothLayout1.type, "hstack");
+  const leftVStack1 = bothLayout1.entries[0].component[LAYOUT_NODE]();
+  assert.equal(leftVStack1.entries[0].component[BODY_FRAMED], true);
+
+  // Unmount sidebar -> Body wrapper must still frame the chat
+  restoreSidebar();
+  const afterSidebarRestore = tui.layoutRoot[LAYOUT_NODE]();
+  assert.equal(afterSidebarRestore.type, "vstack");
+  assert.equal(
+    afterSidebarRestore.entries[0].component[BODY_FRAMED],
+    true,
+    "Unmounting dc-sidebar must preserve dc-body wrapper",
+  );
+
+  // Unmount body -> Back to native
+  restoreBody(tui);
+  const backToNative1 = tui.layoutRoot[LAYOUT_NODE]();
+  assert.equal(backToNative1.entries[0].component, mockChatComp);
+
+  // Order 2: Body wraps first, then Sidebar wraps, then Body unmounts -> Sidebar must stay active
+  assert.equal(tryAttachBodyFrame(tui), true);
+  assert.equal(tryWrapSidebar(tui), true);
+
+  restoreBody(tui);
+  const afterBodyRestore = tui.layoutRoot[LAYOUT_NODE]();
+  assert.equal(
+    afterBodyRestore.type,
+    "hstack",
+    "Unmounting dc-body must preserve dc-sidebar wrapper",
+  );
+
+  restoreSidebar();
+  const backToNative2 = tui.layoutRoot[LAYOUT_NODE]();
+  assert.equal(backToNative2.type, "vstack");
+  assert.equal(backToNative2.entries[0].component, mockChatComp);
+});
+

@@ -214,6 +214,7 @@ export class DcWindow implements Component {
 
   public destroy(): void {
     this.stopAnimation();
+    this.isDragging = false;
   }
 
   public dispose(): void {
@@ -418,6 +419,9 @@ export class DcWindow implements Component {
   handleInput(data: string): boolean {
     if (this.options.content.handleInput?.(data) === true) return true;
     if (matchesKey(data, Key.escape)) {
+      this.isDragging = false;
+      this.stopAnimation();
+      this.destroy();
       this.options.onClose();
       return true;
     }
@@ -464,8 +468,14 @@ export class DcWindow implements Component {
     const { x, y, type, button } = event;
     // Close button: capture on press, trigger on click
     if (button === "left" && y === 1 && this.closeStart >= 0 && x >= this.closeStart && x < this.closeEnd) {
-      if (type === "press") return { handled: true };
+      if (type === "press") {
+        this.isDragging = false;
+        return { handled: true };
+      }
       if (type === "click") {
+        this.isDragging = false;
+        this.stopAnimation();
+        this.destroy();
         this.options.onClose();
         return { handled: true };
       }

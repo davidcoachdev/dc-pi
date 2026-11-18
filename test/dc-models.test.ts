@@ -419,3 +419,67 @@ test("dc-model-calibration: resolves recommended caps and safe max tokens", asyn
   assert.equal(mapGemini.high, "high");
   assert.equal(mapGemini.medium, null); // no soportado -> null para evitar HTTP 400
 });
+
+test("dc-paths and dc-models honor PI_CODING_AGENT_DIR and perform atomic writes", async () => {
+  const { getDcStudioDir, resolveDcConfigPath } = await import("../src/core/dc-paths.ts");
+  const { syncLiveCliProxyModels } = await import("../src/features/dc-models/core/dc-models-sync.ts");
+
+  const tmpAgentDir = path.join(os.tmpdir(), `dc-pi-agent-dir-${Date.now()}`);
+  fs.mkdirSync(tmpAgentDir, { recursive: true });
+  const prevAgentDir = process.env.PI_CODING_AGENT_DIR;
+
+  try {
+    process.env.PI_CODING_AGENT_DIR = tmpAgentDir;
+
+    assert.equal(getDcStudioDir(), path.join(tmpAgentDir, "dc-studio"));
+    assert.equal(resolveDcConfigPath("sample"), path.join(tmpAgentDir, "dc-studio", "sample.json"));
+
+    // Create settings.json and models.json inside PI_CODING_AGENT_DIR
+    const settingsPath = path.join(tmpAgentDir, "settings.json");
+    fs.writeFileSync(settingsPath, JSON.stringify({ defaultProvider: "old", defaultModel: "old-id" }), "utf8");
+
+    // persistDefaultModel without explicit path should use PI_CODING_AGENT_DIR/settings.json
+    let errObserved: string | undefined;
+    persistDefaultModel({ id: "ac01/claude-sonnet-4-6", provider: "cpam" }, "high", (msg) => {
+      errObserved = msg;
+    });
+    assert.equal(errObserved, undefined);
+
+    const savedSettings = JSON.parse(fs.readFileSync(settingsPath, "utf8"));
+    assert.equal(savedSettings.defaultModel, "ac01/claude-sonnet-4-6");
+    assert.equal(savedSettings.modelThinkingLevels?.["cpam/ac01/claude-sonnet-4-6"], "high");
+
+    // Verify no leftover .tmp files in directory
+    const filesAfterSettings = fs.readdirSync(tmpAgentDir);
+    assert.ok(!filesAfterSettings.some((f) => f.endsWith(".tmp")), "Atomic write must not leave .tmp files behind");
+
+    // syncLiveCliProxyModels with persistToDisk should update PI_CODING_AGENT_DIR/models.json atomically
+    const modelsJsonPath = path.join(tmpAgentDir, "models.json");
+    fs.writeFileSync(
+      modelsJsonPath,
+      JSON.stringify({ providers: { cpam: { models: [] } } }, null, 2),
+      "utf8",
+    );
+
+    const mockClient = {
+      getModels: async () => [{ id: "ac02/gpt-5-codex", context_window: 200000, max_tokens: 16384 }],
+    } as any;
+
+    const syncRes = await syncLiveCliProxyModels([], { persistToDisk: true, client: mockClient });
+    assert.equal(syncRes.addedCount, 1);
+
+    const savedModelsJson = JSON.parse(fs.readFileSync(modelsJsonPath, "utf8"));
+    assert.equal(savedModelsJson.providers.cpam.models.length, 1);
+    assert.equal(savedModelsJson.providers.cpam.models[0].id, "ac02/gpt-5-codex");
+
+    const filesAfterModels = fs.readdirSync(tmpAgentDir);
+    assert.ok(!filesAfterModels.some((f) => f.endsWith(".tmp")), "Atomic write must not leave .tmp files behind");
+  } finally {
+    if (prevAgentDir === undefined) {
+      delete process.env.PI_CODING_AGENT_DIR;
+    } else {
+      process.env.PI_CODING_AGENT_DIR = prevAgentDir;
+    }
+    fs.rmSync(tmpAgentDir, { recursive: true, force: true });
+  }
+});

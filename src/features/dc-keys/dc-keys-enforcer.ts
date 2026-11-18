@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { getPiCodingAgentDir, writeFileAtomicSync } from "../../core/dc-paths.ts";
 
 export const DEFAULT_KEYBINDINGS_PATH = path.join(os.homedir(), ".pi", "agent", "keybindings.json");
 
@@ -9,7 +10,7 @@ export function resolveKeybindingsPath(customPath?: string): string {
   if (process.env.PI_KEYBINDINGS_PATH && process.env.PI_KEYBINDINGS_PATH.trim().length > 0) {
     return process.env.PI_KEYBINDINGS_PATH.trim();
   }
-  return DEFAULT_KEYBINDINGS_PATH;
+  return path.join(getPiCodingAgentDir(), "keybindings.json");
 }
 
 /**
@@ -24,7 +25,8 @@ export function enforceKeybindings(keybindingsFile?: string): boolean {
     if (fs.existsSync(target)) {
       try {
         cfg = JSON.parse(fs.readFileSync(target, "utf8"));
-      } catch {
+      } catch (err) {
+        console.error(`[dc-keys-enforcer] JSON inválido en ${target}, reiniciando objeto:`, err);
         cfg = {};
       }
     }
@@ -62,12 +64,11 @@ export function enforceKeybindings(keybindingsFile?: string): boolean {
     }
 
     if (changed) {
-      fs.mkdirSync(path.dirname(target), { recursive: true });
-      fs.writeFileSync(target, JSON.stringify(cfg, null, 2) + "\n", "utf8");
+      writeFileAtomicSync(target, JSON.stringify(cfg, null, 2) + "\n");
       return true;
     }
-  } catch {
-    /* best effort */
+  } catch (err) {
+    console.error("[dc-keys-enforcer] Error al aplicar keybindings:", err);
   }
   return false;
 }

@@ -232,10 +232,27 @@ export default function dcSidebarExtension(pi: ExtensionAPI): void {
   }
 
   let resizeHandler: (() => void) | null = null;
+  let startupTimers: NodeJS.Timeout[] = [];
+
+  const clearSidebarStartupResources = () => {
+    if (resizeHandler) {
+      try {
+        process.stdout.off("resize", resizeHandler);
+      } catch {
+        /* noop */
+      }
+      resizeHandler = null;
+    }
+    for (const timer of startupTimers) {
+      clearTimeout(timer);
+    }
+    startupTimers = [];
+  };
 
   // 3. Captura del host y montaje del rail
   pi.on("session_start", async (_event: unknown, ctx: ExtensionContext) => {
     if (!ctx.hasUI || ctx.mode !== "tui") return;
+    clearSidebarStartupResources();
     (globalThis as any)[Symbol.for("dc.sidebar.theme-fn")] = () => ctx.ui.theme;
     (globalThis as any)[G_CTX] = ctx;
     (globalThis as any)[Symbol.for("dc.sidebar.pi")] = pi;
@@ -304,7 +321,8 @@ export default function dcSidebarExtension(pi: ExtensionAPI): void {
     }
 
     for (const ms of [400, 1000, 2000]) {
-      setTimeout(() => {
+      const handle = setTimeout(() => {
+        startupTimers = startupTimers.filter((t) => t !== handle);
         const tui = (globalThis as any)[G_TUI];
         if (tui) {
           enforceBar(tui);
@@ -315,20 +333,15 @@ export default function dcSidebarExtension(pi: ExtensionAPI): void {
           tui.requestRender?.();
         }
       }, ms);
+      handle.unref?.();
+      startupTimers.push(handle);
     }
   });
 
   pi.on("session_shutdown", () => {
     (globalThis as any)[G_CTX] = undefined;
     (globalThis as any)[Symbol.for("dc.sidebar.pi")] = undefined;
-    if (resizeHandler) {
-      try {
-        process.stdout.off("resize", resizeHandler);
-      } catch {
-        /* noop */
-      }
-      resizeHandler = null;
-    }
+    clearSidebarStartupResources();
     stopPolling();
     const tui = (globalThis as any)[G_TUI];
     if (tui) {

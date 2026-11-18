@@ -201,7 +201,12 @@ test("ProfileDuel: N-way keyboard navigation and selection across profiles", () 
   const lines = duel.render(80);
   assert.ok(lines.length >= 8);
   assert.ok(lines.some((l) => l.includes("dcdev") && l.includes("cubis")));
+  for (const line of lines) {
+    const plain = line.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, "");
+    assert.ok(plain.length <= 80, `Expected line width <= 80 in 80-col terminal, got ${plain.length}: "${plain}"`);
+  }
 });
+
 
 test("openProfilePicker renders with DcWindow native footer and complete divider", async () => {
   let capturedComponent: any;

@@ -106,7 +106,6 @@ export class DcStatusPanel implements Component {
     const tabsLines = this.tabsComponent.render(safeW);
 
     const lines: string[] = [
-      "",
       ...tabsLines,
       "",
     ];
@@ -369,7 +368,8 @@ export class DcStatusPanel implements Component {
   }
 
   handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
-    const adjustedEvent = event.y !== undefined ? { ...event, y: event.y - 1 } : event;
+    const adjustedEvent =
+      event.y === 0 || event.y === 1 ? { ...event, y: 0 } : event;
     const tabsResult = this.tabsComponent.handleMouse(adjustedEvent);
     if (tabsResult?.handled) {
       return tabsResult;

@@ -1,7 +1,7 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { dcNotifier } from "../../integrations/dc-notify/dc-notifier.ts";
 import { registerDcServicesTools } from "./tools/dc-services-tools.ts";
-import { DcServicesManager } from "./core/dc-services-manager.ts";
+import { DcServicesManager, stopSessionStartedServices } from "./core/dc-services-manager.ts";
 
 /**
  * Extensión dc-services para Pi y DC Studio.
@@ -12,6 +12,14 @@ import { DcServicesManager } from "./core/dc-services-manager.ts";
  */
 export default function dcServicesExtension(pi: ExtensionAPI): void {
   registerDcServicesTools(pi);
+
+  try {
+    (pi as any).on?.("session_shutdown", async (_event: unknown, ctx?: ExtensionContext) => {
+      await stopSessionStartedServices(ctx?.cwd);
+    });
+  } catch {
+    /* optional if mock pi does not expose on */
+  }
 
   pi.registerCommand("dc-services", {
     description: "DC Studio: check status of background workspace services",

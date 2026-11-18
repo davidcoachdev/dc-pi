@@ -123,8 +123,8 @@ Return:
 
 ## References
 
-- `references/document-contract.md` — canonical modular Markdown, metadata, numbering, ownership, evidence, traceability, and change contract.
-- `~/.pi/agent/skills/anti-overengineering/SKILL.md` — mandatory scope, simplicity, and decision controls.
-- `~/.pi/agent/skills/cognitive-doc-design/SKILL.md` — progressive disclosure and reviewability guidance.
-- `~/.pi/agent/skills/project-documentation/references/owners/product-discovery.md` — discovery-group owner for problem, users, evidence, assumptions, and initial direction.
-- `~/.pi/agent/AGENTS.md` — canonical Pi workflow, authority, and delegation policy.
+- `../document-contract.md` — canonical modular Markdown, metadata, numbering, ownership, evidence, traceability, and change contract.
+- `../../../dc-anti-overengineering/SKILL.md` — mandatory scope, simplicity, and decision controls.
+- `../../../dc-artifact-contracts/SKILL.md` — progressive disclosure and reviewability guidance.
+- `./product-discovery.md` — discovery-group owner for problem, users, evidence, assumptions, and initial direction.
+- `../../../dc-planned-workflow/SKILL.md` — canonical Pi workflow, authority, and delegation policy.

@@ -8,20 +8,69 @@
  */
 
 import * as os from "node:os";
+import * as path from "node:path";
 
 export interface ScanGuardDecision {
   block: boolean;
   reason?: string;
 }
 
-export const GUARDED_TOOLS: ReadonlySet<string> = new Set(["bash", "shell", "sh", "grep", "find", "read", "edit", "write"]);
+export const GUARDED_TOOLS: ReadonlySet<string> = new Set([
+  "bash",
+  "shell",
+  "sh",
+  "grep",
+  "find",
+  "read",
+  "edit",
+  "write",
+  "dc_ptc_run",
+]);
+
+function normalizeCandidatePathToken(raw: string): string {
+  let t = raw.trim().replace(/^['"]|['"]$/g, "").trim();
+  if (t === "" || t === "." || t === ".." || t.startsWith("./") || t.startsWith("../") || t.startsWith(".\\") || t.startsWith("..\\")) {
+    return t;
+  }
+
+  // Strip trailing /. or /.. or /./ segments on home variables and ~
+  for (const prefix of ["~", "$HOME", "${HOME}"]) {
+    if (t === prefix || t.startsWith(prefix + "/") || t.startsWith(prefix + "\\")) {
+      const rest = t.slice(prefix.length).replace(/\\/g, "/");
+      const normRest = path.posix.normalize("/" + rest);
+      if (normRest === "/") return prefix;
+      return prefix + normRest.replace(/\/+$/, "");
+    }
+  }
+
+  // Windows drive paths e.g. C:\. or C:/.
+  if (/^[a-zA-Z]:[\\/]/.test(t)) {
+    const drive = t.slice(0, 2);
+    const rest = t.slice(2).replace(/\\/g, "/");
+    const normRest = path.posix.normalize("/" + rest);
+    if (normRest === "/") return drive + "/";
+    return drive + normRest.replace(/\/+$/, "");
+  }
+
+  // POSIX absolute paths
+  if (t.startsWith("/")) {
+    const norm = path.posix.normalize(t.replace(/\/+\.+(\/|$)/g, "/"));
+    if (norm === "/") return "/";
+    return norm.replace(/\/+$/, "");
+  }
+
+  if (t.length > 1) {
+    t = t.replace(/[/\\]+$/, "");
+  }
+  return t;
+}
 
 /**
  * Checks if a token represents a filesystem root.
  */
 export function isRootPath(token: string): boolean {
-  let t = token.trim().replace(/^['"]|['"]$/g, "");
-  if (t.length > 1) t = t.replace(/[/\\]$/, "");
+  if (typeof token !== "string") return false;
+  const t = normalizeCandidatePathToken(token);
 
   if (t === "/" || t === "\\") return true;
   if (t === "~") return true;
@@ -133,20 +182,32 @@ export function sensitiveCredentialReason(pathOrCommand: string): string {
  * (rm -rf sobre raíz, home, variables de entorno globales o wildcards raíz).
  */
 function isDestructiveRm(tokens: string[]): boolean {
-  const rmIdx = tokens.findIndex((t) => t === "rm" || /[/\\]rm$/.test(t));
+  const rmIdx = tokens.findIndex((t) => {
+    const clean = t.replace(/^['"]|['"]$/g, "");
+    return clean === "rm" || /[/\\]rm$/.test(clean);
+  });
   if (rmIdx === -1) return false;
 
   // Verificar si tiene flag recursivo (-r, -rf, -fr, -R, --recursive, etc.)
-  const hasRecursive = tokens.some((t, i) => i > rmIdx && (/^-[a-zA-Z]*[rR]/.test(t) || t === "--recursive" || t === "-r" || t === "-R"));
+  const hasRecursive = tokens.some((t, i) => {
+    if (i <= rmIdx) return false;
+    const clean = t.replace(/^['"]|['"]$/g, "");
+    return /^-[a-zA-Z]*[rR]/.test(clean) || clean === "--recursive" || clean === "-r" || clean === "-R";
+  });
   if (!hasRecursive) return false;
 
   // Verificar si alguno de los argumentos objetivo es una raíz, wildcard de raíz o home
   for (let i = rmIdx + 1; i < tokens.length; i++) {
-    const tok = tokens[i]!;
+    const rawTok = tokens[i]!;
+    const tok = rawTok.replace(/^['"]|['"]$/g, "");
     if (tok.startsWith("-")) continue;
     if (isRootPath(tok)) return true;
     if (tok === "/*" || tok === "~/*" || tok === ".*" || tok === "$HOME/*" || tok === "${HOME}/*") return true;
     if (/^[/\\]\*+$/.test(tok) || /^\~[/\\]\*+$/.test(tok)) return true;
+    if (/[/\\]\*+$/.test(tok)) {
+      const base = tok.replace(/[/\\]\*+$/, "") || "/";
+      if (isRootPath(base)) return true;
+    }
   }
   return false;
 }
@@ -173,9 +234,132 @@ export function blockReason(command: string): string {
   );
 }
 
-export function classifyShellCommand(command: unknown): ScanGuardDecision {
-  if (typeof command !== "string" || command.trim() === "") {
+function unquoteLiteral(quoted: string): string {
+  const q = quoted[0];
+  if ((q === '"' || q === "'" || q === "`") && quoted.endsWith(q) && quoted.length >= 2) {
+    return quoted
+      .slice(1, -1)
+      .replace(/\\(["'`\\])/g, "$1")
+      .replace(/\\n/g, "\n")
+      .replace(/\\t/g, "\t");
+  }
+  return quoted;
+}
+
+function extractInlineSubshellPayloads(command: string): { kind: "shell" | "code"; payload: string }[] {
+  const results: { kind: "shell" | "code"; payload: string }[] = [];
+
+  // sh -c "...", bash -lc '...', zsh -c "..."
+  const shellRe = /(?:^|[\s;|&()])(?:\/usr\/bin\/env\s+)?(?:\/bin\/|\/usr\/bin\/)?(?:sh|bash|zsh|dash|ksh)\s+(?:-[a-zA-Z]+\s+)*-[a-zA-Z]*c\s+("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')/g;
+  let m: RegExpExecArray | null;
+  while ((m = shellRe.exec(command)) !== null) {
+    results.push({ kind: "shell", payload: unquoteLiteral(m[1]!) });
+  }
+
+  // python -c "...", python3 -c '...', node -e "...", node --eval '...'
+  const codeRe = /(?:^|[\s;|&()])(?:\/usr\/bin\/env\s+)?(?:\/bin\/|\/usr\/bin\/|\/usr\/local\/bin\/)?(?:python\d*(?:\.\d+)?|node|nodejs|bun|deno)\s+(?:-[^\s]+\s+)*(?:-c|-e|--eval|-p|--print)\s+("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')/g;
+  while ((m = codeRe.exec(command)) !== null) {
+    results.push({ kind: "code", payload: unquoteLiteral(m[1]!) });
+  }
+
+  return results;
+}
+
+function isPathConfinedToWorkspace(candidatePath: string, cwd: string = process.cwd()): boolean {
+  const clean = candidatePath.trim().replace(/^['"]|['"]$/g, "");
+  if (!clean) return true;
+  if (clean.startsWith("~") || clean.startsWith("$HOME") || clean.startsWith("${HOME}")) {
+    return false;
+  }
+  if (/(?:^|[/\\])\.\.(?:[/\\]|$)/.test(clean)) {
+    return false;
+  }
+  const baseCwd = path.resolve(cwd);
+  const baseTmp = path.resolve(os.tmpdir());
+  const isAbs = path.isAbsolute(clean);
+  const resolved = isAbs ? path.resolve(clean) : path.resolve(baseCwd, clean);
+
+  const isInside = (target: string, root: string) => {
+    const rel = path.relative(root, target);
+    return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
+  };
+
+  if (isInside(resolved, baseCwd)) return true;
+  if (isAbs && isInside(resolved, baseTmp)) return true;
+  return false;
+}
+
+export function classifyPtcCode(code: unknown, cwd: string = process.cwd()): ScanGuardDecision {
+  if (typeof code !== "string" || code.trim() === "") {
     return { block: false };
+  }
+
+  // 1. Verificar llamadas destructivas directas de filesystem en Python/Node (rmtree, rmSync, rmdirSync)
+  const nativeRmRe = /\b(?:shutil\.rmtree|os\.(?:remove|unlink|rmdir)|(?:fs(?:\.promises)?\.)?(?:rmSync|rmdirSync|rm|rmdir))\s*\(\s*("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`|os\.homedir\(\)|os\.path\.expanduser\(\s*['"]~['"]\s*\))/g;
+  let match: RegExpExecArray | null;
+  while ((match = nativeRmRe.exec(code)) !== null) {
+    const rawArg = match[1]!;
+    if (rawArg.includes("homedir") || rawArg.includes("expanduser")) {
+      return { block: true, reason: destructiveRmReason(match[0]) };
+    }
+    const target = unquoteLiteral(rawArg);
+    if (isRootPath(target) || /^[/\\]\*+$/.test(target)) {
+      return { block: true, reason: destructiveRmReason(match[0]) };
+    }
+  }
+
+  // 2. Verificar accesos de pi.fs / fs a rutas fuera del workspace o raíces
+  const fsCallRe = /\b(?:pi\.fs\.(?:read|write|list|exists)|fs\.(?:readFileSync|writeFileSync|readdirSync|openSync|statSync))\s*\(\s*("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`)/g;
+  while ((match = fsCallRe.exec(code)) !== null) {
+    const targetPath = unquoteLiteral(match[1]!);
+    if (targetPath.includes("${")) continue;
+    if (isSensitiveCredentialPath(targetPath)) {
+      return { block: true, reason: sensitiveCredentialReason(targetPath) };
+    }
+    if (isRootPath(targetPath)) {
+      return {
+        block: true,
+        reason: `dc-scan-guard: se bloqueó acceso en raíz (\`${targetPath}\`) dentro de \`dc_ptc_run\`.`,
+      };
+    }
+    if (!isPathConfinedToWorkspace(targetPath, cwd)) {
+      return {
+        block: true,
+        reason: `dc-scan-guard: se bloqueó acceso fuera del workspace autorizado (\`${targetPath}\`) en \`dc_ptc_run\`.`,
+      };
+    }
+  }
+
+  // 3. Inspeccionar literales de cadena por comandos shell destructivos o credenciales
+  const literalRe = /("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`)/g;
+  while ((match = literalRe.exec(code)) !== null) {
+    const literal = unquoteLiteral(match[1]!);
+    if (isSensitiveCredentialPath(literal)) {
+      return { block: true, reason: sensitiveCredentialReason(literal) };
+    }
+    const shellDecision = classifyShellCommand(literal, 1);
+    if (shellDecision.block) {
+      return shellDecision;
+    }
+  }
+
+  return { block: false };
+}
+
+export function classifyShellCommand(command: unknown, depth = 0): ScanGuardDecision {
+  if (typeof command !== "string" || command.trim() === "" || depth > 3) {
+    return { block: false };
+  }
+
+  // 0. Inspeccionar payloads de subshells inline (sh -c, bash -c, python3 -c, node -e)
+  for (const sub of extractInlineSubshellPayloads(command)) {
+    if (sub.kind === "shell") {
+      const subDecision = classifyShellCommand(sub.payload, depth + 1);
+      if (subDecision.block) return subDecision;
+    } else {
+      const codeDecision = classifyPtcCode(sub.payload);
+      if (codeDecision.block) return codeDecision;
+    }
   }
 
   for (const segment of splitSegments(command)) {
@@ -197,10 +381,16 @@ export function classifyShellCommand(command: unknown): ScanGuardDecision {
 }
 
 /**
- * Valida si los parámetros de herramientas nativas como `grep` o `find` apuntan a raíces peligrosas.
+ * Valida si los parámetros de herramientas nativas como `grep`, `find`, `read` o `dc_ptc_run` apuntan a raíces o patrones peligrosos.
  */
 export function classifyNativeToolScan(toolName: string, input: Record<string, unknown> | undefined): ScanGuardDecision {
   if (!input || typeof input !== "object") return { block: false };
+
+  if (toolName === "dc_ptc_run" || typeof input.code === "string") {
+    const cwd = typeof input.cwd === "string" ? input.cwd : process.cwd();
+    const ptcDecision = classifyPtcCode(input.code, cwd);
+    if (ptcDecision.block) return ptcDecision;
+  }
 
   const targetPath = (input.path || input.directory || input.dir || input.filePath) as string | undefined;
   if (typeof targetPath === "string") {

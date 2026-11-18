@@ -83,3 +83,60 @@ test("dcServicesExtension registers all 6 service tools and /dc-services command
 
   assert.ok(registeredCommands.includes("dc-services"));
 });
+
+test("dcServicesExtension registers session_shutdown to stop session-started services cleanly", async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "dc-services-shutdown-"));
+  const piDir = path.join(tmpDir, ".pi");
+  fs.mkdirSync(piDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(piDir, "services.json"),
+    JSON.stringify({
+      services: {
+        ephemeralSvc: { command: "sh -c 'sleep 15'" },
+        persistentSvc: { command: "sh -c 'sleep 15'", persistent: true },
+      },
+    }),
+    "utf8",
+  );
+
+  const tools = new Map<string, any>();
+  const events = new Map<string, Function[]>();
+  const mockPi = {
+    registerTool(tool: any) {
+      tools.set(tool.name, tool);
+    },
+    registerCommand() {},
+    on(event: string, fn: Function) {
+      if (!events.has(event)) events.set(event, []);
+      events.get(event)!.push(fn);
+    },
+  } as unknown as ExtensionAPI;
+
+  dcServicesExtension(mockPi);
+  assert.ok(events.has("session_shutdown"), "dcServicesExtension must register session_shutdown");
+
+  const startTool = tools.get("dc_service_start");
+  assert.ok(startTool);
+
+  const mockCtx = { cwd: tmpDir } as any;
+  await startTool.execute("1", { service: "ephemeralSvc" }, undefined, undefined, mockCtx);
+  await startTool.execute("2", { service: "persistentSvc" }, undefined, undefined, mockCtx);
+
+  const manager = new DcServicesManager(tmpDir);
+  assert.equal(manager.getServiceStatus("ephemeralSvc").state, "running");
+  assert.equal(manager.getServiceStatus("persistentSvc").state, "running");
+
+  try {
+    for (const fn of events.get("session_shutdown")!) {
+      await fn({}, mockCtx);
+    }
+
+    assert.equal(manager.getServiceStatus("ephemeralSvc").state, "stopped", "Session-started non-persistent service must stop on session_shutdown");
+    assert.equal(manager.getServiceStatus("persistentSvc").state, "running", "Explicit persistent service must remain running");
+  } finally {
+    await manager.stopService("ephemeralSvc", 1000).catch(() => {});
+    await manager.stopService("persistentSvc", 1000).catch(() => {});
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+

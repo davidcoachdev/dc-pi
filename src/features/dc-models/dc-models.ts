@@ -9,6 +9,11 @@ import { syncLiveCliProxyModels } from "./core/dc-models-sync.ts";
 import { dcNotifier } from "../../integrations/dc-notify/dc-notifier.ts";
 import { DcModelsPanel, type ModelAccountTab, type ModelItem, type EffortLevel } from "./dc-models-panel.ts";
 import { resolveRecommendedContextWindow, resolveSafeMaxTokens } from "./core/dc-model-calibration.ts";
+import { getPiCodingAgentDir, writeFileAtomicSync } from "../../core/dc-paths.ts";
+
+export function resolveSettingsFilePath(): string {
+  return path.join(getPiCodingAgentDir(), "settings.json");
+}
 
 export const SETTINGS_FILE = path.join(os.homedir(), ".pi/agent/settings.json");
 
@@ -20,11 +25,12 @@ export function persistDefaultModel(
   m: ModelItem,
   thinkingLevel?: string,
   onError?: (msg: string) => void,
-  settingsFilePath: string = SETTINGS_FILE,
+  settingsFilePath?: string,
 ): void {
+  const targetSettingsPath = settingsFilePath ?? resolveSettingsFilePath();
   try {
-    if (!fs.existsSync(settingsFilePath)) return;
-    const raw = fs.readFileSync(settingsFilePath, "utf8");
+    if (!fs.existsSync(targetSettingsPath)) return;
+    const raw = fs.readFileSync(targetSettingsPath, "utf8");
     const settings = JSON.parse(raw) as Record<string, unknown>;
     settings.defaultProvider = m.provider ? String(m.provider) : "cpam";
     settings.defaultModel = m.id;
@@ -34,9 +40,11 @@ export function persistDefaultModel(
       map[key] = thinkingLevel;
       settings.modelThinkingLevels = map;
     }
-    fs.writeFileSync(settingsFilePath, JSON.stringify(settings, null, 2) + "\n", "utf8");
+    writeFileAtomicSync(targetSettingsPath, JSON.stringify(settings, null, 2) + "\n");
   } catch (err) {
-    onError?.(`No se pudo guardar como default: ${err instanceof Error ? err.message : String(err)}`);
+    const msg = `No se pudo guardar como default: ${err instanceof Error ? err.message : String(err)}`;
+    console.error(`[dc-models] ${msg}`);
+    onError?.(msg);
   }
 }
 
@@ -77,8 +85,9 @@ export async function openModelsSelector(
   // Fallback: algunos providers builtin (como opencode-go) pueden no aparecer en
   // getAvailable() aunque tengan credenciales y modelos en models-store.json.
   // Completamos la lista leyendo el store directamente.
-  const MODELS_STORE_FILE = path.join(os.homedir(), ".pi/agent/models-store.json");
-  const AUTH_FILE = path.join(os.homedir(), ".pi/agent/auth.json");
+  const agentDir = getPiCodingAgentDir();
+  const MODELS_STORE_FILE = path.join(agentDir, "models-store.json");
+  const AUTH_FILE = path.join(agentDir, "auth.json");
   try {
     const providersInModels = new Set(models.map((m) => String(m.provider ?? "")));
     const rawStore = fs.readFileSync(MODELS_STORE_FILE, "utf8");
@@ -153,16 +162,17 @@ export async function openModelsSelector(
 
   // Leer modelThinkingLevels de settings.json para pasarlos al panel
   let configuredThinkingLevels: Record<string, string> = {};
+  const activeSettingsFile = resolveSettingsFilePath();
   try {
-    if (fs.existsSync(SETTINGS_FILE)) {
-      const raw = fs.readFileSync(SETTINGS_FILE, "utf8");
+    if (fs.existsSync(activeSettingsFile)) {
+      const raw = fs.readFileSync(activeSettingsFile, "utf8");
       const parsed = JSON.parse(raw);
       if (parsed.modelThinkingLevels && typeof parsed.modelThinkingLevels === "object") {
         configuredThinkingLevels = parsed.modelThinkingLevels;
       }
     }
-  } catch {
-    /* ignore */
+  } catch (err) {
+    console.error(`[dc-models] Error leyendo settings.json (${activeSettingsFile}):`, err);
   }
 
   let panelRef: DcModelsPanel | undefined;

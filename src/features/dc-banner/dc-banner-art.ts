@@ -51,14 +51,41 @@ export function bloodShade(row: number, total: number): [number, number, number]
 }
 
 /** Render the centered ASCII shield logo with the Blood red gradient. */
-export function renderDcBanner(width: number, topPadRows: number = 8): string[] {
+export function renderDcBanner(
+  width: number,
+  topPadRows?: number,
+  viewportHeight?: number,
+): string[] {
   const lines: string[] = [];
+  const isCompactWidth = width < FULL_LOGO_WIDTH + 4;
+  const effectiveViewport =
+    viewportHeight ??
+    (topPadRows === undefined &&
+    typeof process?.stdout?.rows === "number" &&
+    process.stdout.rows > 0
+      ? process.stdout.rows
+      : undefined);
+
+  const isCompact =
+    isCompactWidth ||
+    (effectiveViewport !== undefined && effectiveViewport < DC_LOGO.length + 2);
+  const artRows = isCompact ? 1 : DC_LOGO.length;
+
+  let effectiveTopPad = Math.max(0, topPadRows ?? 8);
+  if (effectiveViewport !== undefined) {
+    const maxPad =
+      effectiveViewport <= 32
+        ? 0
+        : Math.max(0, effectiveViewport - (artRows + 1) - 7);
+    effectiveTopPad = Math.min(effectiveTopPad, maxPad);
+  }
+
   // Espaciado superior vertical para centrar el logo visualmente en la pantalla
-  for (let i = 0; i < topPadRows; i++) {
+  for (let i = 0; i < effectiveTopPad; i++) {
     lines.push("");
   }
 
-  if (width < FULL_LOGO_WIDTH + 4) {
+  if (isCompact) {
     const pad = " ".repeat(Math.max(0, Math.floor((width - visibleWidth(COMPACT_ART)) / 2)));
     lines.push(pad + rgbAnsi(BLOOD_TOP[0], BLOOD_TOP[1], BLOOD_TOP[2], COMPACT_ART));
     lines.push("");

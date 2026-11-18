@@ -459,5 +459,65 @@ test("formatFooterText colorizes plain brackets and labels with theme colors", (
   assert.ok(footerRow.includes("\x1b[1m\x1b[38;role:accentm[ Cerrar ]\x1b[39m\x1b[22m"));
 });
 
+test("closing DcWindow via Escape or [X] stops animation timer and resets mid-drag state", (t) => {
+  t.mock.timers.enable({ apis: ["setInterval"] });
+
+  // 1. Escape while loading and mid-drag
+  let renders1 = 0;
+  const moves1: Array<{ dx: number; dy: number }> = [];
+  const w1 = fixture({
+    loading: true,
+    requestRender: () => renders1++,
+    onMove: (dx, dy) => moves1.push({ dx, dy }),
+  }).window;
+  w1.render(30);
+
+  // Start dragging
+  w1.handleMouse(mouse(5, 1, { type: "press", screenX: 50, screenY: 20 }));
+  w1.handleMouse(mouse(8, 2, { type: "drag", screenX: 53, screenY: 21 }));
+  assert.equal(moves1.length, 1);
+
+  t.mock.timers.tick(80);
+  const rendersBeforeEsc = renders1;
+  assert.ok(rendersBeforeEsc >= 1);
+
+  // Close via Escape while mid-drag (no release event sent)
+  assert.equal(w1.handleInput("\x1b"), true);
+
+  // Animation timer must be stopped
+  t.mock.timers.tick(320);
+  assert.equal(renders1, rendersBeforeEsc);
+
+  // Subsequent drag without a new press must be ignored because isDragging was reset
+  w1.handleMouse(mouse(12, 4, { type: "drag", screenX: 57, screenY: 23 }));
+  assert.equal(moves1.length, 1);
+
+  // 2. [X] click while loading and mid-drag
+  let renders2 = 0;
+  const moves2: Array<{ dx: number; dy: number }> = [];
+  const w2 = fixture({
+    loading: true,
+    requestRender: () => renders2++,
+    onMove: (dx, dy) => moves2.push({ dx, dy }),
+  }).window;
+  w2.render(30);
+
+  // Start dragging
+  w2.handleMouse(mouse(5, 1, { type: "press", screenX: 50, screenY: 20 }));
+  t.mock.timers.tick(80);
+  const rendersBeforeClick = renders2;
+  assert.ok(rendersBeforeClick >= 1);
+
+  // Click [X] at x=25, y=1
+  w2.handleMouse(mouse(25, 1, { type: "click" }));
+
+  // Animation timer must be stopped and drag reset
+  t.mock.timers.tick(320);
+  assert.equal(renders2, rendersBeforeClick);
+  w2.handleMouse(mouse(10, 3, { type: "drag", screenX: 55, screenY: 22 }));
+  assert.equal(moves2.length, 0);
+});
+
+
 
 

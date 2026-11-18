@@ -15,6 +15,7 @@ import * as path from "node:path";
 import * as os from "node:os";
 import { randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
+import { validatePublicUrlResolved } from "../../dc-websearch/core/dc-websearch-security.ts";
 
 export type DcLazywebSearchMode = "screens" | "flows" | "experiments";
 export type DcLazywebPlatform = "desktop" | "mobile" | "all";
@@ -347,10 +348,58 @@ export class DcLazywebClient {
       const filePath = path.join(this.previewCacheDir, `${i + 1}-${safeCompany}${ext}`);
 
       try {
-        const res = await this.fetchImpl(url);
-        if (!res.ok) continue;
-        const arrayBuf = await res.arrayBuffer();
-        fs.writeFileSync(filePath, Buffer.from(arrayBuf));
+        const ssrfCheck = await validatePublicUrlResolved(url);
+        if (!ssrfCheck.safe) continue;
+
+        const maxPreviewBytes = 10 * 1024 * 1024; // 10 MB
+        const ctrl = new AbortController();
+        const timer = setTimeout(() => ctrl.abort(), 10000);
+        let imgBuffer: Buffer;
+        try {
+          const res = await this.fetchImpl(url, { signal: ctrl.signal, redirect: "error" });
+          if (!res.ok) continue;
+
+          const cl = res.headers?.get?.("content-length");
+          if (cl && parseInt(cl, 10) > maxPreviewBytes) continue;
+
+          if (res.body && typeof (res.body as any).getReader === "function") {
+            const reader = (res.body as ReadableStream<Uint8Array>).getReader();
+            const chunks: Buffer[] = [];
+            let total = 0;
+            let exceeded = false;
+            try {
+              while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+                if (value) {
+                  total += value.byteLength;
+                  if (total > maxPreviewBytes) {
+                    exceeded = true;
+                    await reader.cancel().catch(() => {});
+                    break;
+                  }
+                  chunks.push(Buffer.from(value));
+                }
+              }
+            } finally {
+              try {
+                reader.releaseLock();
+              } catch {
+                /* ignore */
+              }
+            }
+            if (exceeded) continue;
+            imgBuffer = Buffer.concat(chunks);
+          } else {
+            const arrayBuf = await res.arrayBuffer();
+            if (arrayBuf.byteLength > maxPreviewBytes) continue;
+            imgBuffer = Buffer.from(arrayBuf);
+          }
+        } finally {
+          clearTimeout(timer);
+        }
+
+        fs.writeFileSync(filePath, imgBuffer);
         downloadedFiles.push(filePath);
 
         if (fs.existsSync(this.viewerScriptPath)) {

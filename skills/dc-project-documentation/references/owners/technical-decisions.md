@@ -103,13 +103,13 @@ Return:
 
 ## References
 
-- `~/.pi/agent/skills/project-documentation/SKILL.md` — lightweight project documentation routing.
-- `~/.pi/agent/skills/project-documentation/references/owners/startup-documentation.md` — new-project lifecycle initialization and shared documentation contract.
-- `~/.pi/agent/skills/project-documentation/references/document-contract.md` — modular Markdown and supersession contract.
-- `~/.pi/agent/skills/project-documentation/references/owners/architecture-definition.md` — architecture view and driver owner.
-- `~/.pi/agent/skills/project-documentation/references/owners/requirements-definition.md` — requirement and constraint owner.
-- `~/.pi/agent/skills/tdd/SKILL.md` — applicable change-type validation guidance when an approved spike changes code.
-- `~/.pi/agent/skills/anti-overengineering/SKILL.md` — mandatory simplicity and decision controls.
+- `../../SKILL.md` — lightweight project documentation routing.
+- `./startup-documentation.md` — new-project lifecycle initialization and shared documentation contract.
+- `../document-contract.md` — modular Markdown and supersession contract.
+- `./architecture-definition.md` — architecture view and driver owner.
+- `./requirements-definition.md` — requirement and constraint owner.
+- `../../../acceptance-contract/SKILL.md` — applicable change-type validation guidance when an approved spike changes code.
+- `../../../dc-anti-overengineering/SKILL.md` — mandatory simplicity and decision controls.
 - `https://adr.github.io/` — architecturally significant decision records.
 - `https://martinfowler.com/bliki/ArchitectureDecisionRecord.html` — short, single-decision, superseded ADRs.
 - `https://martinfowler.com/bliki/MonolithFirst.html` — microservice premium and qualified monolith-first reasoning.

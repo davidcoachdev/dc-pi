@@ -31,6 +31,8 @@ export class AgentVisualStateStore {
   private listeners = new Set<StateListener>();
   private idleTimer?: NodeJS.Timeout;
   private errorTimer?: NodeJS.Timeout;
+  private compactErrorTimer?: NodeJS.Timeout;
+  private disposed = false;
   private readonly idleTimeoutMs: number;
   private readonly errorFlashMs: number;
 
@@ -53,9 +55,10 @@ export class AgentVisualStateStore {
   }
 
   private scheduleIdleTimer(): void {
+    if (this.disposed) return;
     if (this.state === "idle" && this.idleTimeoutMs > 0) {
       this.idleTimer = setTimeout(() => {
-        if (this.state === "idle") {
+        if (!this.disposed && this.state === "idle") {
           this.setState("dormant");
         }
       }, this.idleTimeoutMs);
@@ -63,7 +66,7 @@ export class AgentVisualStateStore {
   }
 
   setState(newState: AgentState): void {
-    if (this.state === newState) return;
+    if (this.disposed || this.state === newState) return;
     const prev = this.state;
     this.state = newState;
     this.resetTimers();
@@ -94,9 +97,14 @@ export class AgentVisualStateStore {
       clearTimeout(this.errorTimer);
       this.errorTimer = undefined;
     }
+    if (this.compactErrorTimer) {
+      clearTimeout(this.compactErrorTimer);
+      this.compactErrorTimer = undefined;
+    }
   }
 
   dispose(): void {
+    this.disposed = true;
     this.resetTimers();
     this.listeners.clear();
   }
@@ -160,8 +168,12 @@ export class AgentVisualStateStore {
     };
 
     const onSessionCompactFailed = () => {
+      if (this.disposed) return;
       this.setState("retying");
-      setTimeout(() => {
+      if (this.compactErrorTimer) clearTimeout(this.compactErrorTimer);
+      this.compactErrorTimer = setTimeout(() => {
+        this.compactErrorTimer = undefined;
+        if (this.disposed) return;
         if (this.busy) this.setState("thinking");
         else this.setState("idle");
       }, this.errorFlashMs);

@@ -64,10 +64,20 @@ export interface BackgroundEphemeralTracking {
   originalTaskId?: string;
   handoverPacket?: TaxiHandoverPacket;
   handoverCount?: number;
+  unprovenCheckCount?: number;
+  everObservedRunning?: boolean;
 }
 
 export const activeBackgroundPlans = new Map<string, BackgroundEphemeralTracking>();
 let backgroundSweeperTimer: NodeJS.Timeout | undefined;
+const MAX_UNPROVEN_SWEEP_RETRIES = 3;
+
+export function stopBackgroundSweeper(): void {
+  if (backgroundSweeperTimer) {
+    clearInterval(backgroundSweeperTimer);
+    backgroundSweeperTimer = undefined;
+  }
+}
 
 /**
  * Ejecuta un ciclo del sweeper para tareas en background:
@@ -77,7 +87,10 @@ let backgroundSweeperTimer: NodeJS.Timeout | undefined;
  *    la marque como zombi por TTL.
  */
 export function sweepBackgroundPlansOnce(tasksDirOverride?: string, fleetPath?: string, historyPath?: string): void {
-  if (activeBackgroundPlans.size === 0) return;
+  if (activeBackgroundPlans.size === 0) {
+    stopBackgroundSweeper();
+    return;
+  }
 
   const now = Date.now();
   const tasksDir = tasksDirOverride || path.join(os.homedir(), ".pi", "agent", "gentle-agents", "tasks");
@@ -97,7 +110,12 @@ export function sweepBackgroundPlansOnce(tasksDirOverride?: string, fleetPath?: 
     } else {
       const taskFilePath = path.join(tasksDir, `${item.taskId}.json`);
       if (!fs.existsSync(taskFilePath)) {
-        reclaimBlocker = "task_file_not_found";
+        if (item.everObservedRunning) {
+          isDone = true;
+          finalStatus = "completed";
+        } else {
+          reclaimBlocker = "task_file_not_found";
+        }
       } else {
         try {
           const raw = fs.readFileSync(taskFilePath, "utf8");
@@ -202,6 +220,8 @@ export function sweepBackgroundPlansOnce(tasksDirOverride?: string, fleetPath?: 
         /* defensive */
       }
     } else if (observedRunning) {
+      item.everObservedRunning = true;
+      item.unprovenCheckCount = 0;
       // Genuinely observed running worker:
       // Keep running past 12 min without timeout
       // Sincronizar en caliente los tokens y el costo en el pasajero del taxi para que el taxímetro se vea en vivo
@@ -264,6 +284,7 @@ export function sweepBackgroundPlansOnce(tasksDirOverride?: string, fleetPath?: 
       // 1. DO NOT assume missing file proves terminated or automatically kill/release still running worker.
       // 2. STOP perpetually heartbeating unproven worker.
       // 3. Report exact blocker.
+      item.unprovenCheckCount = (item.unprovenCheckCount ?? 0) + 1;
       if (reclaimBlocker) {
         appendTaxiLog("WARN", "TAXI_SWEEPER_CANNOT_RECLAIM", {
           agent: item.plan.agentName,
@@ -271,9 +292,24 @@ export function sweepBackgroundPlansOnce(tasksDirOverride?: string, fleetPath?: 
           plate: item.plan.plate,
           taskId: item.taskId,
           blocker: reclaimBlocker,
+          attempt: item.unprovenCheckCount,
         });
       }
+      if (item.unprovenCheckCount >= MAX_UNPROVEN_SWEEP_RETRIES) {
+        activeBackgroundPlans.delete(key);
+        try {
+          if (item.plan.agentFilePath && fs.existsSync(item.plan.agentFilePath)) {
+            fs.unlinkSync(item.plan.agentFilePath);
+          }
+        } catch {
+          /* defensive */
+        }
+      }
     }
+  }
+
+  if (activeBackgroundPlans.size === 0) {
+    stopBackgroundSweeper();
   }
 }
 
@@ -376,6 +412,14 @@ export function extractSubagentMetrics(rawOutcome: any, unwrapped?: any): Extrac
 }
 
 export function registerDcEphemeralTools(pi: ExtensionAPI): void {
+  try {
+    (pi as any).on?.("session_shutdown", () => {
+      stopBackgroundSweeper();
+    });
+  } catch {
+    /* optional if mock pi does not expose on */
+  }
+
   pi.registerTool({
     name: "dc_ephemeral_agent_run",
     label: "DC Ephemeral Agent Run",

@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import * as fs from "node:fs";
 import {
   PRNG,
   integer,
@@ -162,5 +163,51 @@ test("Fuzzing Watchdog: Detecta bucle infinito o ReDoS en Worker Thread sin cong
   if (crash) {
     assert.equal(crash.type, "CPU_HANG_TIMEOUT");
     assert.ok(crash.error?.includes("Watchdog triggered"), "Debe reportar que el Watchdog terminó el worker");
+  }
+});
+
+test("Fuzzing Watchdog: Ejecuta limpiamente target seguro en entorno ESM (type: module) y detecta excepciones", async () => {
+  const fuzzerSrc = fs.readFileSync(new URL("../../src/testing/adversarial/fuzzer.ts", import.meta.url), "utf8");
+  assert.ok(
+    !fuzzerSrc.includes('require("node:worker_threads")'),
+    "fuzzer.ts must not use CommonJS require('node:worker_threads') inside workerWrapperCode",
+  );
+
+  const safeScript = `
+    function targetFn(buf, str) {
+      try {
+        JSON.parse(str);
+      } catch {
+        // ignore invalid JSON
+      }
+    }
+  `;
+
+  const cleanResult = await fuzzWithWatchdog(safeScript, {
+    iterations: 15,
+    timeoutMs: 250,
+    seed: 1234,
+    initialCorpus: ['{"ok":true}']
+  });
+
+  assert.equal(cleanResult, null, "Un target seguro debe completar todas las iteraciones sin ReferenceError: require is not defined");
+
+  const crashScript = `
+    function targetFn(buf, str) {
+      throw new Error("Controlled target crash inside worker");
+    }
+  `;
+
+  const crashResult = await fuzzWithWatchdog(crashScript, {
+    iterations: 5,
+    timeoutMs: 250,
+    seed: 1234,
+    initialCorpus: ["test"]
+  });
+
+  assert.ok(crashResult !== null, "Debe capturar excepción del targetFn");
+  if (crashResult) {
+    assert.equal(crashResult.type, "CRASH_EXCEPTION");
+    assert.ok(crashResult.error?.includes("Controlled target crash inside worker"));
   }
 });

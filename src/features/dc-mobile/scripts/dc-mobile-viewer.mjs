@@ -34,6 +34,7 @@ const DEFAULT_INTERVAL_MS = 1_000;
 const MIN_INTERVAL_MS = 1_000;
 const MAX_INTERVAL_MS = 10_000;
 const DEFAULT_ADB = "adb";
+const MAX_RETAINED_FRAMES = 20;
 
 const RESET = "\x1b[0m";
 const CLEAR = "\x1b[2J\x1b[H";
@@ -221,7 +222,7 @@ function draw(force = false) {
   }
 }
 
-/** Removes the temp files this viewer owns; inspect's frames stay untouched. */
+/** Removes the temp files this viewer owns and prunes older frame-*.png beyond retention limit. */
 function pruneOwnArtifacts() {
   let entries;
   try {
@@ -230,12 +231,37 @@ function pruneOwnArtifacts() {
     return;
   }
 
+  const frames = [];
   for (const entry of entries) {
-    if (!entry.startsWith(tempPrefix)) continue;
-    try {
-      rmSync(join(frameDir, entry), { force: true });
-    } catch {
-      // Best effort: a leftover temp file never breaks the viewer.
+    if (entry.startsWith(tempPrefix)) {
+      try {
+        rmSync(join(frameDir, entry), { force: true });
+      } catch {
+        // Best effort: a leftover temp file never breaks the viewer.
+      }
+      continue;
+    }
+    if (/^frame-.*\.png$/.test(entry)) {
+      const fullPath = join(frameDir, entry);
+      let mtimeMs = 0;
+      try {
+        mtimeMs = statSync(fullPath).mtimeMs;
+      } catch {
+        /* ignore */
+      }
+      frames.push({ entry, fullPath, mtimeMs });
+    }
+  }
+
+  if (frames.length > MAX_RETAINED_FRAMES) {
+    frames.sort((a, b) => (a.mtimeMs !== b.mtimeMs ? a.mtimeMs - b.mtimeMs : a.entry.localeCompare(b.entry)));
+    const excess = frames.slice(0, frames.length - MAX_RETAINED_FRAMES);
+    for (const item of excess) {
+      try {
+        rmSync(item.fullPath, { force: true });
+      } catch {
+        // Best effort.
+      }
     }
   }
 }

@@ -754,3 +754,58 @@ test("openPromptAnimPicker retains keyboard and mouse selection, cancel, and foo
   // Restore clean default prefs
   writePromptPrefs({ animation: "kitt" });
 });
+
+test("dcPromptExtension session_shutdown stops pulseTimer and disposes currentEditor", (t) => {
+  t.mock.timers.enable({ apis: ["setInterval"] });
+
+  const events = new Map<string, Function[]>();
+  const mockPi = {
+    registerCommand() {},
+    registerShortcut() {},
+    on(event: string, fn: Function) {
+      if (!events.has(event)) events.set(event, []);
+      events.get(event)!.push(fn);
+    },
+    getThinkingLevel: () => "high",
+  } as unknown as ExtensionAPI;
+
+  dcPromptExtension(mockPi);
+  assert.ok(events.has("session_shutdown"), "dcPromptExtension must register session_shutdown");
+
+  let installedFactory: any = null;
+  const mockCtx = {
+    hasUI: true,
+    mode: "tui",
+    model: { id: "claude-3-7-sonnet", contextWindow: 200_000 },
+    getContextUsage: () => ({ percent: 90, contextWindow: 200_000 }),
+    ui: {
+      setWorkingVisible: () => {},
+      setEditorComponent: (f: any) => { installedFactory = f; },
+      theme: {
+        fg: (_c: string, s: string) => s,
+        bold: (s: string) => s,
+        getThinkingBorderColor: () => (s: string) => s,
+      },
+    },
+  } as unknown as ExtensionContext;
+
+  events.get("session_start")!.forEach((fn) => fn({}, mockCtx));
+  const tui = createMockTui();
+  const editor = installedFactory(tui, createMockTheme(), createMockKeybindings());
+  assert.equal(getCurrentEditor(), editor);
+
+  // Render at 90% critical context so pulseInterval is started
+  editor.render(120);
+  const rendersBefore = tui.getRenders();
+  t.mock.timers.tick(200);
+  assert.ok(tui.getRenders() > rendersBefore, "pulseInterval should trigger renders before shutdown");
+
+  // Trigger session_shutdown
+  events.get("session_shutdown")!.forEach((fn) => fn({}, mockCtx));
+  assert.equal(getCurrentEditor(), undefined, "currentEditor must be cleared on session_shutdown");
+
+  const rendersAtShutdown = tui.getRenders();
+  t.mock.timers.tick(500);
+  assert.equal(tui.getRenders(), rendersAtShutdown, "pulseInterval must be stopped on session_shutdown");
+});
+

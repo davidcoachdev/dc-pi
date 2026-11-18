@@ -3687,6 +3687,52 @@ test("FINDING DISPATCHER: Ephemeral worker with LIVE parent PID must NOT be reap
   }
 });
 
+test("dc-ephemeral-tools: sweepBackgroundPlansOnce purges permanently missing/invalid entries after bounded grace retries and stops sweeper when drained", () => {
+  const tempDir = createTempDir("sweeper-purge-missing");
+  const fleetPath = path.join(tempDir, "dc-taxis.json");
+  const tasksDir = path.join(tempDir, "tasks");
+  fs.mkdirSync(tasksDir, { recursive: true });
+
+  const customAccounts = ["ac01"];
+  saveFleetState(createInitialFleetState(customAccounts), fleetPath);
+
+  const mockPlan: any = {
+    ephemeralId: "purge-plan-1",
+    agentName: "dc-sub-purge",
+    leasedAccount: "ac01",
+    agentFilePath: path.join(tempDir, "dc-sub-purge.md"),
+    plate: "DC-PURGE1",
+    fullModelRef: "cpam/ac01/gemini-3.8-flash-high",
+    mode: "background",
+  };
+  fs.writeFileSync(mockPlan.agentFilePath, "# test", "utf8");
+
+  activeBackgroundPlans.set("purge-plan-1", {
+    plan: mockPlan,
+    sessionId: "sess-purge",
+    startedAt: Date.now() - 120_000,
+    taskId: "non-existent-task-id",
+  });
+
+  try {
+    ensureBackgroundSweeper();
+
+    // First sweep: within grace retries, remains in activeBackgroundPlans
+    sweepBackgroundPlansOnce(tasksDir, fleetPath);
+    assert.equal(activeBackgroundPlans.has("purge-plan-1"), true, "First missing check stays in grace window");
+
+    // Subsequent sweeps exceed bounded grace retries -> entry must be purged from activeBackgroundPlans
+    for (let i = 0; i < 5; i++) {
+      sweepBackgroundPlansOnce(tasksDir, fleetPath);
+    }
+    assert.equal(activeBackgroundPlans.has("purge-plan-1"), false, "Permanently missing task file entry must be purged after bounded retries");
+  } finally {
+    activeBackgroundPlans.delete("purge-plan-1");
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+
 
 
 

@@ -175,3 +175,41 @@ test("dcStudioExtension registers all canonical commands and keybindings", () =>
     assert.ok(shortcuts.has(`alt+${i}`), `Expected Alt+${i} shortcut for sidebar tabs`);
   }
 });
+
+test("src/index.ts exports dcPreambleExtension and isolates extension registration failures", async () => {
+  const indexModule = await import("../src/index.ts");
+  assert.equal(typeof (indexModule as any).dcPreambleExtension, "function", "dcPreambleExtension must be exported from src/index.ts");
+
+  const registeredCommands: string[] = [];
+  const mockPi = {
+    registerCommand(name: string, _def: any) {
+      if (name === "dc-models") {
+        throw new Error("Simulated failure in dc-models registration");
+      }
+      registeredCommands.push(name);
+    },
+    registerShortcut(_shortcut: string, _def: any) {},
+    registerTool(_tool: any) {},
+    on(_event: string, _fn: Function) {},
+    getThinkingLevel: () => "high",
+  } as unknown as ExtensionAPI;
+
+  const mockCtx = {
+    hasUI: true,
+    cwd: process.cwd(),
+    ui: {
+      notify: () => {},
+      setWidget: () => {},
+    },
+  } as unknown as ExtensionContext;
+
+  // Should not throw even when one extension throws during registration
+  assert.doesNotThrow(() => {
+    dcStudioExtension(mockPi, mockCtx);
+  });
+
+  // Extensions registered after dc-models (e.g., dc-quota, dc-status, dc-tts) must still be registered
+  assert.ok(registeredCommands.includes("dc-quota"), "Extensions after a throwing extension must still be registered");
+  assert.ok(registeredCommands.includes("dc-status"), "dc-status must still be registered");
+  assert.ok(registeredCommands.includes("dc-tts"), "dc-tts must still be registered");
+});

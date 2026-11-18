@@ -8,18 +8,68 @@ import {
   acquireOrchestratorTaxi,
   loadFleetState,
   saveFleetState,
+  withFleetLock,
 } from "../src/features/dc-agents/core/dc-taxi-dispatcher.ts";
-import { isVipAccount, VIP_ACCOUNTS } from "../src/features/dc-agents/core/dc-taxi-accounts.ts";
+import { isVipAccount, VIP_ACCOUNTS, discoverVipAccounts } from "../src/features/dc-agents/core/dc-taxi-accounts.ts";
+import { resolveExecutionModel } from "../src/features/dc-agents/core/dc-effort-policy.ts";
+import dcAgentsExtension, { extractAccountFromModelId } from "../src/features/dc-agents/dc-agents.ts";
 
-test("dc-taxi-vip: isVipAccount reconoce correctamente cc1..cc4", () => {
+test("dc-taxi-vip: isVipAccount reconoce correctamente cc1..cc5, cuentas uc*, nan* y rechaza falsos positivos", () => {
   assert.equal(isVipAccount("cc1"), true);
   assert.equal(isVipAccount("cc2"), true);
   assert.equal(isVipAccount("cc3"), true);
   assert.equal(isVipAccount("cc4"), true);
+  assert.equal(isVipAccount("cc5"), true);
   assert.equal(isVipAccount("CC4"), true);
+  assert.equal(isVipAccount("CC5"), true);
+  assert.equal(isVipAccount("uc01"), true);
+  assert.equal(isVipAccount("UC01"), true);
+  assert.equal(isVipAccount("uc-01"), true);
+  assert.equal(isVipAccount("uc_02"), true);
+  assert.equal(isVipAccount("nan-01"), true);
+  assert.equal(isVipAccount("nan_02"), true);
+  assert.equal(isVipAccount("nan"), true);
   assert.equal(isVipAccount("ac01"), false);
   assert.equal(isVipAccount("ac44"), false);
+  assert.equal(isVipAccount("ucar"), false);
+  assert.equal(isVipAccount("cc"), false);
   assert.equal(isVipAccount(undefined), false);
+
+  assert.ok(discoverVipAccounts().includes("uc01"));
+
+  // Verificar unificación entre discoverVipAccounts(models.json) e isVipAccount()
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "dc-vip-models-"));
+  const modelsPath = path.join(tmpDir, "models.json");
+  try {
+    fs.writeFileSync(
+      modelsPath,
+      JSON.stringify({
+        providers: {
+          cpam: {
+            models: [
+              { id: "cc5/gpt-6.1-sol" },
+              { id: "uc-02/claude-opus-4-6-thinking" },
+              { id: "nan_07/gemini-3.8-flash-high" },
+              { id: "ac01/gemini-3.8-flash-high" },
+              { id: "ucar/some-model" },
+            ],
+          },
+        },
+      }),
+      "utf8",
+    );
+    const discovered = discoverVipAccounts(modelsPath);
+    assert.ok(discovered.includes("cc5"), "discoverVipAccounts debe incluir cc5");
+    assert.ok(discovered.includes("uc-02"), "discoverVipAccounts debe incluir uc-02");
+    assert.ok(discovered.includes("nan_07"), "discoverVipAccounts debe incluir nan_07");
+    assert.ok(!discovered.includes("ac01"), "discoverVipAccounts nunca debe incluir ac01");
+    assert.ok(!discovered.includes("ucar"), "discoverVipAccounts nunca debe incluir palabras arbitrarias ucar");
+    for (const vip of discovered) {
+      assert.equal(isVipAccount(vip), true, `isVipAccount(${vip}) debe coincidir con discoverVipAccounts`);
+    }
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
 });
 
 test("dc-taxi-vip: subagentes en leaseTaxi NUNCA pueden arrendar unidades VIP (tier === vip)", () => {
@@ -176,6 +226,159 @@ test("dc-taxi-vip: acquireOrchestratorTaxi solo asigna VIP bajo selección expl�
     );
     const afterStartupState = loadFleetState(fleetPath, ["ac01", "cc4"]);
     assert.equal(afterStartupState.fleet.cc4.status, "libre", "cc4 VIP debe permanecer libre tras el startup");
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test("dc-taxi-vip: acquireOrchestratorTaxi asigna uc01 como VIP bajo selección explícita", () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "dc-taxi-vip-uc-"));
+  const fleetPath = path.join(tmpDir, "dc-taxis.json");
+
+  try {
+    const state = {
+      fleet: {
+        ac01: { account: "ac01", status: "libre" as const, tier: "standard" as const, passenger: null },
+        uc01: { account: "uc01", status: "libre" as const, tier: "vip" as const, passenger: null },
+      },
+      lastUpdated: Date.now(),
+    };
+    saveFleetState(state, fleetPath);
+
+    // 1. Subagente intentando arrendar uc01 (no debe recibir uc01)
+    const leasedSub = leaseTaxi(
+      { type: "subagent", sessionId: "sub-uc", pid: process.pid },
+      "uc01",
+      fleetPath,
+      undefined,
+      ["ac01", "uc01"],
+    );
+    assert.notEqual(leasedSub?.account, "uc01", "Subagente jamás debe recibir uc01 VIP");
+
+    // 2. Con flota estándar ocupada, subagente pidiendo uc01 debe recibir null
+    const stateExhausted = loadFleetState(fleetPath, ["ac01", "uc01"]);
+    stateExhausted.fleet.ac01.status = "ocupado";
+    stateExhausted.fleet.uc01.status = "libre";
+    saveFleetState(stateExhausted, fleetPath);
+
+    const leasedExhausted = leaseTaxi(
+      { type: "subagent", sessionId: "sub-uc-2", pid: process.pid },
+      "uc01",
+      fleetPath,
+      undefined,
+      ["ac01", "uc01"],
+    );
+    assert.equal(leasedExhausted, null, "Subagente con flota estándar ocupada debe recibir null, no tocar uc01");
+
+    // 3. Orquestador con selección explícita de uc01
+    const orchResult = acquireOrchestratorTaxi(
+      "orch-sess-uc",
+      "cpam/uc01/claude-opus-4-6-thinking",
+      fleetPath,
+      process.pid,
+      ["ac01", "uc01"],
+      "gemini-3.8-flash-high",
+      "cpam",
+      undefined,
+      { isExplicitSelection: true },
+    );
+
+    assert.ok(orchResult);
+    assert.equal(orchResult?.account, "uc01", "Orquestador con selección explícita adquiere uc01 VIP");
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test("dc-taxi-vip: resolveExecutionModel reconoce prefijos UC01, CC5, NAN-01 y nan de forma case-insensitive", () => {
+  const ucRes = resolveExecutionModel({
+    requestedModel: "UC01/gemini-3.8-flash-high",
+  });
+  assert.equal(ucRes.requestedAccount?.toLowerCase(), "uc01");
+  assert.equal(ucRes.baseModelName, "gemini-3.8-flash-high");
+
+  const cc5Res = resolveExecutionModel({
+    requestedModel: "CC5/gemini-3.8-flash-high",
+  });
+  assert.equal(cc5Res.requestedAccount?.toLowerCase(), "cc5");
+
+  const nanRes = resolveExecutionModel({
+    requestedModel: "NAN-01/gemini-3.8-flash-high",
+  });
+  assert.equal(nanRes.requestedAccount?.toLowerCase(), "nan-01");
+
+  const bareNanRes = resolveExecutionModel({
+    requestedModel: "nan/gemini-3.8-flash-high",
+  });
+  assert.equal(bareNanRes.requestedAccount?.toLowerCase(), "nan");
+});
+
+test("dc-taxi-vip: dc-agents no filtra listeners duplicados en process.on('exit') y turn_end sincroniza cuentas VIP", async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "dc-taxi-vip-turn-end-"));
+  const fleetPath = path.join(tmpDir, "dc-taxis.json");
+
+  try {
+    const state = {
+      fleet: {
+        uc01: {
+          account: "uc01",
+          status: "ocupado" as const,
+          tier: "vip" as const,
+          passenger: {
+            type: "orchestrator" as const,
+            sessionId: "other-sess-id",
+            pid: process.pid + 999,
+            model: "cpam/uc01/claude-opus-4-6-thinking",
+            plate: "DC-VIP-UC01",
+            startedAt: Date.now(),
+            heartbeatAt: Date.now(),
+          },
+        },
+      },
+      lastUpdated: Date.now(),
+    };
+    saveFleetState(state, fleetPath);
+
+    const eventHandlers: Record<string, Function[]> = {};
+    const mockPi: any = {
+      on: (event: string, handler: Function) => {
+        eventHandlers[event] = eventHandlers[event] || [];
+        eventHandlers[event].push(handler);
+      },
+      registerCommand: () => {},
+      registerShortcut: () => {},
+      registerTool: () => {},
+      setModel: async () => true,
+    };
+
+    const listenersBefore = process.listenerCount("exit");
+    dcAgentsExtension(mockPi, { fleetPath });
+    const listenersAfterFirst = process.listenerCount("exit");
+    dcAgentsExtension(mockPi, { fleetPath });
+    const listenersAfterSecond = process.listenerCount("exit");
+
+    assert.equal(
+      listenersAfterSecond,
+      listenersAfterFirst,
+      "Llamadas repetidas a dcAgentsExtension NO deben acumular listeners en process.on('exit')",
+    );
+    assert.ok(listenersAfterFirst <= listenersBefore + 1);
+
+    assert.equal(extractAccountFromModelId("cpam/ac01/gemini-3.8-flash-high"), "ac01");
+    assert.equal(extractAccountFromModelId("cpam/CC5/gpt-6.1-sol"), "cc5");
+    assert.equal(extractAccountFromModelId("cpam/UC-01/claude-opus-4-6-thinking"), "uc-01");
+    assert.equal(extractAccountFromModelId("cpam/uc_02/claude-opus-4-6-thinking"), "uc_02");
+    assert.equal(extractAccountFromModelId("cpam/nan-01/gemini-3.8-flash-high"), "nan-01");
+    assert.equal(extractAccountFromModelId("cpam/nan/gemini-3.8-flash-high"), "nan");
+
+    // EjecutarwithFleetLock sin spin-wait
+    const lockRes = withFleetLock(fleetPath, () => "locked-ok");
+    assert.equal(lockRes, "locked-ok");
+
+    // Limpiar en session_shutdown
+    for (const shutdownHandler of eventHandlers["session_shutdown"] || []) {
+      shutdownHandler({}, { hasUI: false, mode: "rpc", fleetPath });
+    }
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }

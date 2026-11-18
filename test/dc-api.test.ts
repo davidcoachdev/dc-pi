@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import http from "node:http";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import dcApiExtension from "../src/features/dc-api/dc-api.ts";
 import { executeRestRequest } from "../src/features/dc-api/core/dc-api-client.ts";
@@ -62,4 +63,50 @@ test("dc-api: redactSecrets censors sensitive tokens and credentials in headers 
   const sanitizedKey = redactSecrets(leakedKey);
   assert.ok(!sanitizedKey.includes("sk-abcdef"));
   assert.ok(sanitizedKey.includes("[REDACTED_SECRET]"));
+});
+
+test("dc-api: executeRestRequest blocks SSRF to private/loopback URLs by default and truncates via bounded stream read", async () => {
+  await assert.rejects(
+    async () => {
+      await executeRestRequest({
+        url: "http://169.254.169.254/latest/meta-data",
+        method: "GET",
+      });
+    },
+    (err: Error) => /SSRF|bloquead|denegad|privad/i.test(err.message),
+  );
+
+  await assert.rejects(
+    async () => {
+      await executeRestRequest({
+        url: "http://127.0.0.1:9999/internal",
+        method: "GET",
+      });
+    },
+    (err: Error) => /SSRF|bloquead|denegad|loopback/i.test(err.message),
+  );
+
+  const server = http.createServer((_req, res) => {
+    res.writeHead(200, { "Content-Type": "text/plain" });
+    res.write("A".repeat(512));
+    res.write("B".repeat(512));
+    res.end();
+  });
+
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const port = (server.address() as any).port;
+
+  try {
+    const res = await executeRestRequest({
+      url: `http://127.0.0.1:${port}/stream`,
+      method: "GET",
+      maxResponseBytes: 256,
+      allowPrivateNetwork: true,
+    } as any);
+    assert.equal(res.status, 200);
+    assert.equal(res.truncated, true);
+    assert.equal(Buffer.byteLength(res.body, "utf8"), 256);
+  } finally {
+    server.close();
+  }
 });

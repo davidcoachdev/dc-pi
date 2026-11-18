@@ -122,6 +122,7 @@ export {
   dcAudioExtension,
   dcTtsExtension,
   dcDateExtension,
+  dcPreambleExtension,
   dcCodegraphExtension,
   dcScanGuardExtension,
   dcCheckpointExtension,
@@ -169,62 +170,73 @@ export * from "./features/dc-takeover/index.ts";
 /**
  * Unified DC Studio Extension.
  * Registers the entire DC Studio ecosystem by executing all feature extensions.
+ * Each registration is isolated so a single failing extension cannot abort the rest.
  */
 export function dcStudioExtension(pi: ExtensionAPI, ctx?: ExtensionContext): void {
-  dcNoTelemetryExtension(pi);
-  dcStateMonitorExtension(pi);
-  dcNotifyExtension(pi);
-  caritasExtension(pi);
-  dcFaceExtension(pi);
-  dcKeysExtension(pi);
-  dcChangesExtension(pi);
-  dcModelsExtension(pi);
-  dcQuotaExtension(pi);
-  dcStatusExtension(pi);
-  dcBannerExtension(pi);
-  dcUserExtension(pi);
-  dcTitleExtension(pi);
-  dcExitExtension(pi);
-  dcPreviewExtension(pi);
-  dcDoctorExtension(pi);
-  dcReloadExtension(pi);
-  dcToolBoxExtension(pi);
-  dcUserBoxExtension(pi);
-  dcMarkdownExtension(pi);
-  dcSidebarExtension(pi);
-  dcPromptExtension(pi);
-  dcBodyExtension(pi);
-  dcPlanExtension(pi);
-  dcAgentsExtension(pi);
-  registerDcGroundingTools(pi);
-  dcWebsearchExtension(pi);
-  dcGitSyncExtension(pi);
-  dcContext7Extension(pi);
-  dcPdfExtension(pi);
-  dcBrowserExtension(pi);
-  dcApiExtension(pi);
-  dcServicesExtension(pi);
-  dcYoutubeExtension(pi);
-  dcAudioExtension(pi);
-  dcTtsExtension(pi);
-  dcDateExtension(pi);
-  dcPreambleExtension(pi);
-  dcCodegraphExtension(pi);
-  dcScanGuardExtension(pi);
-  dcCheckpointExtension(pi);
-  dcHandoffExtension(pi);
-  dcGitGraphExtension(pi);
-  dcHerdrAgentStateExtension(pi);
-  dcEngramExtension(pi);
-  dcSentinelExtension(pi);
-  dcOwaspExtension(pi);
-  dcLazywebExtension(pi);
-  dcMobileExtension(pi);
-  dcPtcExtension(pi);
-  dcApprovalExtension(pi);
-  dcIceExtension(pi);
-  dcTakeoverExtension(pi);
-  dcDialogsExtension(pi, ctx);
+  const registrations: Array<(api: ExtensionAPI) => void> = [
+    dcNoTelemetryExtension,
+    dcStateMonitorExtension,
+    dcNotifyExtension,
+    caritasExtension,
+    dcFaceExtension,
+    dcKeysExtension,
+    dcChangesExtension,
+    dcModelsExtension,
+    dcQuotaExtension,
+    dcStatusExtension,
+    dcBannerExtension,
+    dcUserExtension,
+    dcTitleExtension,
+    dcExitExtension,
+    dcPreviewExtension,
+    dcDoctorExtension,
+    dcReloadExtension,
+    dcToolBoxExtension,
+    dcUserBoxExtension,
+    dcMarkdownExtension,
+    dcSidebarExtension,
+    dcPromptExtension,
+    dcBodyExtension,
+    dcPlanExtension,
+    dcAgentsExtension,
+    registerDcGroundingTools,
+    dcWebsearchExtension,
+    dcGitSyncExtension,
+    dcContext7Extension,
+    dcPdfExtension,
+    dcBrowserExtension,
+    dcApiExtension,
+    dcServicesExtension,
+    dcYoutubeExtension,
+    dcAudioExtension,
+    dcTtsExtension,
+    dcDateExtension,
+    dcPreambleExtension,
+    dcCodegraphExtension,
+    dcScanGuardExtension,
+    dcCheckpointExtension,
+    dcHandoffExtension,
+    dcGitGraphExtension,
+    dcHerdrAgentStateExtension,
+    dcEngramExtension,
+    dcSentinelExtension,
+    dcOwaspExtension,
+    dcLazywebExtension,
+    dcMobileExtension,
+    dcPtcExtension,
+    dcApprovalExtension,
+    dcIceExtension,
+    dcTakeoverExtension,
+    (api) => dcDialogsExtension(api, ctx),
+  ];
+
+  for (const register of registrations) {
+    try {
+      register(pi);
+    } catch (err) {
+      console.error(`[dc-studio] Extension registration failed (${register.name || "anonymous"}):`, err);
+    }
+  }
 }
 
 export default dcStudioExtension;

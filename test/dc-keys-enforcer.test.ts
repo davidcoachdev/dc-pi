@@ -34,3 +34,32 @@ test("enforceKeybindings configures cursorWordLeft and cursorWordRight without a
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
 });
+
+test("resolveKeybindingsPath and enforceKeybindings honor PI_CODING_AGENT_DIR and write atomically", async () => {
+  const { resolveKeybindingsPath } = await import("../src/features/dc-keys/dc-keys-enforcer.ts");
+  const tmpAgentDir = path.join(os.tmpdir(), `dc-keys-agent-dir-${Date.now()}`);
+  fs.mkdirSync(tmpAgentDir, { recursive: true });
+  const prevAgentDir = process.env.PI_CODING_AGENT_DIR;
+  const prevKeybindingsPath = process.env.PI_KEYBINDINGS_PATH;
+
+  try {
+    delete process.env.PI_KEYBINDINGS_PATH;
+    process.env.PI_CODING_AGENT_DIR = tmpAgentDir;
+
+    const resolved = resolveKeybindingsPath();
+    assert.equal(resolved, path.join(tmpAgentDir, "keybindings.json"));
+
+    const updated = enforceKeybindings();
+    assert.equal(updated, true);
+    assert.ok(fs.existsSync(resolved));
+
+    const entries = fs.readdirSync(tmpAgentDir);
+    assert.ok(!entries.some((e) => e.endsWith(".tmp")), "No temporary files should remain after atomic write");
+  } finally {
+    if (prevAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = prevAgentDir;
+    if (prevKeybindingsPath === undefined) delete process.env.PI_KEYBINDINGS_PATH;
+    else process.env.PI_KEYBINDINGS_PATH = prevKeybindingsPath;
+    fs.rmSync(tmpAgentDir, { recursive: true, force: true });
+  }
+});

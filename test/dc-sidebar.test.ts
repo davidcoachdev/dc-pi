@@ -469,3 +469,60 @@ test("Standalone Sidebar: mounts autonomous hstack when gentle-shell is absent",
   const restoredLayout = rootComponent[LAYOUT_NODE]();
   assert.equal(restoredLayout, nativeVStack, "Must restore original native layout function");
 });
+
+test("dcSidebarExtension cleans up resize listener and startup timers across session_start and session_shutdown", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+
+  const events = new Map<string, Function[]>();
+  const mockPi = {
+    registerCommand() {},
+    registerShortcut() {},
+    on(event: string, fn: Function) {
+      if (!events.has(event)) events.set(event, []);
+      events.get(event)!.push(fn);
+    },
+  } as unknown as ExtensionAPI;
+
+  dcSidebarExtension(mockPi);
+
+  let renders = 0;
+  const mockTui = {
+    terminal: { columns: 160, rows: 40 },
+    requestRender: () => { renders++; },
+  };
+  const mockCtx = {
+    hasUI: true,
+    mode: "tui",
+    ui: {
+      theme: { fg: (_c: string, s: string) => s, bg: (_c: string, s: string) => s, bold: (s: string) => s },
+      setWidget: (_key: string, factory: any) => {
+        factory(mockTui);
+      },
+    },
+  } as unknown as ExtensionContext;
+
+  const baseResizeCount = process.stdout.listenerCount("resize");
+
+  // First session_start
+  for (const fn of events.get("session_start")!) {
+    await fn({}, mockCtx);
+  }
+  assert.equal(process.stdout.listenerCount("resize"), baseResizeCount + 1);
+
+  // Second session_start without shutdown must not duplicate resize listener
+  for (const fn of events.get("session_start")!) {
+    await fn({}, mockCtx);
+  }
+  assert.equal(process.stdout.listenerCount("resize"), baseResizeCount + 1);
+
+  // Shutdown must remove resize listener and clear pending startup timers
+  for (const fn of events.get("session_shutdown")!) {
+    fn({}, mockCtx);
+  }
+  assert.equal(process.stdout.listenerCount("resize"), baseResizeCount);
+
+  const rendersAtShutdown = renders;
+  t.mock.timers.tick(2500);
+  assert.equal(renders, rendersAtShutdown, "Pending startup timers must be cleared on session_shutdown");
+});
+
