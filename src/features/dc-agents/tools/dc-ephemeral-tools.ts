@@ -46,6 +46,7 @@ import {
 import { formatCanonicalFailureReport } from "../core/dc-subagent-failure-formatter.ts";
 import { subagentInboxManager } from "../core/dc-subagent-inbox.ts";
 import { dcWorktreeManager, type WorktreeHandle } from "../core/dc-worktree-manager.ts";
+import { runArenaContest } from "../core/dc-arena-runner.ts";
 
 export interface ExtractedSubagentMetrics {
   tokens?: {
@@ -1120,6 +1121,194 @@ export function registerDcEphemeralTools(pi: ExtensionAPI): void {
           completed: completedCount,
           failed: failedCount,
           results,
+        },
+      };
+    },
+  });
+
+  // 4. dc_arena_run — Competición Multi-Modelo en Git Worktrees Aislados (Agent Arena)
+  pi.registerTool({
+    name: "dc_arena_run",
+    label: "DC Agent Arena Run",
+    description: "Compara en paralelo dos modelos o enfoques de IA resolviendo la misma tarea en Git worktrees aislados. Corre pruebas, audita el blast-radius (git diff --stat) y genera una tarjeta de puntuación objetiva (Scorecard) determinando el ganador bajo el principio KISS.",
+    parameters: {
+      type: "object",
+      properties: {
+        task: {
+          type: "string",
+          description: "Tarea o requerimiento técnico que resolverán los dos contendientes.",
+        },
+        candidateA: {
+          type: "object",
+          description: "Configuración del primer contendiente.",
+          properties: {
+            name: { type: "string", description: "Nombre de fantasía (ej: 'Contender-Flash')." },
+            model: { type: "string", description: "Identificador del modelo (ej: 'gemini-3.8-flash-high')." },
+            role: { type: "string", description: "Rol asignado." },
+            archetype: { type: "string", description: "Arquetipo de subagente opcional." },
+            effort: { type: "string", enum: ["low", "medium", "high", "off"] },
+          },
+          required: ["name", "model"],
+        },
+        candidateB: {
+          type: "object",
+          description: "Configuración del segundo contendiente.",
+          properties: {
+            name: { type: "string", description: "Nombre de fantasía (ej: 'Contender-Sonnet')." },
+            model: { type: "string", description: "Identificador del modelo (ej: 'anthropic/claude-3-5-sonnet')." },
+            role: { type: "string", description: "Rol asignado." },
+            archetype: { type: "string", description: "Arquetipo de subagente opcional." },
+            effort: { type: "string", enum: ["low", "medium", "high", "off"] },
+          },
+          required: ["name", "model"],
+        },
+        verificationCommand: {
+          type: "string",
+          description: "Comando de prueba para verificar los cambios en el worktree (ej: 'npm run test:fast'). Si se omite, se evalúa únicamente por adherencia a KISS y blast-radius.",
+        },
+        seedContext: {
+          type: "string",
+          description: "Contexto inicial resumido para ambos candidatos.",
+        },
+      },
+      required: ["task", "candidateA", "candidateB"],
+    } as any,
+    async execute(_id, params: any, _signal, _onUpdate, ctx?: ExtensionContext): Promise<any> {
+      const task = String(params.task || "").trim();
+      if (!task) {
+        return {
+          content: [{ type: "text", text: "La tarea no puede estar vacía." }],
+          isError: true,
+        };
+      }
+
+      const candA = params.candidateA;
+      const candB = params.candidateB;
+      const sessionId = ctx?.sessionManager?.getSessionId?.() || `arena-${Date.now()}`;
+
+      appendTaxiLog("INFO", "ARENA_CONTEST_STARTED", {
+        task,
+        candA: `${candA.name} (${candA.model})`,
+        candB: `${candB.name} (${candB.model})`,
+        sessionId,
+      });
+
+      const contest = await runArenaContest({
+        repoRoot: process.cwd(),
+        task,
+        verificationCommand: params.verificationCommand,
+        candidates: [
+          {
+            name: candA.name,
+            model: candA.model,
+            role: candA.role,
+            archetype: candA.archetype,
+            seedContext: params.seedContext,
+            workerFn: async (worktreeDir) => {
+              if (typeof (ctx as any)?.executeTool === "function") {
+                const plan = prepareEphemeralAgent(
+                  {
+                    task,
+                    role: candA.role || candA.name,
+                    label: candA.name,
+                    archetype: candA.archetype,
+                    model: candA.model,
+                    effort: candA.effort,
+                    seedContext: params.seedContext,
+                    mode: "task",
+                    sessionId,
+                  },
+                  { sessionId, pid: process.pid }
+                );
+                try {
+                  await (ctx as any).executeTool(
+                    "subagent_run",
+                    {
+                      agent: plan.agentName,
+                      task,
+                      mode: "task",
+                      label: `Arena: ${candA.name}`,
+                      workspace_root: worktreeDir,
+                    },
+                    { signal: _signal, onUpdate: _onUpdate }
+                  );
+                } finally {
+                  cleanupEphemeralAgent(plan, {
+                    sessionId,
+                    startedAt: Date.now(),
+                    endedAt: Date.now(),
+                    status: "completed",
+                  });
+                }
+              }
+            },
+          },
+          {
+            name: candB.name,
+            model: candB.model,
+            role: candB.role,
+            archetype: candB.archetype,
+            seedContext: params.seedContext,
+            workerFn: async (worktreeDir) => {
+              if (typeof (ctx as any)?.executeTool === "function") {
+                const plan = prepareEphemeralAgent(
+                  {
+                    task,
+                    role: candB.role || candB.name,
+                    label: candB.name,
+                    archetype: candB.archetype,
+                    model: candB.model,
+                    effort: candB.effort,
+                    seedContext: params.seedContext,
+                    mode: "task",
+                    sessionId,
+                  },
+                  { sessionId, pid: process.pid }
+                );
+                try {
+                  await (ctx as any).executeTool(
+                    "subagent_run",
+                    {
+                      agent: plan.agentName,
+                      task,
+                      mode: "task",
+                      label: `Arena: ${candB.name}`,
+                      workspace_root: worktreeDir,
+                    },
+                    { signal: _signal, onUpdate: _onUpdate }
+                  );
+                } finally {
+                  cleanupEphemeralAgent(plan, {
+                    sessionId,
+                    startedAt: Date.now(),
+                    endedAt: Date.now(),
+                    status: "completed",
+                  });
+                }
+              }
+            },
+          },
+        ],
+      });
+
+      appendTaxiLog("INFO", "ARENA_CONTEST_FINISHED", {
+        task,
+        winner: contest.winner,
+        reason: contest.evaluationReason,
+      });
+
+      return {
+        content: [{ type: "text", text: contest.markdownScorecard }],
+        details: {
+          winner: contest.winner,
+          reason: contest.evaluationReason,
+          candidates: contest.candidates.map((c) => ({
+            name: c.name,
+            model: c.model,
+            diffStat: c.diffStat,
+            verificationStatus: c.verificationStatus,
+            durationMs: c.durationMs,
+          })),
         },
       };
     },
