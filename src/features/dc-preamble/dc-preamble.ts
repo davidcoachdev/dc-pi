@@ -30,6 +30,19 @@ export default function dcPreambleExtension(
   env: Record<string, string | undefined> = process.env,
 ): void {
   const replacement = resolvePreambleReplacement(env);
+
+  // Hook 1: Sanitización en before_agent_start de lo que inyecta appendSystemPrompt (gentle-ai / third-party)
+  pi.on("before_agent_start", (event: any) => {
+    if (event?.systemPromptOptions?.appendSystemPrompt && typeof event.systemPromptOptions.appendSystemPrompt === "string") {
+      event.systemPromptOptions.appendSystemPrompt = event.systemPromptOptions.appendSystemPrompt
+        .replace(/You are el Gentleman:\s*a Pi-specific coding-agent harness for controlled development work\./g, "You are el Gentleman: an advanced agentic coding assistant for controlled development work.")
+        .replace(/I am el Gentleman:\s*a Pi-specific coding-agent harness for controlled development/g, "I am el Gentleman: an advanced agentic coding assistant for controlled development")
+        .replace(/- Do not claim portability outside the Pi runtime\./g, "- Focus on high-quality agentic execution in this workspace.")
+        .replace(/<!-- gentle-ai:pi-codegraph-guidance -->/g, "<!-- dc-studio:codegraph-guidance -->");
+    }
+  });
+
+  // Hook 2: Última milla antes del LLM sobre las secciones nativas del sistema
   const onContextWithSystem = pi.on as unknown as (
     event: "context_with_system",
     handler: ContextWithSystemHandler,

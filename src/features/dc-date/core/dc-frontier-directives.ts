@@ -40,7 +40,7 @@ function resolveRawModelString(
 
 /**
  * Determina si el modelo activo pertenece a la familia Google Gemini
- * (cubre Gemini 3.8, 3.7, 3.6, 3.5, 3.1, 3.0, 2.5, Flash, Pro, Nano Banana, etc.).
+ * (cubre Gemini 4 Argon/Hydrogen/Carbon, Gemini 3.8, 3.7, 3.6, 3.5, 3.1, 3.0, 2.5, Flash, Pro, Nano Banana, Antigravity, etc.).
  */
 export function isGeminiModelCandidate(
   model?: ModelIdentifierCandidate | null,
@@ -48,18 +48,22 @@ export function isGeminiModelCandidate(
 ): boolean {
   const raw = resolveRawModelString(model, env);
   if (!raw) return false;
-  return /\bgemini\b|gemini-|nano-banana/i.test(raw);
+  return /\bgemini\b|gemini-|nano-banana|argon|hydrogen|carbon|antigravity/i.test(raw);
 }
 
 /**
- * Detecta la versión exacta de Gemini (ej: "Gemini 3.8", "Gemini 3.7", "Gemini 3.6",
- * "Gemini 3.5", "Gemini 3.1", "Gemini 2.5" o "Gemini 3.x" como fallback general).
+ * Detecta la versión exacta de Gemini (ej: "Gemini 4 Argon", "Gemini 4 Hydrogen", "Gemini 4 Carbon",
+ * "Gemini 3.8", "Gemini 3.7", "Gemini 3.6", "Gemini 3.5", "Gemini 3.1", "Gemini 2.5" o "Gemini 3.x" como fallback general).
  */
 export function detectGeminiVersionLabel(
   model?: ModelIdentifierCandidate | null,
   env: Record<string, string | undefined> = process.env,
 ): string {
   const raw = resolveRawModelString(model, env);
+  if (/argon/i.test(raw)) return "Gemini 4 Argon (Antigravity)";
+  if (/hydrogen/i.test(raw)) return "Gemini 4 Hydrogen (Antigravity)";
+  if (/carbon/i.test(raw)) return "Gemini 4 Carbon (Antigravity)";
+
   const match = raw.match(/gemini[-/\s]*(\d+(?:\.\d+)?)/i);
   if (match && match[1]) {
     const ver = match[1];
@@ -140,8 +144,9 @@ export function renderDcUniversalDirectives(): string {
 }
 
 /**
- * Protocolo de Ejecución de Frontera para la familia Google Gemini (3.1 Pro, 3.5, 3.6, 3.7, 3.8 Flash).
- * Neutraliza los defectos específicos de la arquitectura Gemini Thinking y Function Calling.
+ * Protocolo de Ejecución de Frontera para la familia Google Gemini y Antigravity.
+ * Neutraliza los defectos específicos de la arquitectura Gemini Thinking y Function Calling,
+ * e incorpora las directivas empíricas de los system prompts oficiales de Antigravity (Google DeepMind).
  */
 export function renderGeminiFrontierProtocol(versionLabel: string): string {
   return `${GEMINI_FRONTIER_PROTOCOL_MARKER}
@@ -150,16 +155,18 @@ export function renderGeminiFrontierProtocol(versionLabel: string): string {
 1. **Native Thinking Channel Only (Prevent \`Malformed_Function_Call\`)**:
    - Execute all multi-step planning, constraint verification, and hypothesis analysis inside your native \`thought\` channel (\`thinking_level\`).
    - NEVER output raw XML tags (\`<thinking>\`, \`<plan>\`, \`<scratchpad>\`) or structured JSON blocks in visible text immediately prior to a tool call. If emitting brief prose before a tool call, separate paragraphs with \`\\n\\n\`.
-2. **Strict Intent Alignment & Two-Pass Flow (Inquiries vs. Directives)**:
+2. **Mandatory Canonical Absolute Paths (Antigravity Core Rule)**:
+   - When calling file tools (\`read\`, \`edit\`, \`write\`), you MUST construct and provide the full absolute path for the path argument. Relative paths are strictly forbidden to prevent ambiguity when subagents or background tasks change working directories.
+3. **Strict Intent Alignment & Two-Pass Flow (Inquiries vs. Directives)**:
    - Treat questions, audits, comparisons, and explanations as **Inquiries** (strictly read-only; zero file mutations).
    - Execute file mutations only on explicit **Directives** after inspecting the target files in the current session.
    - Two-Pass Adversarial Audit: For non-trivial architectural or critical logic, execute in two distinct passes: Pass 1 (Execution draft exposing assumptions) -> Pass 2 (Adversarial review attacking edge cases, empty inputs, and non-goals).
-3. **Post-Tool & Post-Edit Output Mandate (Zero Empty Turns)**:
+4. **Post-Tool & Post-Edit Output Mandate (Zero Empty Turns)**:
    - After every tool execution (\`edit\`, \`write\`, \`bash\`, \`subagent_run\`, \`dc_ephemeral_agent_run\`), you MUST either invoke the next required tool or emit a clear user-facing response summarizing the outcome and next step.
    - NEVER end a turn with an empty response (0 visible text tokens) after calling a tool.
-4. **Strategic Anti-Looping Pivot (2-Strike Hard Stop)**:
+5. **Strategic Anti-Looping Pivot (2-Strike Hard Stop)**:
    - If a test, build, command, or fix fails 2 times consecutively with the same approach, STOP repeating variations of the same tool call. Re-read the source files, state which premise was falsified, and pivot to a different architectural approach or trip the Circuit Breaker to consult the user.
-5. **Hard Execution Gatekeepers (Preconditions)**:
+6. **Hard Execution Gatekeepers (Preconditions)**:
    - **Precondition to \`edit\`/\`write\`**: You MUST read the target file (if it exists) in this session before modifying it, and ensure you are not on \`main\`/\`master\`.
    - **Precondition to Delegate Writer**: Any \`subagent_run\` to \`gentle-ai-worker\` MUST include the exact heading \`## Allowed edit surfaces\` with narrow repo-relative paths.
    - **Precondition to Close**: Run applicable checks, verify exit code \`0\`, and end code-change reports with \`Risk: none\` or \`Risk: item N (reason)\`.
