@@ -83,3 +83,26 @@ test("AgentVisualStateStore binds to ExtensionAPI lifecycle events", async () =>
 
   unbind();
 });
+
+test("AgentVisualStateStore clears session_compact_failed timer on dispose and prevents post-dispose transitions", async () => {
+  const handlers = new Map<string, Function>();
+  const mockPi = {
+    on(event: string, fn: Function) {
+      handlers.set(event, fn);
+    },
+  } as unknown as ExtensionAPI;
+
+  const store = new AgentVisualStateStore({ errorFlashMs: 25 });
+  store.bind(mockPi);
+
+  handlers.get("session_compact_failed")?.();
+  assert.equal(store.getState(), "retying");
+
+  // Dispose before the 25ms timer fires
+  store.dispose();
+
+  // Wait past errorFlashMs: state must NOT transition back to idle or fire after disposal
+  await new Promise((resolve) => setTimeout(resolve, 45));
+  assert.equal(store.getState(), "retying");
+});
+

@@ -58,12 +58,17 @@ export class CaritasPanel implements Component {
     private readonly onSelect: (val: string) => void,
     private readonly onCancel: () => void,
     private readonly requestRender: () => void,
+    private readonly maxVisible: number = CARITAS_ROWS_PAGE,
   ) {}
 
   invalidate(): void {}
 
   getSelectedIndex(): number {
     return this.selectedIndex;
+  }
+
+  getScrollOffset(): number {
+    return this.scrollOffset;
   }
 
   setSelectedIndex(index: number): void {
@@ -73,11 +78,11 @@ export class CaritasPanel implements Component {
 
   private ensureCursorVisible(): void {
     this.selectedIndex = Math.max(0, Math.min(this.items.length - 1, this.selectedIndex));
-    const maxOff = Math.max(0, this.items.length - CARITAS_ROWS_PAGE);
+    const maxOff = Math.max(0, this.items.length - this.maxVisible);
     if (this.selectedIndex < this.scrollOffset) {
       this.scrollOffset = this.selectedIndex;
-    } else if (this.selectedIndex >= this.scrollOffset + CARITAS_ROWS_PAGE) {
-      this.scrollOffset = Math.max(0, this.selectedIndex - CARITAS_ROWS_PAGE + 1);
+    } else if (this.selectedIndex >= this.scrollOffset + this.maxVisible) {
+      this.scrollOffset = Math.max(0, this.selectedIndex - this.maxVisible + 1);
     }
     this.scrollOffset = Math.max(0, Math.min(maxOff, this.scrollOffset));
   }
@@ -85,16 +90,20 @@ export class CaritasPanel implements Component {
   render(width: number): string[] {
     const t = this.theme;
     const innerW = Math.max(20, width);
+    this.ensureCursorVisible();
     this.lastWidth = innerW;
-    this.lastRows = this.items.length;
+    const visibleCount = Math.min(this.items.length, this.maxVisible);
+    const visibleItems = this.items.slice(this.scrollOffset, this.scrollOffset + visibleCount);
+    this.lastRows = visibleItems.length;
 
     const pad = (s: string, len: number) => {
       const v = visibleWidth(s);
       return v >= len ? truncateToWidth(s, len, "") : s + " ".repeat(len - v);
     };
 
-    return this.items.map((item, idx) => {
-      const isSelected = idx === this.selectedIndex;
+    return visibleItems.map((item, idx) => {
+      const itemIdx = this.scrollOffset + idx;
+      const isSelected = itemIdx === this.selectedIndex;
       const bullet = isSelected ? t.fg("accent", "●") : t.fg("dim", "○");
       const face = pad(item.label, 18);
       const mood = t.fg("muted", `[${item.description}]`);
@@ -179,7 +188,7 @@ export class CaritasPanel implements Component {
 
     // Click: select row; second click on already-selected row applies
     if (type === "click" && event.button !== "right") {
-      const clickedIdx = y;
+      const clickedIdx = this.scrollOffset + y;
       if (clickedIdx >= 0 && clickedIdx < this.items.length) {
         if (this.selectedIndex === clickedIdx) {
           const item = this.items[clickedIdx];

@@ -256,9 +256,9 @@ export async function fuzzWithWatchdog(
     corpus = [Buffer.from("safe_initial_payload", "utf-8")];
   }
 
-  // Código del Worker en Node.js que ejecuta la función bajo prueba
+  // Código del Worker en Node.js (ESM) que ejecuta la función bajo prueba
   const workerWrapperCode = `
-    const { parentPort } = require("node:worker_threads");
+    import { parentPort } from "node:worker_threads";
     ${targetScriptSource}
 
     if (typeof targetFn !== "function") {
@@ -281,80 +281,103 @@ export async function fuzzWithWatchdog(
       }
     });
   `;
+  const workerModuleUrl = new URL(`data:text/javascript;base64,${Buffer.from(workerWrapperCode, "utf-8").toString("base64")}`);
 
-  for (let i = 1; i <= iters; i++) {
-    const parent = rng.pick(corpus);
-    const mutated = mutator.mutate(parent, rng);
-    const str = mutated.toString("utf-8");
-    const payloadBase64 = mutated.toString("base64");
+  let worker: Worker | null = null;
+  const ensureWorker = (): Worker => {
+    if (!worker) {
+      worker = new Worker(workerModuleUrl);
+    }
+    return worker;
+  };
+  const terminateWorker = () => {
+    if (worker) {
+      worker.removeAllListeners();
+      worker.terminate().catch(() => {});
+      worker = null;
+    }
+  };
 
-    const crash = await new Promise<FuzzCrash | null>((resolve) => {
-      let worker: Worker | null = new Worker(workerWrapperCode, { eval: true });
-      let timer: NodeJS.Timeout | null = null;
-      let settled = false;
+  try {
+    for (let i = 1; i <= iters; i++) {
+      const parent = rng.pick(corpus);
+      const mutated = mutator.mutate(parent, rng);
+      const str = mutated.toString("utf-8");
+      const payloadBase64 = mutated.toString("base64");
 
-      const cleanup = () => {
-        if (timer) {
-          clearTimeout(timer);
-          timer = null;
-        }
-        if (worker) {
-          worker.terminate().catch(() => {});
-          worker = null;
-        }
-      };
+      const crash = await new Promise<FuzzCrash | null>((resolve) => {
+        const activeWorker = ensureWorker();
+        let timer: NodeJS.Timeout | null = null;
+        let settled = false;
 
-      timer = setTimeout(() => {
-        if (settled) return;
-        settled = true;
-        cleanup();
-        resolve({
-          type: "CPU_HANG_TIMEOUT",
-          input: mutated,
-          inputString: str,
-          error: `Watchdog triggered: Execution exceeded limit of ${timeoutMs}ms (ReDoS / Unbounded Loop)`,
-          iteration: i
-        });
-      }, timeoutMs);
+        const detachListeners = () => {
+          if (timer) {
+            clearTimeout(timer);
+            timer = null;
+          }
+          activeWorker.removeListener("message", onMessage);
+          activeWorker.removeListener("error", onError);
+        };
 
-      worker.on("message", (msg) => {
-        if (settled) return;
-        settled = true;
-        cleanup();
+        const onMessage = (msg: any) => {
+          if (settled) return;
+          settled = true;
+          detachListeners();
 
-        if (msg.type === "ERROR") {
+          if (msg.type === "ERROR") {
+            resolve({
+              type: "CRASH_EXCEPTION",
+              input: mutated,
+              inputString: str,
+              error: msg.error,
+              iteration: i
+            });
+          } else {
+            resolve(null);
+          }
+        };
+
+        const onError = (err: Error) => {
+          if (settled) return;
+          settled = true;
+          detachListeners();
+          terminateWorker();
           resolve({
             type: "CRASH_EXCEPTION",
             input: mutated,
             inputString: str,
-            error: msg.error,
+            error: err.stack || String(err),
             iteration: i
           });
-        } else {
-          resolve(null);
-        }
+        };
+
+        timer = setTimeout(() => {
+          if (settled) return;
+          settled = true;
+          detachListeners();
+          terminateWorker();
+          resolve({
+            type: "CPU_HANG_TIMEOUT",
+            input: mutated,
+            inputString: str,
+            error: `Watchdog triggered: Execution exceeded limit of ${timeoutMs}ms (ReDoS / Unbounded Loop)`,
+            iteration: i
+          });
+        }, timeoutMs);
+        timer.unref?.();
+
+        activeWorker.on("message", onMessage);
+        activeWorker.on("error", onError);
+        activeWorker.postMessage({ type: "EXEC", payload: payloadBase64 });
       });
 
-      worker.on("error", (err) => {
-        if (settled) return;
-        settled = true;
-        cleanup();
-        resolve({
-          type: "CRASH_EXCEPTION",
-          input: mutated,
-          inputString: str,
-          error: err.stack || String(err),
-          iteration: i
-        });
-      });
-
-      worker.postMessage({ type: "EXEC", payload: payloadBase64 });
-    });
-
-    if (crash) {
-      return crash;
+      if (crash) {
+        return crash;
+      }
     }
-  }
 
-  return null;
+    return null;
+  } finally {
+    terminateWorker();
+  }
 }

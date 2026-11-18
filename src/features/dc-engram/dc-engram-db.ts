@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 
 export interface EngramObservation {
   id: number;
@@ -68,6 +69,29 @@ export function resolveEngramProjectName(projectName?: string, cwd?: string): st
   return path.basename(targetDir);
 }
 
+function resolveDisambiguatedProjectCandidates(projectName?: string, cwd?: string): string[] {
+  const primary = resolveEngramProjectName(projectName, cwd);
+  if (projectName && projectName.trim()) {
+    return [primary];
+  }
+  const targetDir = path.resolve(cwd || process.cwd());
+  const parentName = path.basename(path.dirname(targetDir));
+  const repoName = path.basename(targetDir);
+  const disambiguated = parentName && repoName ? `${parentName}/${repoName}` : primary;
+  return disambiguated !== primary ? [primary, disambiguated] : [primary];
+}
+
+function mapObservationRow(it: any): EngramObservation {
+  return {
+    id: typeof it.id === "number" ? it.id : Number(it.id) || 0,
+    type: String(it.type || "observation"),
+    title: String(it.title || "(sin título)"),
+    content: String(it.content || ""),
+    scope: String(it.scope || "project"),
+    created_at: String(it.created_at || ""),
+  };
+}
+
 /**
  * Consulta las observaciones de memoria persistente de Engram.
  * Estrategia de doble canal:
@@ -76,56 +100,62 @@ export function resolveEngramProjectName(projectName?: string, cwd?: string): st
  * 2. Canal de contingencia: Fallback a SQLite local ~/.engram/engram.db.
  */
 export function getProjectObservations(limit = 150, projectName?: string, cwd?: string): EngramObservation[] {
-  const resolved = resolveEngramProjectName(projectName, cwd);
+  const safeLimit = Math.max(1, Math.min(200, Math.trunc(Number(limit) || 20)));
+  const candidates = resolveDisambiguatedProjectCandidates(projectName, cwd);
+  const resolved = candidates[0]!;
 
   // 1. Intentar consultar el daemon oficial HTTP de Engram (:7437)
   try {
-    const url = resolved === "*"
-      ? `http://127.0.0.1:7437/observations?limit=${limit}`
-      : `http://127.0.0.1:7437/observations?project=${encodeURIComponent(resolved)}&limit=${limit}`;
+    for (const candidate of candidates) {
+      const url = candidate === "*"
+        ? `http://127.0.0.1:7437/observations?limit=${safeLimit}`
+        : `http://127.0.0.1:7437/observations?project=${encodeURIComponent(candidate)}&limit=${safeLimit}`;
 
-    const httpOut = execFileSync(
-      "curl",
-      ["-s", "--max-time", "1", url],
-      { encoding: "utf8", timeout: 1200, stdio: ["ignore", "pipe", "ignore"] },
-    );
+      const httpOut = execFileSync(
+        "curl",
+        ["-s", "--max-time", "1", url],
+        { encoding: "utf8", timeout: 1200, stdio: ["ignore", "pipe", "ignore"] },
+      );
 
-    if (httpOut && httpOut.trim().startsWith("[")) {
-      const items = JSON.parse(httpOut.trim());
-      if (Array.isArray(items)) {
-        return items.map((it: any) => ({
-          id: typeof it.id === "number" ? it.id : 0,
-          type: String(it.type || "observation"),
-          title: String(it.title || "(sin título)"),
-          content: String(it.content || ""),
-          scope: String(it.scope || "project"),
-          created_at: String(it.created_at || ""),
-        }));
+      if (httpOut && httpOut.trim().startsWith("[")) {
+        const items = JSON.parse(httpOut.trim());
+        if (Array.isArray(items) && (items.length > 0 || candidate === candidates[candidates.length - 1])) {
+          return items.slice(0, safeLimit).map(mapObservationRow);
+        }
       }
     }
   } catch {
     /* Fallback a SQLite */
   }
 
-  // 2. Fallback a SQLite local ~/.engram/engram.db
+  // 2. Fallback a SQLite local ~/.engram/engram.db con consultas parametrizadas
   try {
-    const dbPath = path.join(os.homedir(), ".engram", "engram.db");
-    const proj = resolved.replace(/'/g, "''");
-    const query = proj === "*"
-      ? `SELECT id, type, title, content, scope, created_at FROM observations WHERE deleted_at IS NULL ORDER BY created_at DESC LIMIT ${limit};`
-      : `SELECT id, type, title, content, scope, created_at FROM observations WHERE deleted_at IS NULL AND project = '${proj}' ORDER BY created_at DESC LIMIT ${limit};`;
+    const dbPath = process.env.ENGRAM_DB_PATH || path.join(os.homedir(), ".engram", "engram.db");
+    if (!fs.existsSync(dbPath)) return [];
 
-    const out = execFileSync(
-      "sqlite3",
-      [
-        dbPath,
-        "-json",
-        query,
-      ],
-      { encoding: "utf8", timeout: 2000, stdio: ["ignore", "pipe", "ignore"] },
-    );
-    if (!out || !out.trim()) return [];
-    return JSON.parse(out.trim()) as EngramObservation[];
+    const db = new DatabaseSync(dbPath, { readOnly: true });
+    try {
+      if (resolved === "*") {
+        const stmt = db.prepare(
+          "SELECT id, type, title, content, scope, created_at FROM observations WHERE deleted_at IS NULL ORDER BY created_at DESC LIMIT ?",
+        );
+        const rows = stmt.all(safeLimit) as any[];
+        return rows.map(mapObservationRow);
+      }
+
+      const stmt = db.prepare(
+        "SELECT id, type, title, content, scope, created_at FROM observations WHERE deleted_at IS NULL AND project = ? ORDER BY created_at DESC LIMIT ?",
+      );
+      for (const candidate of candidates) {
+        const rows = stmt.all(candidate, safeLimit) as any[];
+        if (rows.length > 0) {
+          return rows.map(mapObservationRow);
+        }
+      }
+      return [];
+    } finally {
+      db.close();
+    }
   } catch {
     return [];
   }
@@ -135,35 +165,47 @@ export function getProjectObservations(limit = 150, projectName?: string, cwd?: 
  * Verifica si un proyecto está enrolado para sincronización en la nube en sync_enrolled_projects.
  */
 export function isProjectEnrolled(projectName?: string, cwd?: string): boolean {
-  const resolved = resolveEngramProjectName(projectName, cwd);
+  const candidates = resolveDisambiguatedProjectCandidates(projectName, cwd);
 
   // 1. Intentar consultar el daemon HTTP de Engram
   try {
-    const httpOut = execFileSync(
-      "curl",
-      ["-s", "--max-time", "1", `http://127.0.0.1:7437/sync/status?project=${encodeURIComponent(resolved)}`],
-      { encoding: "utf8", timeout: 1000, stdio: ["ignore", "pipe", "ignore"] },
-    );
-    if (httpOut && httpOut.trim().startsWith("{")) {
-      const parsed = JSON.parse(httpOut.trim());
-      if (typeof parsed.enabled === "boolean") {
-        return parsed.enabled;
+    for (const candidate of candidates) {
+      const httpOut = execFileSync(
+        "curl",
+        ["-s", "--max-time", "1", `http://127.0.0.1:7437/sync/status?project=${encodeURIComponent(candidate)}`],
+        { encoding: "utf8", timeout: 1000, stdio: ["ignore", "pipe", "ignore"] },
+      );
+      if (httpOut && httpOut.trim().startsWith("{")) {
+        const parsed = JSON.parse(httpOut.trim());
+        if (typeof parsed.enabled === "boolean") {
+          if (parsed.enabled || candidate === candidates[candidates.length - 1]) {
+            return parsed.enabled;
+          }
+        }
       }
     }
   } catch {
     /* Fallback a SQLite */
   }
 
-  // 2. Fallback a SQLite local
+  // 2. Fallback a SQLite local con consultas parametrizadas
   try {
-    const dbPath = path.join(os.homedir(), ".engram", "engram.db");
-    const proj = resolved.replace(/'/g, "''");
-    const count = execFileSync(
-      "sqlite3",
-      [dbPath, `SELECT count(*) FROM sync_enrolled_projects WHERE project = '${proj}';`],
-      { encoding: "utf8", timeout: 1000, stdio: ["ignore", "pipe", "ignore"] },
-    );
-    return parseInt(count.trim(), 10) > 0;
+    const dbPath = process.env.ENGRAM_DB_PATH || path.join(os.homedir(), ".engram", "engram.db");
+    if (!fs.existsSync(dbPath)) return false;
+
+    const db = new DatabaseSync(dbPath, { readOnly: true });
+    try {
+      const stmt = db.prepare("SELECT count(*) as cnt FROM sync_enrolled_projects WHERE project = ?");
+      for (const candidate of candidates) {
+        const row = stmt.get(candidate) as { cnt?: number } | undefined;
+        if (Number(row?.cnt ?? 0) > 0) {
+          return true;
+        }
+      }
+      return false;
+    } finally {
+      db.close();
+    }
   } catch {
     return false;
   }

@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, rmSync, utimesSync, writeFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 
@@ -383,3 +383,39 @@ test("viewer T3/S5: latest frame freshness comes from the file mtime", () => {
     rmSync(cacheRoot, { recursive: true, force: true });
   }
 });
+
+test("viewer S8: saveFrame prunes older frame-*.png files beyond retention limit while keeping latest.png", () => {
+  const cacheRoot = makeCacheRoot();
+
+  try {
+    const serial = "USB-PRUNE";
+    const dir = path.join(cacheRoot, serial);
+
+    // Create 25 timestamped frame files with ascending names
+    for (let i = 1; i <= 25; i++) {
+      const idx = String(i).padStart(2, "0");
+      const frameFile = path.join(dir, `frame-2026-01-01T00-00-${idx}-000Z.png`);
+      if (i === 1) {
+        saveFrame(serial, PNG_BYTES, cacheRoot);
+      }
+      writeFileSync(frameFile, PNG_BYTES);
+    }
+
+    // Trigger saveFrame which enforces retention (max 20 frame-*.png files)
+    saveFrame(serial, PNG_BYTES, cacheRoot);
+
+    const entries = readdirSync(dir);
+    const frameFiles = entries.filter((f) => /^frame-.*\.png$/.test(f)).sort();
+
+    assert.ok(frameFiles.length <= 20, `Expected at most 20 frame-*.png files, got ${frameFiles.length}`);
+    assert.equal(existsSync(path.join(dir, "latest.png")), true, "latest.png must be preserved");
+    assert.equal(
+      frameFiles.includes("frame-2026-01-01T00-00-01-000Z.png"),
+      false,
+      "Oldest frame must be pruned",
+    );
+  } finally {
+    rmSync(cacheRoot, { recursive: true, force: true });
+  }
+});
+

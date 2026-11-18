@@ -167,3 +167,45 @@ test("caritasExtension registers only /dc-caritas and pastes to editor in TUI mo
   assert.equal(pasted, CARITAS[0].face);
   assert.ok(notifications.some((n) => n.includes("→ editor")));
 });
+
+test("CaritasPanel slices rendered items by scrollOffset so cursor stays in visible viewport", () => {
+  const items = CARITAS.map((c) => ({
+    value: c.face,
+    label: c.face,
+    description: c.mood,
+  }));
+  let selectedValue: string | undefined;
+
+  const panel = new CaritasPanel(
+    items,
+    dummyTheme,
+    (val) => { selectedValue = val; },
+    () => {},
+    () => {},
+  );
+
+  // Initial render is windowed to CARITAS_ROWS_PAGE (10)
+  const initialLines = panel.render(40);
+  assert.equal(initialLines.length, 10);
+  assert.ok(initialLines[0]?.includes(items[0]!.label));
+
+  // Jump to end (index 19)
+  panel.handleInput("\x1b[F");
+  assert.equal(panel.getSelectedIndex(), items.length - 1);
+
+  const scrolledLines = panel.render(40);
+  assert.equal(scrolledLines.length, 10);
+  assert.ok(
+    scrolledLines[scrolledLines.length - 1]?.includes(items[items.length - 1]!.label),
+    "Last item must be visible at the bottom of the scrolled window",
+  );
+  assert.ok(
+    !scrolledLines.some((l) => l.includes(items[0]!.description)),
+    "First item must have scrolled out of the visible window",
+  );
+
+  // Clicking on the last visible row (y: 9) when already selected confirms the last item
+  panel.handleMouse({ type: "click", button: "left", y: 9 } as unknown as TuiMouseEvent);
+  assert.equal(selectedValue, items[items.length - 1]!.value);
+});
+

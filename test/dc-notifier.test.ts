@@ -4,7 +4,13 @@ import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-c
 import { InteractiveMode } from "@earendil-works/pi-coding-agent";
 import { DcNotifier } from "../src/integrations/dc-notify/dc-notifier.ts";
 import dcNotifyExtension from "../src/integrations/dc-notify/dc-notifier.ts";
-import { patchPiChangelogNotice } from "../src/integrations/dc-notify/dc-core-patches.ts";
+import {
+  patchPiChangelogNotice,
+  patchPiExtensionNotify,
+  patchPiReloadCommand,
+} from "../src/integrations/dc-notify/dc-core-patches.ts";
+import { G_DIAGNOSTICS, patchPiLoadedResources } from "../src/integrations/dc-notify/dc-resources-patch.ts";
+import { dcNotifier } from "../src/integrations/dc-notify/dc-notifier.ts";
 
 test("DcNotifier detects Herdr presence from environment variables", () => {
   const originalSocket = process.env.HERDR_SOCKET_PATH;
@@ -153,3 +159,75 @@ test("patchPiChangelogNotice intercepts startup notices, captures notice and mar
   assert.equal((globalThis as any)[G_CHANGELOG], "Updated to v1.0.0. Use /changelog to view full changelog.");
   assert.equal((globalThis as any)[G_CHANGELOG_MD], "## [1.0.0]\n- Cambios importantes");
 });
+
+test("patchPiReloadCommand guards editorContainer.addChild idempotently across repeated /reload calls", async () => {
+  patchPiReloadCommand();
+
+  let baseAddChildCalls = 0;
+  const baseAddChild = function (_child: any) {
+    baseAddChildCalls++;
+  };
+
+  const fakeHost: any = {
+    editorContainer: {
+      addChild: baseAddChild,
+    },
+  };
+
+  const proto = (InteractiveMode as any).prototype;
+  // Stub out underlying native reload logic on instance shadow or prototype check
+  await proto.handleReloadCommand.call(fakeHost).catch(() => {});
+  const wrappedOnce = fakeHost.editorContainer.addChild;
+  assert.notEqual(wrappedOnce, baseAddChild);
+
+  await proto.handleReloadCommand.call(fakeHost).catch(() => {});
+  const wrappedTwice = fakeHost.editorContainer.addChild;
+  assert.equal(wrappedTwice, wrappedOnce, "editorContainer.addChild must not be double-wrapped on repeated /reload");
+});
+
+test("showExtensionError records diagnostic alert and surfaces error notification via dcNotifier", () => {
+  patchPiLoadedResources();
+  patchPiExtensionNotify();
+
+  const diagnosticsList: string[] = ((globalThis as unknown as Record<symbol, string[]>)[G_DIAGNOSTICS] ??= []);
+  diagnosticsList.length = 0;
+
+  const surfacedNotifications: Array<{ text: string; type: string }> = [];
+  const fakeHost: any = {
+    chatContainer: {
+      addChild() {},
+    },
+    ui: {
+      requestRender() {},
+      notify(text: string, type: string) {
+        surfacedNotifications.push({ text, type });
+      },
+    },
+  };
+
+  const origNotify = dcNotifier.notify.bind(dcNotifier);
+  let notifyCalls = 0;
+  (dcNotifier as any).notify = (...args: any[]) => {
+    notifyCalls++;
+    return (origNotify as any)(...args);
+  };
+
+  try {
+    (InteractiveMode as any).prototype.showExtensionError.call(
+      fakeHost,
+      "/ext/broken.ts",
+      new Error("Boom in extension"),
+      "Error: Boom in extension\n  at /ext/broken.ts:10:5",
+    );
+
+    assert.equal(diagnosticsList.length, 1);
+    assert.ok(diagnosticsList[0]?.includes("/ext/broken.ts"));
+    assert.ok(notifyCalls >= 1 || surfacedNotifications.length >= 1, "Extension error must be surfaced via dcNotifier");
+    assert.equal(surfacedNotifications.length, 1);
+    assert.equal(surfacedNotifications[0]?.type, "error");
+    assert.ok(surfacedNotifications[0]?.text.includes("Boom in extension"));
+  } finally {
+    (dcNotifier as any).notify = origNotify;
+  }
+});
+

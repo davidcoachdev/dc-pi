@@ -87,5 +87,5 @@ Return:
 - `references/document-contract.md` — shared modular Markdown contract.
 - `references/owners/startup-documentation.md` — new-project lifecycle initialization.
 - `references/owners/existing-project-onboarding.md` — existing-codebase AS_IS reconstruction.
-- `~/.pi/agent/skills/anti-overengineering/SKILL.md` — mandatory scope control.
-- `~/.pi/agent/AGENTS.md` — Pi workflow boundaries and delegation policy.
+- `../dc-anti-overengineering/SKILL.md` — mandatory scope control.
+- `../dc-planned-workflow/SKILL.md` — Pi workflow boundaries and delegation policy.

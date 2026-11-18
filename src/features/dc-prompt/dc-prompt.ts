@@ -110,6 +110,7 @@ export function install(pi: ExtensionAPI, ctx: ExtensionContext): DcPromptEditor
   // Ocultar el loader nativo de Pi ya que nuestro prompt tiene el Torii ⛩ y status que late
   ctx.ui.setWorkingVisible(false);
   ctx.ui.setEditorComponent((tui, theme, keybindings) => {
+    currentEditor?.dispose();
     currentEditor = new DcPromptEditor(tui, theme, keybindings, {
       fg: (color, text) => ctx.ui.theme.fg(color as Parameters<Theme["fg"]>[0], text),
       bold: (text) => ctx.ui.theme.bold(text),
@@ -137,6 +138,13 @@ export default function dcPromptExtension(pi: ExtensionAPI): void {
   pi.on("session_start", (_event, ctx) => {
     install(pi, ctx);
     patchPendingMessages(pi);
+  });
+
+  pi.on("session_shutdown", () => {
+    stopPulseTimer();
+    currentEditor?.dispose();
+    currentEditor = undefined;
+    notifiedMessages.clear();
   });
 
   pi.on("agent_start", () => {

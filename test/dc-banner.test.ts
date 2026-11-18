@@ -30,6 +30,13 @@ test("renderDcBanner renders full logo when wide, compact when narrow", () => {
   assert.ok(narrowLines[1].includes("Dc Studio"));
 });
 
+test("renderDcBanner clamps topPadRows on <=32-row terminals so banner fits without pushing editor off-screen", () => {
+  const shortTermLines = renderDcBanner(120, 8, 32);
+  assert.ok(shortTermLines.length <= 25, `Expected <=25 lines on 32-row terminal, got ${shortTermLines.length}`);
+  assert.ok(shortTermLines[0]?.includes("████"), "First line should be logo without top padding on <=32-row terminal");
+});
+
+
 test("dcBannerExtension registers /dc-banner and manages lifecycle", () => {
   const handlers = new Map<string, Function>();
   let registeredCommand: string | undefined;

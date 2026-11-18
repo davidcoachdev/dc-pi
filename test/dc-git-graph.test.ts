@@ -1,5 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import type { TuiMouseEvent } from "@earendil-works/pi-tui";
 import {
@@ -288,32 +292,51 @@ test("DcGitGraphPanel respects initialSelectedHash and left pane mouse wheel", (
   assert.ok(renders >= 2);
 });
 
+const tempGitRepo = fs.mkdtempSync(path.join(os.tmpdir(), "dc-git-graph-repo-"));
+{
+  const git = (...args: string[]) =>
+    execFileSync("git", ["-C", tempGitRepo, ...args], { stdio: "ignore" });
+  git("init", "-b", "main");
+  git("config", "user.name", "Test User");
+  git("config", "user.email", "test@example.invalid");
+  fs.writeFileSync(path.join(tempGitRepo, "README.md"), "# Initial\nline 1\nline 2\n", "utf8");
+  git("add", "README.md");
+  git("commit", "-m", "feat: initial commit");
+  fs.writeFileSync(path.join(tempGitRepo, "README.md"), "# Updated\nline 1\nline 2\nline 3\nline 4\n", "utf8");
+  git("add", "README.md");
+  git("commit", "-m", "fix: second commit");
+}
+
+test.after(() => {
+  fs.rmSync(tempGitRepo, { recursive: true, force: true });
+});
+
 test("dc-git helpers: getGitCommitDetail, getGitCommitGraph, getGitHeadHash, getGitCurrentBranch", () => {
-  // Real repo read-only checks
-  const headHash = getGitHeadHash(process.cwd());
+  // Isolated temp repo read-only checks
+  const headHash = getGitHeadHash(tempGitRepo);
   assert.ok(typeof headHash === "string" && headHash.length >= 7);
 
-  const branch = getGitCurrentBranch(process.cwd());
-  assert.ok(typeof branch === "string" && branch.length > 0);
+  const branch = getGitCurrentBranch(tempGitRepo);
+  assert.equal(branch, "main");
 
-  const graph = getGitCommitGraph(process.cwd(), 5);
+  const graph = getGitCommitGraph(tempGitRepo, 5);
   assert.ok(typeof graph === "string" && graph.includes("COMMIT_REC:"));
 
-  const detail = getGitCommitDetail(process.cwd(), headHash, 10);
+  const detail = getGitCommitDetail(tempGitRepo, headHash, 10);
   assert.ok(Array.isArray(detail) && detail.length > 0);
   assert.ok(detail.some((l: string) => l.includes("commit ") || l.includes("Author:")));
 
   // Truncation check
-  const truncated = getGitCommitDetail(process.cwd(), headHash, 2);
+  const truncated = getGitCommitDetail(tempGitRepo, headHash, 2);
   assert.ok(truncated.length <= 4);
   assert.ok(truncated.some((l: string) => l.includes("diff truncado")));
 
   // Nonexistent commit or invalid hash
-  const invalidDetail = getGitCommitDetail(process.cwd(), "invalid-nonexistent-sha");
+  const invalidDetail = getGitCommitDetail(tempGitRepo, "invalid-nonexistent-sha");
   assert.ok(invalidDetail.some((l: string) => l.includes("error") || l.includes("falló")));
 
   // Empty commit hash
-  const emptyDetail = getGitCommitDetail(process.cwd(), "");
+  const emptyDetail = getGitCommitDetail(tempGitRepo, "");
   assert.ok(emptyDetail.some((l: string) => l.includes("no hay commit seleccionado")));
 
   // Invalid dir returns safe fallbacks
@@ -328,7 +351,7 @@ test("openGitGraphViewer opens modal via openDcModal", async () => {
   const mockCtx = {
     hasUI: true,
     mode: "tui",
-    cwd: process.cwd(),
+    cwd: tempGitRepo,
     ui: {
       custom: async (factory: any) => {
         customCalls++;

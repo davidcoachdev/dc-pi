@@ -1,10 +1,13 @@
 import { AssistantMessageComponent, InteractiveMode } from "@earendil-works/pi-coding-agent";
 import { dcNotifier } from "./dc-notifier.ts";
+import { patchPiLoadedResources, recordDiagnostic } from "./dc-resources-patch.ts";
 
 const PI_NOTICE_PATCHED = Symbol.for("dc.notify.pi-notice-patched");
 const STATUS_PATCHED = Symbol.for("dc.notify.pi-status-patched");
 const EXT_NOTIFY_PATCHED = Symbol.for("dc.notify.pi-ext-notify-patched");
+const EXT_ERROR_PATCHED = Symbol.for("dc.notify.pi-ext-error-patched");
 const RELOAD_PATCHED = Symbol.for("dc.notify.pi-reload-patched");
+const RELOAD_ADD_CHILD_PATCHED = Symbol.for("dc.notify.pi-reload-add-child-patched");
 const CACHE_MISS_PATCHED = Symbol.for("dc.notify.pi-cache-miss-patched");
 const COMPACTION_NOTICE_PATCHED = Symbol.for("dc.notify.pi-compaction-notice-patched");
 const RETRY_PATCHED = Symbol.for("dc.notify.pi-retry-patched");
@@ -76,9 +79,53 @@ export function patchPiStatusNotifications(): void {
 }
 
 /**
+ * Registra diagnósticos de errores de extensiones y los notifica vía dcNotifier
+ * para que nunca se descarten silenciosamente.
+ */
+export function patchPiExtensionError(): void {
+  try {
+    patchPiLoadedResources();
+  } catch {
+    /* noop */
+  }
+  const proto = (InteractiveMode as unknown as { prototype?: Record<string, unknown> })?.prototype;
+  if (!proto || (proto as Record<symbol, boolean>)[EXT_ERROR_PATCHED]) return;
+  const orig = proto.showExtensionError as
+    | ((this: unknown, extPath: string, error: unknown, stack?: string) => unknown)
+    | undefined;
+  if (typeof orig !== "function") return;
+
+  proto.showExtensionError = function (
+    this: any,
+    extPath: string,
+    error: unknown,
+    stack?: string,
+  ): unknown {
+    const errorMsg = `Extension "${extPath}" error: ${String(error)}`;
+    const full = stack ? `${errorMsg}\n${stack}` : errorMsg;
+    try {
+      recordDiagnostic(full);
+    } catch {
+      /* noop */
+    }
+    try {
+      const sent = dcNotifier.notifyHerdr(`Extension "${extPath}" error`, String(error));
+      if (!sent) {
+        dcNotifier.notify(this, `Extension "${extPath}" error`, String(error), "error");
+      }
+    } catch {
+      /* noop */
+    }
+    return orig.call(this, extPath, error, stack);
+  };
+  (proto as Record<symbol, boolean>)[EXT_ERROR_PATCHED] = true;
+}
+
+/**
  * Redirige showExtensionNotify (ctx.ui.notify de todas las extensiones) a Herdr.
  */
 export function patchPiExtensionNotify(): void {
+  patchPiExtensionError();
   const proto = (InteractiveMode as unknown as { prototype?: Record<string, unknown> })?.prototype;
   if (!proto || (proto as Record<symbol, boolean>)[EXT_NOTIFY_PATCHED]) return;
   const orig = proto.showExtensionNotify as
@@ -119,13 +166,21 @@ export function patchPiReloadCommand(): void {
     }
 
     const editorContainer = this.editorContainer;
-    if (editorContainer && typeof editorContainer.addChild === "function") {
+    if (
+      editorContainer &&
+      typeof editorContainer.addChild === "function" &&
+      !(editorContainer.addChild as Record<symbol, boolean>)[RELOAD_ADD_CHILD_PATCHED]
+    ) {
       const origAddChild = editorContainer.addChild.bind(editorContainer);
-      editorContainer.addChild = function (child: any) {
+      const wrappedAddChild = function (child: any) {
         try {
-          const origRender = typeof child?.render === "function" ? child.render.bind(child) : null;
+          const origRender =
+            typeof child?.render === "function" &&
+            !(child.render as Record<symbol, boolean>)[RELOAD_ADD_CHILD_PATCHED]
+              ? child.render.bind(child)
+              : null;
           if (origRender) {
-            child.render = (w: number): string[] => {
+            const wrappedRender = (w: number): string[] => {
               try {
                 const lines = origRender(w);
                 if (
@@ -142,12 +197,16 @@ export function patchPiReloadCommand(): void {
                 return [];
               }
             };
+            (wrappedRender as unknown as Record<symbol, boolean>)[RELOAD_ADD_CHILD_PATCHED] = true;
+            child.render = wrappedRender;
           }
         } catch {
           /* noop */
         }
         return origAddChild(child);
       };
+      (wrappedAddChild as unknown as Record<symbol, boolean>)[RELOAD_ADD_CHILD_PATCHED] = true;
+      editorContainer.addChild = wrappedAddChild;
     }
 
     return orig.call(this, ...args);

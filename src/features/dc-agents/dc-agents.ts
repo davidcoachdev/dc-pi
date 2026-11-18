@@ -43,6 +43,33 @@ const activeHandoverSessions = new Set<string>();
 
 // Guardián para distinguir cambios internos de modelo (startup/failover/handover) de selecciones manuales humanas
 let isInternalModelSwitch = false;
+let exitHandlerRegistered = false;
+let latestFleetPathForExit: string | undefined;
+
+function handleProcessExit(): void {
+  try {
+    extensionLifecycleGeneration++;
+    activeWorkshopCoordinator?.dispose();
+    if (!process.argv.includes("rpc")) {
+      releaseOrchestratorTaxi(undefined, process.pid, latestFleetPathForExit);
+    }
+  } catch {
+    /* noop */
+  }
+}
+
+export function extractAccountFromModelId(modelId?: string): string | undefined {
+  if (!modelId) return undefined;
+  const match = modelId.match(/(?:^|\/|\b)(ac\d+|cc\d+|uc[-_]?\d+|nan[-_]?\d+)(?:\/|\b|$)/i);
+  if (match) return match[1].toLowerCase();
+  for (const part of modelId.split("/")) {
+    const lower = part.trim().toLowerCase();
+    if (/^ac\d+$/.test(lower) || isVipAccount(lower)) {
+      return lower;
+    }
+  }
+  return undefined;
+}
 
 /**
  * Resume cualquier motivo de error o fallo a máximo 3 palabras concisas.
@@ -1165,7 +1192,7 @@ async function doHandleOrchestratorQuotaHandover(
  */
 export function openTaxisViewer(ctx: ExtensionContext): void {
   if (!ctx.hasUI || ctx.mode !== "tui") {
-    ctx.ui?.notify?.("Taxis (Alt+Shift+T): visor solo disponible en modo TUI interactivo", "warning");
+    dcNotifier.notify(ctx, "Taxis (Alt+Shift+T): visor solo disponible en modo TUI interactivo", "warning");
     return;
   }
 
@@ -1231,7 +1258,7 @@ export function openTaxisViewer(ctx: ExtensionContext): void {
  */
 export function openAgentsViewer(ctx: ExtensionContext): void {
   if (!ctx.hasUI || ctx.mode !== "tui") {
-    ctx.ui?.notify?.("Subagentes (Alt+A): visor solo disponible en modo TUI interactivo", "warning");
+    dcNotifier.notify(ctx, "Subagentes (Alt+A): visor solo disponible en modo TUI interactivo", "warning");
     return;
   }
 
@@ -1411,6 +1438,10 @@ export default function dcAgentsExtension(
       activeHandoverSessions.clear();
       activeWorkshopCoordinator?.dispose();
       uninstallSubagentInboxInterceptor();
+      if (exitHandlerRegistered) {
+        process.off("exit", handleProcessExit);
+        exitHandlerRegistered = false;
+      }
       if (!ctx.hasUI || ctx.mode !== "tui" || process.argv.includes("rpc")) return;
       const resolvedFleetPath = (ctx as any)?.fleetPath || options?.fleetPath;
       const sessionId = ctx.sessionManager?.getSessionId?.() || `ambient-${Date.now()}`;
@@ -1421,17 +1452,11 @@ export default function dcAgentsExtension(
   });
 
   // Salida de proceso limpia (anti-zombi)
-  process.on("exit", () => {
-    try {
-      extensionLifecycleGeneration++;
-      activeWorkshopCoordinator?.dispose();
-      if (!process.argv.includes("rpc")) {
-        releaseOrchestratorTaxi(undefined, process.pid);
-      }
-    } catch {
-      /* noop */
-    }
-  });
+  latestFleetPathForExit = options?.fleetPath;
+  if (!exitHandlerRegistered) {
+    exitHandlerRegistered = true;
+    process.on("exit", handleProcessExit);
+  }
 
   // En before_agent_start: Supervisor Pre-Vuelo del Orquestador (Pre-Prompt Quota Gate).
   // Si la cuenta activa del orquestador tiene cuota crítica (< 10%), realiza el relevo
@@ -1481,8 +1506,8 @@ export default function dcAgentsExtension(
         const currentModelId = ctx.model ? `${ctx.model.provider || "cpam"}/${ctx.model.id}` : undefined;
         let activeAccount: string | undefined;
         if (currentModelId) {
-          const match = currentModelId.match(/(ac\d+)/i);
-          if (match) activeAccount = match[1].toLowerCase();
+          const match = currentModelId.match(/(ac\d+|cc\d+|uc[-_]?\d+|nan[-_]?\d+)/i);
+          activeAccount = match ? match[1].toLowerCase() : extractAccountFromModelId(currentModelId);
         }
         if (!activeAccount) {
           const sessionId = ctx.sessionManager?.getSessionId?.() || `ambient-${Date.now()}`;
@@ -1495,7 +1520,7 @@ export default function dcAgentsExtension(
         if (activeAccount && usageInfo) {
           const tokens = usageInfo.tokensUsed || (usageInfo.inTokens + usageInfo.outTokens) || 0;
           const cost = usageInfo.costTotal;
-          updateTaxiPassengerUsage(activeAccount, tokens, cost);
+          updateTaxiPassengerUsage(activeAccount, tokens, cost, resolvedFleetPath);
         }
       } catch {
         /* best-effort sync */
@@ -1533,6 +1558,7 @@ export default function dcAgentsExtension(
             lower.startsWith("cc") ||
             lower.startsWith("nan-") ||
             lower.startsWith("nan_") ||
+            lower.startsWith("uc") ||
             isVipAccount(lower)
           ) {
             requestedAccount = lower;

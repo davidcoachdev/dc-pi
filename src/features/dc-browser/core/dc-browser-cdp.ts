@@ -1,5 +1,8 @@
 import * as fs from "node:fs/promises";
+import * as fsSync from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
+import { validatePublicUrlResolved } from "../../dc-websearch/core/dc-websearch-security.ts";
 import type {
   BrowserCdpStatus,
   BrowserNavigateOptions,
@@ -89,10 +92,80 @@ export async function listPageTargets(rawCdpUrl?: string): Promise<BrowserPageTa
     }));
 }
 
+function isPathWithinRoot(targetPath: string, rootPath: string): boolean {
+  const rel = path.relative(rootPath, targetPath);
+  return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
+}
+
+function resolveExistingAncestorRealpath(targetPath: string): string {
+  let current = path.resolve(targetPath);
+  const tail: string[] = [];
+  while (!fsSync.existsSync(current)) {
+    const parent = path.dirname(current);
+    if (parent === current) break;
+    tail.unshift(path.basename(current));
+    current = parent;
+  }
+  const realBase = fsSync.existsSync(current) ? fsSync.realpathSync(current) : current;
+  return tail.length > 0 ? path.join(realBase, ...tail) : realBase;
+}
+
+function validateConfinedOutputPath(outputPath: string, cwd: string): string {
+  const resolvedCwd = path.resolve(cwd);
+  const resolvedTmp = path.resolve(os.tmpdir());
+  const resolvedOut = path.isAbsolute(outputPath)
+    ? path.resolve(outputPath)
+    : path.resolve(resolvedCwd, outputPath);
+
+  if (!isPathWithinRoot(resolvedOut, resolvedCwd) && !isPathWithinRoot(resolvedOut, resolvedTmp)) {
+    throw new Error(
+      `Ruta de captura fuera de los directorios permitidos (cwd o tmpdir): ${resolvedOut}`,
+    );
+  }
+
+  const realOut = resolveExistingAncestorRealpath(resolvedOut);
+  const realCwd = resolveExistingAncestorRealpath(resolvedCwd);
+  const realTmp = resolveExistingAncestorRealpath(resolvedTmp);
+  if (!isPathWithinRoot(realOut, realCwd) && !isPathWithinRoot(realOut, realTmp)) {
+    throw new Error(
+      `Ruta de captura fuera de los directorios permitidos tras resolver symlinks (cwd o tmpdir): ${resolvedOut}`,
+    );
+  }
+
+  return resolvedOut;
+}
+
+async function validateNavigationUrl(
+  rawUrl: string,
+  allowPrivateNetwork = false,
+): Promise<void> {
+  let parsed: URL;
+  try {
+    parsed = new URL(rawUrl);
+  } catch (err) {
+    throw new Error(`URL inválida para navegación CDP: ${err instanceof Error ? err.message : String(err)}`);
+  }
+
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    throw new Error(`Esquema/protocolo bloqueado por seguridad en navigatePage: ${parsed.protocol}`);
+  }
+
+  if (!allowPrivateNetwork) {
+    const verdict = await validatePublicUrlResolved(rawUrl);
+    if (!verdict.safe) {
+      throw new Error(`Navegación bloqueada por seguridad (SSRF): ${verdict.reason ?? "host no permitido"}`);
+    }
+  }
+}
+
 /**
  * Navega una pestaña existente hacia una URL HTTP/HTTPS y espera a que el documento termine de cargar.
  */
-export async function navigatePage(options: BrowserNavigateOptions): Promise<BrowserNavigateResult> {
+export async function navigatePage(
+  options: BrowserNavigateOptions & { allowPrivateNetwork?: boolean },
+): Promise<BrowserNavigateResult> {
+  await validateNavigationUrl(options.url, Boolean(options.allowPrivateNetwork));
+
   const target = await resolveTarget(options);
   if (!target.webSocketDebuggerUrl) {
     throw new Error(`La pestaña ${target.id} no expone webSocketDebuggerUrl para control remoto`);
@@ -133,6 +206,14 @@ export async function navigatePage(options: BrowserNavigateOptions): Promise<Bro
  * Captura una pantalla en formato PNG de la pestaña seleccionada.
  */
 export async function capturePageScreenshot(options: BrowserScreenshotOptions): Promise<BrowserScreenshotResult> {
+  const cwd = path.resolve(options.cwd ?? process.cwd());
+  const defaultOutDir = path.join(cwd, ".pi", "browser-screenshots");
+  const filename = `screenshot-${Date.now()}.png`;
+  const rawOutputPath = options.outputPath
+    ? (path.isAbsolute(options.outputPath) ? options.outputPath : path.resolve(cwd, options.outputPath))
+    : path.join(defaultOutDir, filename);
+  const outputPath = validateConfinedOutputPath(rawOutputPath, cwd);
+
   const target = await resolveTarget(options);
   if (!target.webSocketDebuggerUrl) {
     throw new Error(`La pestaña ${target.id} no expone webSocketDebuggerUrl para captura`);
@@ -165,13 +246,6 @@ export async function capturePageScreenshot(options: BrowserScreenshotOptions): 
     }
 
     const imageBytes = Buffer.from(screenshotData.data, "base64");
-
-    const cwd = options.cwd ?? process.cwd();
-    const defaultOutDir = path.join(cwd, ".pi", "browser-screenshots");
-    const filename = `screenshot-${Date.now()}.png`;
-    const outputPath = options.outputPath
-      ? (path.isAbsolute(options.outputPath) ? options.outputPath : path.resolve(cwd, options.outputPath))
-      : path.join(defaultOutDir, filename);
 
     await fs.mkdir(path.dirname(outputPath), { recursive: true });
     await fs.writeFile(outputPath, imageBytes);
@@ -242,14 +316,41 @@ function waitForWsOpen(ws: WebSocket, timeoutMs: number): Promise<void> {
   });
 }
 
-function sendCdpCommand<T = unknown>(ws: WebSocket, method: string, params?: Record<string, unknown>): Promise<T> {
+function sendCdpCommand<T = unknown>(
+  ws: WebSocket,
+  method: string,
+  params?: Record<string, unknown>,
+  timeoutMs = 15000,
+): Promise<T> {
   return new Promise((resolve, reject) => {
     const id = Math.floor(Math.random() * 1000000);
+    const cleanup = () => {
+      clearTimeout(timer);
+      ws.removeEventListener("message", handler as any);
+      ws.removeEventListener("close", onClose as any);
+      ws.removeEventListener("error", onError as any);
+    };
+
+    const timer = setTimeout(() => {
+      cleanup();
+      reject(new Error(`Timeout en comando CDP "${method}" (${timeoutMs}ms)`));
+    }, timeoutMs);
+
+    const onClose = () => {
+      cleanup();
+      reject(new Error(`WebSocket CDP cerrado mientras se esperaba respuesta de "${method}"`));
+    };
+
+    const onError = (err: Event) => {
+      cleanup();
+      reject(new Error(`Error en WebSocket CDP durante "${method}": ${String(err)}`));
+    };
+
     const handler = (event: MessageEvent) => {
       try {
         const msg = JSON.parse(String(event.data));
         if (msg.id === id) {
-          ws.removeEventListener("message", handler as any);
+          cleanup();
           if (msg.error) {
             reject(new Error(`CDP Error [${method}]: ${msg.error.message}`));
           } else {
@@ -262,23 +363,46 @@ function sendCdpCommand<T = unknown>(ws: WebSocket, method: string, params?: Rec
     };
 
     ws.addEventListener("message", handler as any);
-    ws.send(JSON.stringify({ id, method, params }));
+    ws.addEventListener("close", onClose as any);
+    ws.addEventListener("error", onError as any);
+    try {
+      ws.send(JSON.stringify({ id, method, params }));
+    } catch (err) {
+      cleanup();
+      reject(err instanceof Error ? err : new Error(String(err)));
+    }
   });
 }
 
 function waitForCdpEvent(ws: WebSocket, eventName: string, timeoutMs: number): Promise<void> {
   return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => {
+    const cleanup = () => {
+      clearTimeout(timer);
       ws.removeEventListener("message", handler as any);
+      ws.removeEventListener("close", onClose as any);
+      ws.removeEventListener("error", onError as any);
+    };
+
+    const timer = setTimeout(() => {
+      cleanup();
       reject(new Error(`Timeout esperando evento CDP "${eventName}" (${timeoutMs}ms)`));
     }, timeoutMs);
+
+    const onClose = () => {
+      cleanup();
+      reject(new Error(`WebSocket CDP cerrado mientras se esperaba evento "${eventName}"`));
+    };
+
+    const onError = (err: Event) => {
+      cleanup();
+      reject(new Error(`Error en WebSocket CDP esperando "${eventName}": ${String(err)}`));
+    };
 
     const handler = (event: MessageEvent) => {
       try {
         const msg = JSON.parse(String(event.data));
         if (msg.method === eventName) {
-          clearTimeout(timer);
-          ws.removeEventListener("message", handler as any);
+          cleanup();
           resolve();
         }
       } catch {
@@ -287,6 +411,8 @@ function waitForCdpEvent(ws: WebSocket, eventName: string, timeoutMs: number): P
     };
 
     ws.addEventListener("message", handler as any);
+    ws.addEventListener("close", onClose as any);
+    ws.addEventListener("error", onError as any);
   });
 }
 

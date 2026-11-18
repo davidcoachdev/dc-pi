@@ -1,5 +1,4 @@
 import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { openDcModal } from "../../ui/dc-modal.ts";
@@ -7,6 +6,7 @@ import { cliProxyClient } from "../../integrations/dc-cliproxy/dc-cliproxy-clien
 import { accountCoordinator } from "../../integrations/dc-cliproxy/dc-account-coordinator.ts";
 import { fetchJson } from "../../integrations/dc-http/dc-fetch.ts";
 import { dcNotifier } from "../../integrations/dc-notify/dc-notifier.ts";
+import { getPiCodingAgentDir } from "../../core/dc-paths.ts";
 import { DcQuotaPanel } from "./dc-quota-panel.ts";
 import {
   type QuotaRow,
@@ -20,11 +20,11 @@ export const BROWSER_UA =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36";
 
 /**
- * Lee la clave de OpenCode Go / Zen desde ~/.pi/agent/auth.json.
+ * Lee la clave de OpenCode Go / Zen desde <PI_CODING_AGENT_DIR>/auth.json (~/.pi/agent/auth.json).
  */
 export function readPiAuthKey(authPath?: string): string | null {
   try {
-    const filePath = authPath || path.join(os.homedir(), ".pi/agent/auth.json");
+    const filePath = authPath || path.join(getPiCodingAgentDir(), "auth.json");
     if (!fs.existsSync(filePath)) return null;
     const raw = fs.readFileSync(filePath, "utf8");
     const auth = JSON.parse(raw) as Record<string, any>;

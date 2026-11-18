@@ -828,48 +828,54 @@ export function installDialogsPatch(): void {
           info += `Total:     $${(stats.cost ?? 0).toFixed(2)}\n`;
         }
 
-        void this.showExtensionCustom(
-          (_tui: unknown, rawTheme: Theme, _kb: unknown, done: (r: unknown) => void) => {
-            const theme = resolveSafeTheme(rawTheme, this);
-            const lines = info.trim().split("\n");
-            const content: Component = {
-              render: (_width: number): string[] => {
-                return lines.map((l) => {
-                  if (l.startsWith("[") && l.endsWith("]")) {
-                    return theme.bold(theme.fg("accent", l));
-                  }
-                  const colonIdx = l.indexOf(":");
-                  if (colonIdx !== -1 && !l.startsWith("  ")) {
-                    const label = l.slice(0, colonIdx + 1);
-                    const val = l.slice(colonIdx + 1);
-                    return theme.fg("dim", label) + theme.fg("text", val);
-                  }
-                  return theme.fg("dim", l);
-                });
-              },
-              invalidate: () => {},
-            };
+        Promise.resolve(
+          this.showExtensionCustom(
+            (_tui: unknown, rawTheme: Theme, _kb: unknown, done: (r: unknown) => void) => {
+              const theme = resolveSafeTheme(rawTheme, this);
+              const lines = info.trim().split("\n");
+              const content: Component = {
+                render: (_width: number): string[] => {
+                  return lines.map((l) => {
+                    if (l.startsWith("[") && l.endsWith("]")) {
+                      return theme.bold(theme.fg("accent", l));
+                    }
+                    const colonIdx = l.indexOf(":");
+                    if (colonIdx !== -1 && !l.startsWith("  ")) {
+                      const label = l.slice(0, colonIdx + 1);
+                      const val = l.slice(colonIdx + 1);
+                      return theme.fg("dim", label) + theme.fg("text", val);
+                    }
+                    return theme.fg("dim", l);
+                  });
+                },
+                invalidate: () => {},
+              };
 
-            return markDcWindow(new DcWindow({
-              title: "⛩  Dc Studio - Sesiones",
-              theme,
-              content,
-              footer: "esc / enter / click [X] para cerrar",
-              onClose: () => done(undefined),
-              paddingX: 2,
-              frame: "double",
-              solidBackground: true,
-            }));
-          },
-          {
-            overlay: true,
-            overlayOptions: {
-              anchor: "center",
-              width: "70%",
-              maxHeight: "75%",
+              return markDcWindow(new DcWindow({
+                title: "⛩  Dc Studio - Sesiones",
+                theme,
+                content,
+                footer: "esc / enter / click [X] para cerrar",
+                onClose: () => done(undefined),
+                paddingX: 2,
+                frame: "double",
+                solidBackground: true,
+              }));
             },
-          },
-        );
+            {
+              overlay: true,
+              overlayOptions: {
+                anchor: "center",
+                width: "70%",
+                maxHeight: "75%",
+              },
+            },
+          ),
+        ).catch(() => {
+          try {
+            origSessionCmd.call(this);
+          } catch {}
+        });
       } catch {
         return origSessionCmd.call(this);
       }
@@ -892,102 +898,108 @@ export function installDialogsPatch(): void {
           return origShowSessionSelector.call(this);
         }
 
-        void this.showExtensionCustom(
-          (_tui: unknown, rawTheme: Theme, _kb: unknown, done: (r: unknown) => void) => {
-            let selector: any;
-            try {
-              const theme = resolveSafeTheme(rawTheme, this);
-              selector = new SessionSelectorComponent(
-                (onProgress: any) =>
-                  SessionManager.list(
-                    this.sessionManager.getCwd(),
-                    this.sessionManager.getSessionDir(),
-                    onProgress,
-                  ),
-                (onProgress: any) =>
-                  this.sessionManager.usesDefaultSessionDir()
-                    ? SessionManager.listAll(onProgress)
-                    : SessionManager.listAll(this.sessionManager.getSessionDir(), onProgress),
-                async (sessionPath: string) => {
-                  done(undefined);
-                  await this.handleResumeSession(sessionPath);
-                },
-                () => {
-                  done(undefined);
-                  this.ui.requestRender();
-                },
-                () => {
-                  done(undefined);
-                  void this.shutdown();
-                },
-                () => this.ui.requestRender(),
-                {
-                  renameSession: async (sessionFilePath: string, nextName: string | undefined) => {
-                    const next = (nextName ?? "").trim();
-                    if (!next) return;
-                    const mgr = SessionManager.open(sessionFilePath);
-                    mgr.appendSessionInfo(next);
+        Promise.resolve(
+          this.showExtensionCustom(
+            (_tui: unknown, rawTheme: Theme, _kb: unknown, done: (r: unknown) => void) => {
+              let selector: any;
+              try {
+                const theme = resolveSafeTheme(rawTheme, this);
+                selector = new SessionSelectorComponent(
+                  (onProgress: any) =>
+                    SessionManager.list(
+                      this.sessionManager.getCwd(),
+                      this.sessionManager.getSessionDir(),
+                      onProgress,
+                    ),
+                  (onProgress: any) =>
+                    this.sessionManager.usesDefaultSessionDir()
+                      ? SessionManager.listAll(onProgress)
+                      : SessionManager.listAll(this.sessionManager.getSessionDir(), onProgress),
+                  async (sessionPath: string) => {
+                    done(undefined);
+                    await this.handleResumeSession(sessionPath);
                   },
-                  showRenameHint: true,
-                  keybindings: this.keybindings,
-                },
-                this.sessionManager.getSessionFile(),
-              );
+                  () => {
+                    done(undefined);
+                    this.ui.requestRender();
+                  },
+                  () => {
+                    done(undefined);
+                    void this.shutdown();
+                  },
+                  () => this.ui.requestRender(),
+                  {
+                    renameSession: async (sessionFilePath: string, nextName: string | undefined) => {
+                      const next = (nextName ?? "").trim();
+                      if (!next) return;
+                      const mgr = SessionManager.open(sessionFilePath);
+                      mgr.appendSessionInfo(next);
+                    },
+                    showRenameHint: true,
+                    keybindings: this.keybindings,
+                  },
+                  this.sessionManager.getSessionFile(),
+                );
 
-              const titleFn = () => {
-                const scope = (selector as any).scope;
-                return scope === "all"
-                  ? "⛩  Dc Studio - Sesiones (Todas)"
-                  : "⛩  Dc Studio - Sesiones";
-              };
+                const titleFn = () => {
+                  const scope = (selector as any).scope;
+                  return scope === "all"
+                    ? "⛩  Dc Studio - Sesiones (Todas)"
+                    : "⛩  Dc Studio - Sesiones";
+                };
 
-              const footerFn = () => {
-                try {
-                  const header = (selector as any).header;
-                  if (header && typeof header.render === "function") {
-                    const hLines = header.render(100);
-                    if (Array.isArray(hLines) && hLines.length >= 3) {
-                      const h1 = hLines[1]?.trim() || "";
-                      const h2 = hLines[2]?.trim() || "";
-                      if (h1 && h2) return `${h1}  ·  ${h2}`;
-                      return h1 || h2 || undefined;
+                const footerFn = () => {
+                  try {
+                    const header = (selector as any).header;
+                    if (header && typeof header.render === "function") {
+                      const hLines = header.render(100);
+                      if (Array.isArray(hLines) && hLines.length >= 3) {
+                        const h1 = hLines[1]?.trim() || "";
+                        const h2 = hLines[2]?.trim() || "";
+                        if (h1 && h2) return `${h1}  ·  ${h2}`;
+                        return h1 || h2 || undefined;
+                      }
                     }
-                  }
-                } catch {}
-                return "tab scope  ·  ctrl+s sort  ·  ctrl+n named  ·  ctrl+d delete  ·  ctrl+r rename";
-              };
+                  } catch {}
+                  return "tab scope  ·  ctrl+s sort  ·  ctrl+n named  ·  ctrl+d delete  ·  ctrl+r rename";
+                };
 
-              return markDcWindow(new DcWindow({
-                title: titleFn,
-                theme,
-                content: selector,
-                footer: footerFn,
-                onClose: () => {
-                  done(undefined);
-                  this.ui.requestRender();
-                },
-                paddingX: 1,
-                frame: "double",
-                solidBackground: true,
-              }));
-            } catch (err) {
-              // Fallback defensivo: si la API privada de SessionSelectorComponent cambia,
-              // cerrar el overlay y recurrir inmediatamente al método nativo de Pi
-              done(undefined);
-              this.ui?.requestRender?.();
-              void origShowSessionSelector.call(this);
-              return { render: () => [] as string[], invalidate() {} };
-            }
-          },
-          {
-            overlay: true,
-            overlayOptions: {
-              anchor: "center",
-              width: "88%",
-              maxHeight: "85%",
+                return markDcWindow(new DcWindow({
+                  title: titleFn,
+                  theme,
+                  content: selector,
+                  footer: footerFn,
+                  onClose: () => {
+                    done(undefined);
+                    this.ui.requestRender();
+                  },
+                  paddingX: 1,
+                  frame: "double",
+                  solidBackground: true,
+                }));
+              } catch (err) {
+                // Fallback defensivo: si la API privada de SessionSelectorComponent cambia,
+                // cerrar el overlay y recurrir inmediatamente al método nativo de Pi
+                done(undefined);
+                this.ui?.requestRender?.();
+                void origShowSessionSelector.call(this);
+                return { render: () => [] as string[], invalidate() {} };
+              }
             },
-          },
-        );
+            {
+              overlay: true,
+              overlayOptions: {
+                anchor: "center",
+                width: "88%",
+                maxHeight: "85%",
+              },
+            },
+          ),
+        ).catch(() => {
+          try {
+            origShowSessionSelector.call(this);
+          } catch {}
+        });
       } catch {
         return origShowSessionSelector.call(this);
       }
@@ -1012,74 +1024,80 @@ export function installDialogsPatch(): void {
         }
         const realLeafId = this.sessionManager.getLeafId();
 
-        void this.showExtensionCustom(
-          (tui: any, rawTheme: Theme, _kb: any, done: (r: any) => void) => {
-            try {
-              const theme = resolveSafeTheme(rawTheme, this);
-              const selector = new TreeSelectorComponent(
-                tree,
-                realLeafId,
-                tui.terminal?.rows ?? 40,
-                async (entryId: string) => {
-                  done(undefined);
-                  if (entryId === this.sessionManager.getLeafId()) {
-                    this.showStatus?.("Already at this point");
-                    return;
-                  }
-                  try {
-                    await this.session.navigateTree(entryId);
-                    this.showStatus?.("Navigated to selected point");
-                    this.chatContainer?.clear?.();
-                    this.renderInitialMessages?.();
-                  } catch (e: any) {
-                    this.showError?.(`Navigation error: ${e.message}`);
-                  }
-                },
-                () => {
-                  done(undefined);
-                  this.ui?.requestRender?.();
-                },
-                (entryId: string, label: string | undefined) => {
-                  if (label !== undefined) {
-                    this.sessionManager?.appendLabelChange?.(entryId, label);
-                  }
-                  this.ui?.requestRender?.();
-                },
-                initialSelectedId,
-                this.settingsManager?.getTreeFilterMode?.(),
-              );
+        Promise.resolve(
+          this.showExtensionCustom(
+            (tui: any, rawTheme: Theme, _kb: any, done: (r: any) => void) => {
+              try {
+                const theme = resolveSafeTheme(rawTheme, this);
+                const selector = new TreeSelectorComponent(
+                  tree,
+                  realLeafId,
+                  tui.terminal?.rows ?? 40,
+                  async (entryId: string) => {
+                    done(undefined);
+                    if (entryId === this.sessionManager.getLeafId()) {
+                      this.showStatus?.("Already at this point");
+                      return;
+                    }
+                    try {
+                      await this.session.navigateTree(entryId);
+                      this.showStatus?.("Navigated to selected point");
+                      this.chatContainer?.clear?.();
+                      this.renderInitialMessages?.();
+                    } catch (e: any) {
+                      this.showError?.(`Navigation error: ${e.message}`);
+                    }
+                  },
+                  () => {
+                    done(undefined);
+                    this.ui?.requestRender?.();
+                  },
+                  (entryId: string, label: string | undefined) => {
+                    if (label !== undefined) {
+                      this.sessionManager?.appendLabelChange?.(entryId, label);
+                    }
+                    this.ui?.requestRender?.();
+                  },
+                  initialSelectedId,
+                  this.settingsManager?.getTreeFilterMode?.(),
+                );
 
-              return markDcWindow(new DcWindow({
-                title: "⛩  Dc Studio - Árbol de Sesiones",
-                theme,
-                content: selector,
-                footer: "↑/↓: navegar  ·  Enter: saltar a turno  ·  esc: cerrar",
-                onClose: () => {
-                  done(undefined);
-                  this.ui?.requestRender?.();
-                },
-                paddingX: 1,
-                frame: "double",
-                solidBackground: true,
-              }));
-            } catch (err) {
-              // Fallback defensivo: si TreeSelectorComponent cambia o falla,
-              // cerrar overlay y delegar a la implementación nativa
-              done(undefined);
-              this.ui?.requestRender?.();
-              void origShowTreeSelector.call(this, initialSelectedId);
-              return { render: () => [] as string[], invalidate() {} };
-            }
-          },
-          {
-            overlay: true,
-            overlayOptions: {
-              anchor: "center",
-              width: "88%",
-              maxHeight: "85%",
+                return markDcWindow(new DcWindow({
+                  title: "⛩  Dc Studio - Árbol de Sesiones",
+                  theme,
+                  content: selector,
+                  footer: "↑/↓: navegar  ·  Enter: saltar a turno  ·  esc: cerrar",
+                  onClose: () => {
+                    done(undefined);
+                    this.ui?.requestRender?.();
+                  },
+                  paddingX: 1,
+                  frame: "double",
+                  solidBackground: true,
+                }));
+              } catch (err) {
+                // Fallback defensivo: si TreeSelectorComponent cambia o falla,
+                // cerrar overlay y delegar a la implementación nativa
+                done(undefined);
+                this.ui?.requestRender?.();
+                void origShowTreeSelector.call(this, initialSelectedId);
+                return { render: () => [] as string[], invalidate() {} };
+              }
             },
-          },
-        );
+            {
+              overlay: true,
+              overlayOptions: {
+                anchor: "center",
+                width: "88%",
+                maxHeight: "85%",
+              },
+            },
+          ),
+        ).catch(() => {
+          try {
+            origShowTreeSelector.call(this, initialSelectedId);
+          } catch {}
+        });
       } catch {
         return origShowTreeSelector.call(this, initialSelectedId);
       }
@@ -1109,6 +1127,8 @@ export function installDialogsPatch(): void {
         const firstLine = (title ?? "").split("\n")[0]?.trim() || "Selección";
         let countdownSeconds: number | undefined = opts?.timeout ? Math.ceil(opts.timeout / 1000) : undefined;
         let timer: NodeJS.Timeout | null = null;
+        let activeDone: ((val: string | undefined) => void) | null = null;
+        let settled = false;
 
         const clearTimer = () => {
           if (timer) {
@@ -1117,75 +1137,90 @@ export function installDialogsPatch(): void {
           }
         };
 
+        const finish = (val: string | undefined) => {
+          if (settled) return;
+          settled = true;
+          clearTimer();
+          if (opts?.signal) {
+            opts.signal.removeEventListener("abort", onAbort);
+          }
+          try {
+            activeDone?.(val);
+          } catch {}
+          resolve(val);
+        };
+
+        const onAbort = () => {
+          finish(undefined);
+        };
+
         if (opts?.signal) {
-          opts.signal.addEventListener("abort", () => {
-            clearTimer();
-            resolve(undefined);
-          }, { once: true });
+          opts.signal.addEventListener("abort", onAbort, { once: true });
         }
 
-        void this.showExtensionCustom(
-          (tui: any, rawTheme: Theme, _kb: any, done: (val: string | undefined) => void) => {
-            const theme = resolveSafeTheme(rawTheme, this);
-            if (countdownSeconds && countdownSeconds > 0) {
-              timer = setInterval(() => {
-                if (countdownSeconds && countdownSeconds > 0) {
-                  countdownSeconds--;
-                  tui.requestRender?.();
-                  if (countdownSeconds === 0) {
-                    clearTimer();
-                    done(undefined);
-                    resolve(undefined);
+        Promise.resolve(
+          this.showExtensionCustom(
+            (tui: any, rawTheme: Theme, _kb: any, done: (val: string | undefined) => void) => {
+              activeDone = done;
+              if (settled || opts?.signal?.aborted) {
+                finish(undefined);
+                return { render: () => [] as string[], invalidate() {} };
+              }
+              const theme = resolveSafeTheme(rawTheme, this);
+              if (countdownSeconds && countdownSeconds > 0) {
+                timer = setInterval(() => {
+                  if (countdownSeconds && countdownSeconds > 0) {
+                    countdownSeconds--;
+                    tui.requestRender?.();
+                    if (countdownSeconds === 0) {
+                      finish(undefined);
+                    }
                   }
-                }
-              }, 1000);
-              timer.unref?.();
-            }
+                }, 1000);
+                timer.unref?.();
+              }
 
-            const panel = new CleanExtensionSelectPanel(
-              options,
-              theme,
-              (option: string) => {
-                clearTimer();
-                done(option);
-                resolve(option);
-              },
-              () => {
-                clearTimer();
-                done(undefined);
-                resolve(undefined);
-              },
-              () => tui.requestRender?.(),
-            );
+              const panel = new CleanExtensionSelectPanel(
+                options,
+                theme,
+                (option: string) => {
+                  finish(option);
+                },
+                () => {
+                  finish(undefined);
+                },
+                () => tui.requestRender?.(),
+              );
 
-            const titleFn = () =>
-              countdownSeconds !== undefined ? `${firstLine} (${countdownSeconds}s)` : firstLine;
+              const titleFn = () =>
+                countdownSeconds !== undefined ? `${firstLine} (${countdownSeconds}s)` : firstLine;
 
-            return markDcWindow(new DcWindow({
-              title: titleFn,
-              glyph: "⛩ ",
-              theme,
-              content: panel,
-              footer: `${theme.fg("accent", "↑/↓ / Clic")} elegir   ${theme.fg("accent", "Enter")} aplicar   ${theme.fg("accent", "esc/q")} cancelar`,
-              onClose: () => {
-                clearTimer();
-                done(undefined);
-                resolve(undefined);
-              },
-              paddingX: 1,
-              frame: "double",
-              solidBackground: true,
-            }));
-          },
-          {
-            overlay: true,
-            overlayOptions: {
-              anchor: "center",
-              width: "50%",
-              maxHeight: `${Math.min(75, Math.max(22, options.length * 6 + 15))}%`,
+              return markDcWindow(new DcWindow({
+                title: titleFn,
+                glyph: "⛩ ",
+                theme,
+                content: panel,
+                footer: `${theme.fg("accent", "↑/↓ / Clic")} elegir   ${theme.fg("accent", "Enter")} aplicar   ${theme.fg("accent", "esc/q")} cancelar`,
+                onClose: () => {
+                  finish(undefined);
+                },
+                paddingX: 1,
+                frame: "double",
+                solidBackground: true,
+              }));
             },
-          },
-        );
+            {
+              overlay: true,
+              overlayOptions: {
+                anchor: "center",
+                width: "50%",
+                maxHeight: `${Math.min(75, Math.max(22, options.length * 6 + 15))}%`,
+              },
+            },
+          ),
+        ).catch(() => {
+          finish(undefined);
+        });
       });
     };
   }
@@ -1209,55 +1244,91 @@ export function installDialogsPatch(): void {
           resolve(undefined);
           return;
         }
-        void this.showExtensionCustom(
-          (_tui: any, rawTheme: Theme, _kb: any, done: (val: string | undefined) => void) => {
-            try {
-              const theme = resolveSafeTheme(rawTheme, this);
-              const input = new ExtensionInputComponent(
-                title,
-                placeholder,
-                (value: string) => {
-                  done(value);
-                  resolve(value);
-                },
-                () => {
-                  done(undefined);
-                  resolve(undefined);
-                },
-                { tui: this.ui, timeout: opts?.timeout },
-              );
+        let activeDone: ((val: string | undefined) => void) | null = null;
+        let activeInput: any = null;
+        let settled = false;
 
-              return markDcWindow(new DcWindow({
-                title: title || "Input",
-                glyph: "⛩ ",
-                theme,
-                content: input,
-                footer: "Enter: confirmar  ·  esc: cancelar",
-                onClose: () => {
-                  done(undefined);
-                  resolve(undefined);
-                },
-                paddingX: 1,
-                frame: "double",
-                solidBackground: true,
-              }));
-            } catch (err) {
-              // Fallback defensivo si ExtensionInputComponent cambia su API
-              done(undefined);
-              this.ui?.requestRender?.();
-              void origShowExtInput.call(this, title, placeholder, opts).then(resolve);
-              return { render: () => [] as string[], invalidate() {} };
-            }
-          },
-          {
-            overlay: true,
-            overlayOptions: {
-              anchor: "center",
-              width: "55%",
-              maxHeight: "45%",
+        const finish = (val: string | undefined) => {
+          if (settled) return;
+          settled = true;
+          if (opts?.signal) {
+            opts.signal.removeEventListener("abort", onAbort);
+          }
+          try {
+            activeInput?.dispose?.();
+          } catch {}
+          try {
+            activeDone?.(val);
+          } catch {}
+          resolve(val);
+        };
+
+        const onAbort = () => {
+          finish(undefined);
+        };
+
+        if (opts?.signal) {
+          opts.signal.addEventListener("abort", onAbort, { once: true });
+        }
+
+        Promise.resolve(
+          this.showExtensionCustom(
+            (_tui: any, rawTheme: Theme, _kb: any, done: (val: string | undefined) => void) => {
+              activeDone = done;
+              if (settled || opts?.signal?.aborted) {
+                finish(undefined);
+                return { render: () => [] as string[], invalidate() {} };
+              }
+              try {
+                const theme = resolveSafeTheme(rawTheme, this);
+                const input = new ExtensionInputComponent(
+                  title,
+                  placeholder,
+                  (value: string) => {
+                    finish(value);
+                  },
+                  () => {
+                    finish(undefined);
+                  },
+                  { tui: this.ui, timeout: opts?.timeout },
+                );
+                activeInput = input;
+
+                return markDcWindow(new DcWindow({
+                  title: title || "Input",
+                  glyph: "⛩ ",
+                  theme,
+                  content: input,
+                  footer: "Enter: confirmar  ·  esc: cancelar",
+                  onClose: () => {
+                    finish(undefined);
+                  },
+                  paddingX: 1,
+                  frame: "double",
+                  solidBackground: true,
+                }));
+              } catch (err) {
+                // Fallback defensivo si ExtensionInputComponent cambia su API
+                done(undefined);
+                this.ui?.requestRender?.();
+                Promise.resolve(origShowExtInput.call(this, title, placeholder, opts))
+                  .then((val) => finish(val))
+                  .catch(() => finish(undefined));
+                return { render: () => [] as string[], invalidate() {} };
+              }
             },
-          },
-        );
+            {
+              overlay: true,
+              overlayOptions: {
+                anchor: "center",
+                width: "55%",
+                maxHeight: "45%",
+              },
+            },
+          ),
+        ).catch(() => {
+          finish(undefined);
+        });
       });
     };
   }

@@ -13,6 +13,7 @@ export function fetchWithDnsPinning(
   targetUrl: string,
   options: {
     timeoutMs?: number;
+    maxBytes?: number;
     headers?: Record<string, string>;
     dnsLookupOverride?: typeof dns.lookup;
   } = {},
@@ -21,6 +22,7 @@ export function fetchWithDnsPinning(
     const parsed = new URL(targetUrl);
     const isHttps = parsed.protocol === "https:";
     const mod = isHttps ? https : http;
+    const maxBytes = options.maxBytes ?? 5 * 1024 * 1024;
 
     const req = mod.request({
       protocol: parsed.protocol,
@@ -55,9 +57,25 @@ export function fetchWithDnsPinning(
       },
     }, (res) => {
       let data = "";
+      let totalBytes = 0;
+      let abortedForSize = false;
       res.setEncoding("utf8");
-      res.on("data", (chunk) => { data += chunk; });
+      res.on("error", reject);
+      res.on("data", (chunk: string) => {
+        if (abortedForSize) return;
+        totalBytes += Buffer.byteLength(chunk, "utf8");
+        if (totalBytes > maxBytes) {
+          abortedForSize = true;
+          const err = new Error(`Response size ${totalBytes} bytes exceeds limit of ${maxBytes} bytes`);
+          res.destroy(err);
+          req.destroy(err);
+          reject(err);
+          return;
+        }
+        data += chunk;
+      });
       res.on("end", () => {
+        if (abortedForSize) return;
         resolve({
           ok: (res.statusCode ?? 500) >= 200 && (res.statusCode ?? 500) < 300,
           status: res.statusCode ?? 500,
@@ -125,30 +143,33 @@ export async function executeWebSearch(options: WebSearchOptions): Promise<WebSe
 
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+    let res: Response;
+    try {
+      res = await fetch(EXA_MCP_ENDPOINT, {
+        method: "POST",
+        headers,
+        body: JSON.stringify(payload),
+        signal: ctrl.signal,
+      });
 
-    const res = await fetch(EXA_MCP_ENDPOINT, {
-      method: "POST",
-      headers,
-      body: JSON.stringify(payload),
-      signal: ctrl.signal,
-    });
-    clearTimeout(timer);
-
-    if (res.ok) {
-      const data = await res.json();
-      const content = data?.result?.content;
-      if (Array.isArray(content)) {
-        const textBlock = content.find((c: any) => c.type === "text")?.text ?? "";
-        const parsedResults = parseExaMarkdownResults(textBlock);
-        if (parsedResults.length > 0) {
-          return {
-            query: options.query,
-            provider: "exa",
-            results: parsedResults.slice(0, limit),
-            total: parsedResults.length,
-          };
+      if (res.ok) {
+        const data = await res.json();
+        const content = data?.result?.content;
+        if (Array.isArray(content)) {
+          const textBlock = content.find((c: any) => c.type === "text")?.text ?? "";
+          const parsedResults = parseExaMarkdownResults(textBlock);
+          if (parsedResults.length > 0) {
+            return {
+              query: options.query,
+              provider: "exa",
+              results: parsedResults.slice(0, limit),
+              total: parsedResults.length,
+            };
+          }
         }
       }
+    } finally {
+      clearTimeout(timer);
     }
   } catch {
     // Failover a Parallel
@@ -160,37 +181,39 @@ export async function executeWebSearch(options: WebSearchOptions): Promise<WebSe
     if (parallelKey) {
       const ctrl = new AbortController();
       const timer = setTimeout(() => ctrl.abort(), timeoutMs);
-
-      const res = await fetch(PARALLEL_SEARCH_ENDPOINT, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${parallelKey}`,
-        },
-        body: JSON.stringify({
-          query: options.query,
-          max_results: limit,
-        }),
-        signal: ctrl.signal,
-      });
-      clearTimeout(timer);
-
-      if (res.ok) {
-        const data = await res.json();
-        const items: WebSearchItem[] = (data?.results ?? []).map((r: any) => ({
-          title: r.title ?? "Sin título",
-          url: r.url,
-          snippet: redactSecrets(r.snippet ?? r.description ?? ""),
-          publishedDate: r.published_date,
-        }));
-        if (items.length > 0) {
-          return {
+      try {
+        const res = await fetch(PARALLEL_SEARCH_ENDPOINT, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${parallelKey}`,
+          },
+          body: JSON.stringify({
             query: options.query,
-            provider: "parallel",
-            results: items,
-            total: items.length,
-          };
+            max_results: limit,
+          }),
+          signal: ctrl.signal,
+        });
+
+        if (res.ok) {
+          const data = await res.json();
+          const items: WebSearchItem[] = (data?.results ?? []).map((r: any) => ({
+            title: r.title ?? "Sin título",
+            url: r.url,
+            snippet: redactSecrets(r.snippet ?? r.description ?? ""),
+            publishedDate: r.published_date,
+          }));
+          if (items.length > 0) {
+            return {
+              query: options.query,
+              provider: "parallel",
+              results: items,
+              total: items.length,
+            };
+          }
         }
+      } finally {
+        clearTimeout(timer);
       }
     }
   } catch {
@@ -202,23 +225,26 @@ export async function executeWebSearch(options: WebSearchOptions): Promise<WebSe
     const ddgUrl = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(options.query)}`;
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), timeoutMs);
-    const res = await fetch(ddgUrl, {
-      headers: {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-      },
-      signal: ctrl.signal,
-    });
-    clearTimeout(timer);
+    try {
+      const res = await fetch(ddgUrl, {
+        headers: {
+          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        },
+        signal: ctrl.signal,
+      });
 
-    if (res.ok) {
-      const html = await res.text();
-      const items = parseDuckDuckGoHtml(html, limit);
-      return {
-        query: options.query,
-        provider: "fallback",
-        results: items,
-        total: items.length,
-      };
+      if (res.ok) {
+        const html = await res.text();
+        const items = parseDuckDuckGoHtml(html, limit);
+        return {
+          query: options.query,
+          provider: "fallback",
+          results: items,
+          total: items.length,
+        };
+      }
+    } finally {
+      clearTimeout(timer);
     }
   } catch {
     // Retornar vacío si fallan todos los fallbacks

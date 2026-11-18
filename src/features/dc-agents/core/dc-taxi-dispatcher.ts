@@ -33,18 +33,12 @@ const LOCK_MAX_WAIT_MS = 15_000;
 
 // Reentrancia dentro del mismo proceso: ruta resuelta -> profundidad de anidamiento
 const activeFleetLocks = new Map<string, number>();
+const SLEEP_WAIT_BUFFER = new Int32Array(new SharedArrayBuffer(4));
 
 function sleepSync(ms: number): void {
-  try {
-    const sab = new SharedArrayBuffer(4);
-    const ia = new Int32Array(sab);
-    Atomics.wait(ia, 0, 0, ms);
-  } catch {
-    const end = Date.now() + ms;
-    while (Date.now() < end) {
-      /* fallback busy spin */
-    }
-  }
+  const duration = Math.max(0, Math.floor(ms));
+  if (duration <= 0) return;
+  Atomics.wait(SLEEP_WAIT_BUFFER, 0, 0, duration);
 }
 
 /**
@@ -405,7 +399,7 @@ export function loadFleetState(
       for (const vip of vips) {
         if (!fleet[vip]) {
           fleet[vip] = { account: vip, status: "libre", passenger: null, tier: "vip" };
-        } else if (!fleet[vip].tier) {
+        } else if (!fleet[vip].tier || fleet[vip].tier !== "vip") {
           fleet[vip].tier = "vip";
         }
       }
@@ -660,6 +654,7 @@ export function acquireOrchestratorTaxi(
           lower.startsWith("cc") ||
           lower.startsWith("nan-") ||
           lower.startsWith("nan_") ||
+          lower.startsWith("uc") ||
           isVipAccount(lower)
         ) {
           currentAccount = lower;
@@ -883,6 +878,7 @@ export function releaseOrchestratorTaxi(
   fleetPath: string = FLEET_STATE_PATH,
   allowedAccounts?: string[],
 ): void {
+  const prevReleaseActive = isExplicitOrchestratorReleaseActive;
   isExplicitOrchestratorReleaseActive = true;
   try {
     withFleetLock(fleetPath, () => {
@@ -913,7 +909,7 @@ export function releaseOrchestratorTaxi(
       }
     });
   } finally {
-    isExplicitOrchestratorReleaseActive = false;
+    isExplicitOrchestratorReleaseActive = prevReleaseActive;
   }
 }
 

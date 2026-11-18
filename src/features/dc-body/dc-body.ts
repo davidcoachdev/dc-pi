@@ -64,6 +64,47 @@ export function wrapLeftComponent(tui: TUI, left: Component): Component {
   return wrapper;
 }
 
+const G_PREV_LAYOUT = Symbol.for("dc.layout.prev-fn");
+
+function hasInLayoutChain(head: unknown, predicate: (fn: any) => boolean): boolean {
+  const visited = new Set<unknown>();
+  let curr = head;
+  while (typeof curr === "function" && !visited.has(curr)) {
+    visited.add(curr);
+    if (predicate(curr)) return true;
+    curr = (curr as any)[G_PREV_LAYOUT];
+  }
+  return false;
+}
+
+function removeFromLayoutChain(root: any, predicate: (fn: any) => boolean): void {
+  const visited = new Set<unknown>();
+  while (
+    typeof root[LAYOUT_NODE] === "function" &&
+    !visited.has(root[LAYOUT_NODE]) &&
+    predicate(root[LAYOUT_NODE])
+  ) {
+    visited.add(root[LAYOUT_NODE]);
+    const next = (root[LAYOUT_NODE] as any)[G_PREV_LAYOUT];
+    if (typeof next === "function") {
+      root[LAYOUT_NODE] = next;
+    } else {
+      break;
+    }
+  }
+
+  let curr = root[LAYOUT_NODE];
+  while (typeof curr === "function" && !visited.has(curr)) {
+    visited.add(curr);
+    const next = (curr as any)[G_PREV_LAYOUT];
+    if (typeof next === "function" && predicate(next)) {
+      (curr as any)[G_PREV_LAYOUT] = (next as any)[G_PREV_LAYOUT];
+    } else {
+      curr = next;
+    }
+  }
+}
+
 let activeTui: TUI | undefined;
 let wrapTimer: NodeJS.Timeout | undefined;
 
@@ -72,25 +113,23 @@ export function tryAttachBodyFrame(tui: TUI): boolean {
   const root = host.layoutRoot;
   if (!root || typeof root[LAYOUT_NODE] !== "function") return false;
 
-  // Si ya fue envuelto por ESTA instancia vigente del módulo y su función sigue activa, no tocar:
+  // Si ya fue envuelto por ESTA instancia vigente del módulo y su función sigue activa en la cadena, no tocar:
   if (
     (root as Record<symbol, unknown>)[G_BODY_REV] === BODY_MODULE_REV &&
-    typeof root[LAYOUT_NODE] === "function" &&
-    (root[LAYOUT_NODE] as any)[G_BODY_REV] === BODY_MODULE_REV
+    hasInLayoutChain(root[LAYOUT_NODE], (fn) => (fn as any)?.[G_BODY_REV] === BODY_MODULE_REV)
   ) {
     return true;
   }
 
-  // Si quedó envuelto por OTRA instancia de un reload anterior, des-envolver primero:
-  if (
+  // Si quedó envuelto por OTRA instancia de un reload anterior, des-envolver primero sin romper otros wrappers:
+  if (hasInLayoutChain(root[LAYOUT_NODE], (fn) => Boolean((fn as any)?.[G_BODY_REV]))) {
+    removeFromLayoutChain(root, (fn) => Boolean((fn as any)?.[G_BODY_REV]));
+    delete (root as Record<symbol, unknown>)[G_BODY_REV];
+  } else if (
     (root as Record<symbol, unknown>)[G_BODY_REV] &&
     (root as Record<symbol, unknown>)[G_BODY_REV] !== BODY_MODULE_REV
   ) {
-    const prev = (root as Record<symbol, unknown>)[G_BODY_PREV] as (() => unknown) | undefined;
-    if (typeof prev === "function") {
-      delete (root as Record<symbol, unknown>)[G_BODY_REV];
-      root[LAYOUT_NODE] = prev;
-    }
+    delete (root as Record<symbol, unknown>)[G_BODY_REV];
   }
 
   const prevFn = root[LAYOUT_NODE] as () => unknown;
@@ -101,8 +140,9 @@ export function tryAttachBodyFrame(tui: TUI): boolean {
   }
 
   const wrappedBodyLayout: (() => unknown) = function () {
+    const currentPrev = (((wrappedBodyLayout as any)[G_PREV_LAYOUT] as (() => unknown)) ?? prevFn);
     try {
-      const raw = prevFn.call(root) as { type?: string; entries?: Array<{ component?: Component }> } | undefined;
+      const raw = currentPrev.call(root) as { type?: string; entries?: Array<{ component?: Component }> } | undefined;
       if (!raw) return raw;
 
       // 1. Caso hstack en la raíz (con sidebar montado): entries[0] = contenedor izquierdo (left)
@@ -167,10 +207,11 @@ export function tryAttachBodyFrame(tui: TUI): boolean {
 
       return raw;
     } catch {
-      return prevFn.call(root);
+      return currentPrev.call(root);
     }
   };
 
+  (wrappedBodyLayout as unknown as Record<symbol, unknown>)[G_PREV_LAYOUT] = prevFn;
   (wrappedBodyLayout as unknown as Record<symbol, unknown>)[G_BODY_REV] = BODY_MODULE_REV;
   (root as unknown as Record<symbol, unknown>)[G_BODY_REV] = BODY_MODULE_REV;
   root[LAYOUT_NODE] = wrappedBodyLayout;
@@ -184,11 +225,15 @@ export function restoreNative(tui: TUI): void {
   const root = host.layoutRoot;
   if (!root) return;
 
-  const prev = (root as Record<symbol, unknown>)[G_BODY_PREV] as (() => unknown) | undefined;
-  if (typeof prev === "function") {
-    root[LAYOUT_NODE] = prev;
-    delete (root as Record<symbol, unknown>)[G_BODY_PREV];
+  if (hasInLayoutChain(root[LAYOUT_NODE], (fn) => Boolean((fn as any)?.[G_BODY_REV]))) {
+    removeFromLayoutChain(root, (fn) => Boolean((fn as any)?.[G_BODY_REV]));
+  } else {
+    const prev = (root as Record<symbol, unknown>)[G_BODY_PREV] as (() => unknown) | undefined;
+    if (typeof prev === "function") {
+      root[LAYOUT_NODE] = prev;
+    }
   }
+  delete (root as Record<symbol, unknown>)[G_BODY_PREV];
   delete (root as Record<symbol, unknown>)[G_BODY_REV];
   tui.requestRender();
 }

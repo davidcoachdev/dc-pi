@@ -42,12 +42,25 @@ export function guardOutputSpill(
     return { text: content, truncated: false, originalLength, truncatedLength: originalLength };
   }
 
-  const head = options.headChars ?? DEFAULT_SPILL_HEAD_CHARS;
-  const tail = options.tailChars ?? DEFAULT_SPILL_TAIL_CHARS;
-  const omittedCount = originalLength - (head + tail);
+  let head = Math.max(0, options.headChars ?? DEFAULT_SPILL_HEAD_CHARS);
+  let tail = Math.max(0, options.tailChars ?? DEFAULT_SPILL_TAIL_CHARS);
 
-  const headText = content.slice(0, head);
-  const tailText = content.slice(originalLength - tail);
+  if (head + tail >= originalLength) {
+    const budget = Math.max(0, Math.min(max, originalLength - 1));
+    const totalRequested = head + tail;
+    if (totalRequested > 0 && budget > 0) {
+      head = Math.floor((head / totalRequested) * budget);
+      tail = Math.max(0, Math.min(budget - head, originalLength - 1 - head));
+    } else {
+      head = 0;
+      tail = 0;
+    }
+  }
+
+  const omittedCount = Math.max(0, originalLength - (head + tail));
+
+  const headText = head > 0 ? content.slice(0, head) : "";
+  const tailText = tail > 0 ? content.slice(originalLength - tail) : "";
 
   const marker = `\n\n[... dc-spill-guard: se omitieron ${omittedCount} caracteres (${Math.round(omittedCount / 1024)} KB) para proteger la ventana de contexto ...]\n\n`;
 

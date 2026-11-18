@@ -5,9 +5,15 @@
  * under .pi/checkpoints/<id>/ prior to risky subagent or refactoring runs.
  */
 
-import { mkdirSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { cpSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { dirname, join, relative, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
+
+const VALID_HEAD_RE = /^(?:[0-9a-f]{7,64}|HEAD)$/i;
+
+export function shellQuote(value: string): string {
+  return `'${value.replace(/'/g, `'\\''`)}'`;
+}
 
 export interface CheckpointResult {
   ok: boolean;
@@ -50,6 +56,9 @@ export function createCheckpoint(
     return { ok: false, id: "", dir: "", head: "", dirty: false, untracked: [], message: "No se pudo resolver HEAD en Git" };
   }
   const head = headCheck.stdout.trim();
+  if (!VALID_HEAD_RE.test(head)) {
+    return { ok: false, id: "", dir: "", head: "", dirty: false, untracked: [], message: "Hash HEAD inválido en Git" };
+  }
 
   const statusCheck = spawnSync("git", ["status", "--short"], { cwd: repoRoot, encoding: "utf8" });
   const diffCheck = spawnSync("git", ["diff", "--binary", "HEAD"], { cwd: repoRoot, encoding: "utf8" });
@@ -58,16 +67,41 @@ export function createCheckpoint(
     return { ok: false, id: "", dir: "", head, dirty: false, untracked: [], message: "Error al leer el estado o diff de Git" };
   }
 
+  const untracked = untrackedFromStatus(statusCheck.stdout);
+  const dirty = statusCheck.stdout.trim() !== "";
+
   const id = `${generateCheckpointId(now)}-${sanitizedName}`;
   const dir = join(repoRoot, ".pi", "checkpoints", id);
   mkdirSync(dir, { recursive: true });
 
-  const untracked = untrackedFromStatus(statusCheck.stdout);
-  const dirty = statusCheck.stdout.trim() !== "";
+  const untrackedDir = join(dir, "untracked");
+  for (const rawEntry of untracked) {
+    const cleanEntry = rawEntry.startsWith('"') && rawEntry.endsWith('"')
+      ? rawEntry.slice(1, -1)
+      : rawEntry;
+    if (!cleanEntry || cleanEntry === ".pi" || cleanEntry.startsWith(".pi/") || cleanEntry.startsWith(".pi\\")) {
+      continue;
+    }
+    const srcPath = resolve(repoRoot, cleanEntry);
+    const destPath = resolve(untrackedDir, cleanEntry);
+    const relSrc = relative(repoRoot, srcPath);
+    const relDest = relative(untrackedDir, destPath);
+    if (
+      relSrc &&
+      !relSrc.startsWith("..") &&
+      relDest &&
+      !relDest.startsWith("..") &&
+      existsSync(srcPath)
+    ) {
+      mkdirSync(dirname(destPath), { recursive: true });
+      cpSync(srcPath, destPath, { recursive: true });
+    }
+  }
 
+  const diffPatchPath = join(dir, "diff.patch");
   writeFileSync(join(dir, "head.txt"), `${head}\n`, "utf8");
   writeFileSync(join(dir, "status.txt"), statusCheck.stdout, "utf8");
-  writeFileSync(join(dir, "diff.patch"), diffCheck.stdout, "utf8");
+  writeFileSync(diffPatchPath, diffCheck.stdout, "utf8");
   writeFileSync(
     join(dir, "meta.json"),
     JSON.stringify({ name: sanitizedName, id, head, dirty, untracked, createdAt: now.toISOString() }, null, 2) + "\n",
@@ -79,9 +113,14 @@ export function createCheckpoint(
     "set -euo pipefail",
     `# DC Studio Snapshot Restore — ${id}`,
     `# Restaura archivos trackeados al commit base ${head} y reaplica el diff.patch`,
-    `echo "Restaurando estado a checkpoint ${id}..."`,
-    `git reset --hard ${head}`,
-    `git apply --3way "${join(dir, "diff.patch")}"`,
+    `echo ${shellQuote(`Restaurando estado a checkpoint ${id}...`)}`,
+    `git reset --hard ${shellQuote(head)}`,
+    `if [ -s ${shellQuote(diffPatchPath)} ]; then`,
+    `  git apply --3way ${shellQuote(diffPatchPath)}`,
+    "fi",
+    `if [ -d ${shellQuote(untrackedDir)} ]; then`,
+    `  cp -a ${shellQuote(untrackedDir)}/. ${shellQuote(repoRoot)}/`,
+    "fi",
     'echo "Restauración completada con éxito."',
     "",
   ].join("\n");

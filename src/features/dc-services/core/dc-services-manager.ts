@@ -1,6 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import type {
   ServiceConfig,
   ServiceLogsOptions,
@@ -14,6 +14,51 @@ interface SavedProcessState {
   pid: number;
   startedAt: number;
   command: string;
+}
+
+const sessionStartedServices = new Map<string, Set<string>>();
+
+export function recordSessionStartedService(cwd: string, name: string): void {
+  const resolved = path.resolve(cwd);
+  let set = sessionStartedServices.get(resolved);
+  if (!set) {
+    set = new Set<string>();
+    sessionStartedServices.set(resolved, set);
+  }
+  set.add(name);
+}
+
+export function clearSessionStartedService(cwd: string, name: string): void {
+  const resolved = path.resolve(cwd);
+  sessionStartedServices.get(resolved)?.delete(name);
+}
+
+export async function stopSessionStartedServices(cwd?: string): Promise<void> {
+  const targets = cwd
+    ? [path.resolve(cwd)]
+    : Array.from(sessionStartedServices.keys());
+
+  for (const dir of targets) {
+    const names = sessionStartedServices.get(dir);
+    if (!names || names.size === 0) continue;
+    const manager = new DcServicesManager(dir);
+    const configured = manager.listConfiguredServices();
+    for (const name of Array.from(names)) {
+      const cfg = configured[name] as (ServiceConfig & { persistent?: boolean; stopOnShutdown?: boolean }) | undefined;
+      if (cfg?.persistent === true || cfg?.stopOnShutdown === false) {
+        continue;
+      }
+      try {
+        await manager.stopService(name, 2000);
+      } catch {
+        /* ignore shutdown error */
+      }
+      names.delete(name);
+    }
+    if (names.size === 0) {
+      sessionStartedServices.delete(dir);
+    }
+  }
 }
 
 export class DcServicesManager {
@@ -204,6 +249,7 @@ export class DcServicesManager {
       command: config.command,
     };
     this.writeState(state);
+    recordSessionStartedService(this.cwd, name);
 
     // Breve pausa para comprobar si murió de inmediato
     await new Promise((r) => setTimeout(r, 200));
@@ -215,6 +261,7 @@ export class DcServicesManager {
     const state = this.readState();
     const record = state[name];
     const logPath = this.getLogPath(name);
+    clearSessionStartedService(this.cwd, name);
 
     if (!record || !this.isProcessAlive(record.pid)) {
       delete state[name];
@@ -223,15 +270,28 @@ export class DcServicesManager {
     }
 
     const pid = record.pid;
+    const isWin = process.platform === "win32";
 
-    try {
-      // Intentar matar el grupo de procesos (SIGTERM)
-      process.kill(-pid, "SIGTERM");
-    } catch {
+    if (isWin) {
       try {
-        process.kill(pid, "SIGTERM");
+        execFileSync("taskkill", ["/PID", String(pid), "/T"], { stdio: "ignore", timeout: 2000 });
       } catch {
-        /* ignore */
+        try {
+          process.kill(pid, "SIGTERM");
+        } catch {
+          /* ignore */
+        }
+      }
+    } else {
+      try {
+        // Intentar matar el grupo de procesos (SIGTERM)
+        process.kill(-pid, "SIGTERM");
+      } catch {
+        try {
+          process.kill(pid, "SIGTERM");
+        } catch {
+          /* ignore */
+        }
       }
     }
 
@@ -241,13 +301,25 @@ export class DcServicesManager {
     }
 
     if (this.isProcessAlive(pid)) {
-      try {
-        process.kill(-pid, "SIGKILL");
-      } catch {
+      if (isWin) {
         try {
-          process.kill(pid, "SIGKILL");
+          execFileSync("taskkill", ["/PID", String(pid), "/T", "/F"], { stdio: "ignore", timeout: 2000 });
         } catch {
-          /* ignore */
+          try {
+            process.kill(pid, "SIGKILL");
+          } catch {
+            /* ignore */
+          }
+        }
+      } else {
+        try {
+          process.kill(-pid, "SIGKILL");
+        } catch {
+          try {
+            process.kill(pid, "SIGKILL");
+          } catch {
+            /* ignore */
+          }
         }
       }
     }

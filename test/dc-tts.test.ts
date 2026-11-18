@@ -233,3 +233,32 @@ test("QuestionQueueStepper reads one question at a time and advances on Enter or
   assert.equal(stepper.isActive(), false);
 });
 
+test("dcTtsExtension tracks session-spawned daemon PID and terminates owned idle daemon on session_shutdown", async () => {
+  const { spawn } = await import("node:child_process");
+  const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+    detached: true,
+    stdio: "ignore",
+  });
+  child.unref();
+  const childPid = child.pid!;
+  assert.ok(childPid > 0);
+
+  const daemonMod = await import("../src/features/dc-tts/core/dc-tts-daemon.ts");
+  assert.equal(typeof (daemonMod as any).setSessionSpawnedTtsDaemonPid, "function", "Expected setSessionSpawnedTtsDaemonPid helper");
+  assert.equal(typeof (daemonMod as any).terminateOwnedTtsDaemonIfIdle, "function", "Expected terminateOwnedTtsDaemonIfIdle helper");
+
+  (daemonMod as any).setSessionSpawnedTtsDaemonPid(childPid);
+  assert.equal((daemonMod as any).getSessionSpawnedTtsDaemonPid?.(), childPid);
+
+  try {
+    const terminated = await (daemonMod as any).terminateOwnedTtsDaemonIfIdle({
+      fetchStatusFn: async () => ({ status: "idle", queue: 0, autoRead: true, voice: "v", rate: 1, volume: 100 }),
+    });
+    assert.equal(terminated, true);
+    assert.equal((daemonMod as any).getSessionSpawnedTtsDaemonPid?.(), null);
+  } finally {
+    try { process.kill(childPid, "SIGKILL"); } catch {}
+  }
+});
+
+

@@ -1,7 +1,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { normalizeCdpUrl, getCdpStatus } from "../src/features/dc-browser/core/dc-browser-cdp.ts";
+import {
+  normalizeCdpUrl,
+  getCdpStatus,
+  navigatePage,
+  capturePageScreenshot,
+} from "../src/features/dc-browser/core/dc-browser-cdp.ts";
 import dcBrowserExtension from "../src/features/dc-browser/dc-browser.ts";
 
 test("dc-browser: normalizeCdpUrl handles defaults and custom ports cleanly", () => {
@@ -45,4 +50,49 @@ test("dcBrowserExtension registers 4 browser tools and command /dc-browser", () 
   }
 
   assert.ok(registeredCommands.includes("dc-browser"));
+});
+
+test("dc-browser: navigatePage blocks dangerous schemes and private/metadata IPs", async () => {
+  await assert.rejects(
+    async () => {
+      await navigatePage({ url: "file:///etc/passwd" });
+    },
+    (err: Error) => /protocolo|esquema|bloquead|denegad|SSRF/i.test(err.message),
+  );
+
+  await assert.rejects(
+    async () => {
+      await navigatePage({ url: "javascript:alert(1)" });
+    },
+    (err: Error) => /protocolo|esquema|bloquead|denegad|SSRF/i.test(err.message),
+  );
+
+  await assert.rejects(
+    async () => {
+      await navigatePage({ url: "http://169.254.169.254/latest/meta-data" });
+    },
+    (err: Error) => /SSRF|privad|bloquead|denegad/i.test(err.message),
+  );
+});
+
+test("dc-browser: capturePageScreenshot confines outputPath inside cwd or os.tmpdir()", async () => {
+  await assert.rejects(
+    async () => {
+      await capturePageScreenshot({
+        cwd: process.cwd(),
+        outputPath: "../../../etc/malicious.png",
+      });
+    },
+    (err: Error) => /fuera|permitid|traversal|cwd|tmpdir/i.test(err.message),
+  );
+
+  await assert.rejects(
+    async () => {
+      await capturePageScreenshot({
+        cwd: process.cwd(),
+        outputPath: "/etc/malicious.png",
+      });
+    },
+    (err: Error) => /fuera|permitid|traversal|cwd|tmpdir/i.test(err.message),
+  );
 });

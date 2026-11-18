@@ -27,7 +27,7 @@ test("fetchJson performs successful GET and parses JSON", async () => {
   const url = `http://127.0.0.1:${port}/test`;
 
   try {
-    const data = await fetchJson<{ status: string; count: number }>(url);
+    const data = await fetchJson<{ status: string; count: number }>(url, { enforceSsrfProtection: false });
     assert.equal(data.status, "ok");
     assert.equal(data.count, 42);
   } finally {
@@ -55,6 +55,7 @@ test("fetchJson performs POST with JSON payload", async () => {
     const res = await fetchJson<{ created: boolean }>(url, {
       method: "POST",
       body: { name: "dc-test" },
+      enforceSsrfProtection: false,
     });
     assert.equal(res.created, true);
   } finally {
@@ -74,7 +75,7 @@ test("fetchJson throws DcHttpError on non-2xx status", async () => {
 
   try {
     await assert.rejects(
-      async () => { await fetchJson(url); },
+      async () => { await fetchJson(url, { enforceSsrfProtection: false }); },
       (err: any) => {
         assert.ok(err instanceof DcHttpError);
         assert.equal(err.status, 404);
@@ -99,7 +100,7 @@ test("fetchJson throws DcHttpTimeoutError when request takes too long", async ()
   try {
     await assert.rejects(
       async () => {
-        await fetchJson(url, { timeoutMs: 50 });
+        await fetchJson(url, { timeoutMs: 50, enforceSsrfProtection: false });
       },
       (err: any) => {
         assert.ok(err instanceof DcHttpTimeoutError);
@@ -128,7 +129,7 @@ test("fetchJson respects external AbortSignal", async () => {
   try {
     await assert.rejects(
       async () => {
-        await fetchJson(url, { signal: controller.signal, timeoutMs: 5000 });
+        await fetchJson(url, { signal: controller.signal, timeoutMs: 5000, enforceSsrfProtection: false });
       },
       (err: any) => {
         assert.ok(err instanceof DcHttpError);
@@ -140,10 +141,10 @@ test("fetchJson respects external AbortSignal", async () => {
   }
 });
 
-test("fetchJson blocks SSRF when enforceSsrfProtection is active", async () => {
+test("fetchJson blocks SSRF by default and when enforceSsrfProtection is active", async () => {
   await assert.rejects(
     async () => {
-      await fetchJson("http://127.0.0.1:9999/private", { enforceSsrfProtection: true });
+      await fetchJson("http://127.0.0.1:9999/private");
     },
     (err: any) => {
       assert.ok(err instanceof DcHttpError);
@@ -154,7 +155,7 @@ test("fetchJson blocks SSRF when enforceSsrfProtection is active", async () => {
 
   await assert.rejects(
     async () => {
-      await fetchJson("http://169.254.169.254/latest/meta-data", { enforceSsrfProtection: true });
+      await fetchJson("http://169.254.169.254/latest/meta-data");
     },
     (err: any) => {
       assert.ok(err instanceof DcHttpError);
@@ -162,4 +163,60 @@ test("fetchJson blocks SSRF when enforceSsrfProtection is active", async () => {
       return true;
     },
   );
+});
+
+test("fetchJson blocks redirect hops to private/metadata IPs", async () => {
+  const server = http.createServer((_req, res) => {
+    res.writeHead(302, { Location: "http://169.254.169.254/latest/meta-data" });
+    res.end();
+  });
+
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const port = (server.address() as any).port;
+  const url = `http://127.0.0.1:${port}/redirect-ssrf`;
+
+  try {
+    await assert.rejects(
+      async () => {
+        await fetchJson(url, {
+          validateUrl: (target) => !target.includes("169.254.169.254"),
+        });
+      },
+      (err: any) => {
+        assert.ok(err instanceof DcHttpError);
+        assert.match(err.message, /SSRF|redirect|validation/i);
+        return true;
+      },
+    );
+  } finally {
+    server.close();
+  }
+});
+
+test("fetchJson aborts streaming response cleanly once maxSizeBytes is exceeded", async () => {
+  const server = http.createServer((_req, res) => {
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.write('{"data":"' + "x".repeat(1024));
+    res.write("y".repeat(1024) + '"}');
+    res.end();
+  });
+
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const port = (server.address() as any).port;
+  const url = `http://127.0.0.1:${port}/large-stream`;
+
+  try {
+    await assert.rejects(
+      async () => {
+        await fetchJson(url, { maxSizeBytes: 512, enforceSsrfProtection: false });
+      },
+      (err: any) => {
+        assert.ok(err instanceof DcHttpError);
+        assert.match(err.message, /exceeds limit/i);
+        return true;
+      },
+    );
+  } finally {
+    server.close();
+  }
 });

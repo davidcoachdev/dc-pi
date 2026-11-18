@@ -8,6 +8,7 @@ import * as path from "node:path";
 import { parseGitHubRepoNwo, resolveCurrentRepoIdentity } from "../src/features/dc-agents/daemon/dc-repo-resolver.ts";
 import { DcConflictGuard } from "../src/features/dc-agents/daemon/dc-conflict-guard.ts";
 import { DcControlReceiver } from "../src/features/dc-agents/daemon/dc-control-receiver.ts";
+import { DcControlDaemonManager } from "../src/features/dc-agents/daemon/dc-control-daemon-manager.ts";
 import { DcIssueDispatcher, type GitHubIssuePayload } from "../src/features/dc-agents/daemon/dc-issue-dispatcher.ts";
 import { handleToolCall } from "../src/features/dc-scan-guard/index.ts";
 import { dcConflictGuard } from "../src/features/dc-agents/daemon/dc-conflict-guard.ts";
@@ -273,4 +274,69 @@ test("dc-scan-guard: bloquea herramientas edit/write sobre archivos reservados p
 
   dcConflictGuard.clear();
 });
+
+test("dc-control-daemon-manager: stop() valida fullNwo contra inyección, usa execFileSync(gh) y no ejecuta pkill global", async (t) => {
+  const tempBin = fs.mkdtempSync(path.join(os.tmpdir(), "dc-daemon-bin-"));
+  const originalPath = process.env.PATH || "";
+  t.after(() => {
+    process.env.PATH = originalPath;
+    fs.rmSync(tempBin, { recursive: true, force: true });
+  });
+
+  const pkillMarker = path.join(tempBin, "pkill-called.txt");
+  const injectMarker = path.join(tempBin, "injected.txt");
+  const ghLogFile = path.join(tempBin, "gh-args.log");
+
+  const pkillScript = path.join(tempBin, "pkill");
+  fs.writeFileSync(pkillScript, `#!/bin/sh\necho "$@" >> "${pkillMarker}"\nexit 0\n`, { mode: 0o755 });
+
+  const ghScript = path.join(tempBin, "gh");
+  fs.writeFileSync(
+    ghScript,
+    `#!/bin/sh\nprintf '%s\\n' "$*" >> "${ghLogFile}"\nif [ "$1" = "api" ] && [ "$2" = "repos/davidcoachdev/dc-pi/hooks" ]; then\n  echo "98765"\nfi\nexit 0\n`,
+    { mode: 0o755 },
+  );
+
+  process.env.PATH = `${tempBin}:${originalPath}`;
+
+  const manager = new DcControlDaemonManager();
+  let killedSignal: string | undefined;
+  (manager as any).tunnelProcess = {
+    pid: 999991,
+    killed: false,
+    kill(sig: string) {
+      killedSignal = sig;
+      this.killed = true;
+      return true;
+    },
+  };
+  (manager as any).currentRepo = {
+    owner: "davidcoachdev",
+    repo: "dc-pi",
+    fullNwo: `davidcoachdev/dc-pi; touch "${injectMarker}"`,
+  };
+
+  await manager.stop();
+
+  assert.equal(killedSignal, "SIGTERM", "Debe terminar únicamente el proceso de túnel rastreado");
+  assert.equal(fs.existsSync(pkillMarker), false, "Nunca debe ejecutar pkill global");
+  assert.equal(fs.existsSync(injectMarker), false, "Nunca debe interpolar fullNwo en un shell");
+  assert.equal(fs.existsSync(ghLogFile), false, "No debe invocar gh si fullNwo no cumple el formato owner/repo");
+
+  // Ahora con un fullNwo válido debe usar execFileSync("gh", [...]) y borrar los hooks numéricos devueltos
+  (manager as any).currentRepo = {
+    owner: "davidcoachdev",
+    repo: "dc-pi",
+    fullNwo: "davidcoachdev/dc-pi",
+  };
+  await manager.stop();
+
+  assert.equal(fs.existsSync(pkillMarker), false, "Nunca debe ejecutar pkill global");
+  assert.equal(fs.existsSync(ghLogFile), true, "Debe invocar gh para limpiar hooks del repo válido");
+  const ghCalls = fs.readFileSync(ghLogFile, "utf8").trim().split("\n");
+  assert.equal(ghCalls.length, 2);
+  assert.match(ghCalls[0]!, /^api repos\/davidcoachdev\/dc-pi\/hooks --jq /);
+  assert.equal(ghCalls[1], "api repos/davidcoachdev/dc-pi/hooks/98765 -X DELETE");
+});
+
 

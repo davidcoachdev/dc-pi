@@ -8,8 +8,48 @@ export const G_SIDEBAR_CACHE = Symbol.for("gentle-pi.experimental-sidebar.cache"
 export const BAR_FORCED = Symbol.for("dc.sidebar.bar-forced");
 export const G_FRAME_WRAPPED = Symbol.for("dc.sidebar.frame-wrapped");
 export const G_NATIVE_NODE = Symbol.for("dc.sidebar.native-node");
+export const G_PREV_LAYOUT = Symbol.for("dc.layout.prev-fn");
 export const G_SCROLL = Symbol.for("dc.sidebar.rail-scroll");
 export const SIDEBAR_BREAKPOINT = DEFAULT_SIDEBAR_BREAKPOINT;
+
+function hasInLayoutChain(head: unknown, predicate: (fn: any) => boolean): boolean {
+  const visited = new Set<unknown>();
+  let curr = head;
+  while (typeof curr === "function" && !visited.has(curr)) {
+    visited.add(curr);
+    if (predicate(curr)) return true;
+    curr = (curr as any)[G_PREV_LAYOUT];
+  }
+  return false;
+}
+
+function removeFromLayoutChain(root: any, predicate: (fn: any) => boolean): void {
+  const visited = new Set<unknown>();
+  while (
+    typeof root[LAYOUT_NODE] === "function" &&
+    !visited.has(root[LAYOUT_NODE]) &&
+    predicate(root[LAYOUT_NODE])
+  ) {
+    visited.add(root[LAYOUT_NODE]);
+    const next = (root[LAYOUT_NODE] as any)[G_PREV_LAYOUT];
+    if (typeof next === "function") {
+      root[LAYOUT_NODE] = next;
+    } else {
+      break;
+    }
+  }
+
+  let curr = root[LAYOUT_NODE];
+  while (typeof curr === "function" && !visited.has(curr)) {
+    visited.add(curr);
+    const next = (curr as any)[G_PREV_LAYOUT];
+    if (typeof next === "function" && predicate(next)) {
+      (curr as any)[G_PREV_LAYOUT] = (next as any)[G_PREV_LAYOUT];
+    } else {
+      curr = next;
+    }
+  }
+}
 
 export function bumpCache(tui: any): void {
   if (!tui || !tui.terminal) return;
@@ -161,7 +201,16 @@ export function tryWrap(tui: any): boolean {
   const root = host?.layoutRoot;
   if (!root || typeof root[LAYOUT_NODE] !== "function") return false;
 
-  if ((root as any)[G_FRAME_WRAPPED] === true) return true;
+  if (
+    (root as any)[G_FRAME_WRAPPED] === true &&
+    hasInLayoutChain(root[LAYOUT_NODE], (fn) => (fn as any)?.[G_FRAME_WRAPPED] === true)
+  ) {
+    return true;
+  }
+
+  if (hasInLayoutChain(root[LAYOUT_NODE], (fn) => (fn as any)?.[G_FRAME_WRAPPED] === true)) {
+    removeFromLayoutChain(root, (fn) => (fn as any)?.[G_FRAME_WRAPPED] === true);
+  }
 
   let node: unknown;
   try {
@@ -214,9 +263,10 @@ export function tryWrap(tui: any): boolean {
   };
 
   const wrapped: LayoutNodeFn = function () {
+    const prevLayout = (((wrapped as any)[G_PREV_LAYOUT] as LayoutNodeFn) ?? originalLayout);
     try {
       enforceBar(tui);
-      const raw = originalLayout.call(root);
+      const raw = prevLayout.call(root);
       if (!raw) return raw;
 
       const prefs = readSidebarPrefs();
@@ -344,10 +394,11 @@ export function tryWrap(tui: any): boolean {
         ],
       };
     } catch {
-      return originalLayout.call(root);
+      return prevLayout.call(root);
     }
   };
 
+  (wrapped as any)[G_PREV_LAYOUT] = originalLayout;
   (wrapped as any)[G_FRAME_WRAPPED] = true;
   (root as any)[G_FRAME_WRAPPED] = true;
   root[LAYOUT_NODE] = wrapped;
@@ -369,16 +420,21 @@ export function stopPolling() {
   }
 }
 
-export function restoreNative() {
+export function restoreNative(tuiArg?: any) {
   try {
-    const tui = (globalThis as any)[Symbol.for("dc.sidebar.tui-ref")];
+    const tui = tuiArg ?? (globalThis as any)[Symbol.for("dc.sidebar.tui-ref")];
     const root = tui?.layoutRoot;
     if (root) {
-      const orig = (root as any)[G_NATIVE_NODE];
-      if (orig && root[LAYOUT_NODE] !== orig) {
-        root[LAYOUT_NODE] = orig;
+      if (hasInLayoutChain(root[LAYOUT_NODE], (fn) => (fn as any)?.[G_FRAME_WRAPPED] === true)) {
+        removeFromLayoutChain(root, (fn) => (fn as any)?.[G_FRAME_WRAPPED] === true);
+      } else {
+        const orig = (root as any)[G_NATIVE_NODE];
+        if (orig && root[LAYOUT_NODE] !== orig) {
+          root[LAYOUT_NODE] = orig;
+        }
       }
       delete (root as any)[G_FRAME_WRAPPED];
+      delete (root as any)[G_NATIVE_NODE];
     }
   } catch {
     /* noop */

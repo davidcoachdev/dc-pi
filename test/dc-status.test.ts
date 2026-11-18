@@ -222,3 +222,42 @@ test("parseRecentChangelogEntries extracts up to N release notes", () => {
   assert.ok(!parsed.includes("## [0.8.0]"));
   assert.ok(!parsed.includes("## [0.7.0]"));
 });
+
+test("DcStatusPanel switches tabs when clicking at y: 0", () => {
+  const status: EnvStatus = {
+    gitBranch: "main",
+    gitStatus: "limpio",
+    cwd: "/home/dc-studio/project",
+    mcpServers: [],
+    packages: ["dc-pi"],
+    extensionsCount: 7,
+    skillsCount: 0,
+    customToolsCount: 0,
+    sddPhasesCount: 0,
+    alerts: ["Alert 1"],
+    version: "1.0.0",
+  };
+
+  const panel = new DcStatusPanel({
+    theme: dummyTheme,
+    status,
+    requestRender: () => {},
+  });
+
+  const lines = panel.render(80);
+  assert.ok(lines[0]?.includes("[1] Información"), "Tabs must render on line 0");
+
+  // Switch to alerts tab first, then click Tab 1 at y: 0
+  panel.setTab("alerts");
+  assert.equal(panel.getCurrentTab(), "alerts");
+
+  const res = panel.handleMouse({
+    type: "click",
+    button: "left",
+    x: 5,
+    y: 0,
+  } as unknown as TuiMouseEvent);
+  assert.equal(res?.handled, true);
+  assert.equal(panel.getCurrentTab(), "info");
+});
+

@@ -1,8 +1,8 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { cliProxyClient, type CliProxyModelItem } from "../../../integrations/dc-cliproxy/dc-cliproxy-client.ts";
 import { resolveRecommendedContextWindow, resolveSafeMaxTokens } from "./dc-model-calibration.ts";
+import { getPiCodingAgentDir, writeFileAtomicSync } from "../../../core/dc-paths.ts";
 
 export interface ModelItem {
   id: string;
@@ -14,7 +14,9 @@ export interface ModelItem {
   [key: string]: unknown;
 }
 
-const MODELS_JSON_PATH = path.join(os.homedir(), ".pi", "agent", "models.json");
+export function resolveModelsJsonPath(): string {
+  return path.join(getPiCodingAgentDir(), "models.json");
+}
 
 /**
  * Formatea un ID de modelo a un nombre legible, ej:
@@ -118,9 +120,10 @@ export async function syncLiveCliProxyModels(
     const merged = [...existingModels, ...newItems];
 
     if (options.persistToDisk) {
+      const modelsJsonPath = resolveModelsJsonPath();
       try {
-        if (fs.existsSync(MODELS_JSON_PATH)) {
-          const content = fs.readFileSync(MODELS_JSON_PATH, "utf8");
+        if (fs.existsSync(modelsJsonPath)) {
+          const content = fs.readFileSync(modelsJsonPath, "utf8");
           const parsed = JSON.parse(content);
           if (parsed?.providers?.cpam) {
             const currentList = Array.isArray(parsed.providers.cpam.models) ? parsed.providers.cpam.models : [];
@@ -137,17 +140,18 @@ export async function syncLiveCliProxyModels(
 
             if (diskAdded > 0) {
               parsed.providers.cpam.models = currentList;
-              fs.writeFileSync(MODELS_JSON_PATH, JSON.stringify(parsed, null, 2) + "\n", "utf8");
+              writeFileAtomicSync(modelsJsonPath, JSON.stringify(parsed, null, 2) + "\n");
             }
           }
         }
-      } catch {
-        // Safe fallback: no romper si falla la escritura a disco
+      } catch (err) {
+        console.error(`[dc-models-sync] Error al persistir modelos en ${modelsJsonPath}:`, err);
       }
     }
 
     return { merged, addedCount: newItems.length };
-  } catch {
+  } catch (err) {
+    console.error("[dc-models-sync] Error al sincronizar modelos de CLIProxy:", err);
     return { merged: existingModels, addedCount: 0 };
   }
 }

@@ -4,6 +4,7 @@
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { runPtcProgram } from "../core/dc-ptc-runner.ts";
+import { classifyNativeToolScan } from "../../dc-scan-guard/dc-scan-guard.ts";
 
 export function registerDcPtcTools(pi: ExtensionAPI): void {
   pi.registerTool({
@@ -28,9 +29,22 @@ export function registerDcPtcTools(pi: ExtensionAPI): void {
     } as any,
     async execute(_id, params: any, _signal, _onUpdate, ctx): Promise<any> {
       try {
+        const cwd = ctx?.cwd ?? process.cwd();
+        const guardDecision = classifyNativeToolScan("dc_ptc_run", {
+          code: params?.code,
+          cwd,
+        });
+        if (guardDecision.block) {
+          return {
+            content: [{ type: "text", text: `⚠️ **Bloqueado por dc-scan-guard:** ${guardDecision.reason}` }],
+            details: { success: false, error: guardDecision.reason },
+            isError: true,
+          };
+        }
+
         const result = await runPtcProgram({
           code: params.code,
-          cwd: ctx?.cwd ?? process.cwd(),
+          cwd,
           timeoutMs: params.timeoutMs,
         });
 

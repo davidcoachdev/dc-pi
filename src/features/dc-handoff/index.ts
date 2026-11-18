@@ -21,7 +21,87 @@ export function ensurePiDirProtected(cwd: string): string {
   return dir;
 }
 
-export function writeHandoffNote(ctx: ExtensionContext): string | null {
+export interface HandoffTurn {
+  role: "user" | "assistant";
+  text: string;
+}
+
+function extractMessageText(content: unknown, fallbackText?: unknown): string {
+  if (typeof content === "string") {
+    return content.trim();
+  }
+  if (Array.isArray(content)) {
+    const parts: string[] = [];
+    for (const item of content) {
+      if (typeof item === "string") {
+        parts.push(item);
+      } else if (item && typeof item === "object") {
+        const block = item as { type?: string; text?: string };
+        if ((!block.type || block.type === "text") && typeof block.text === "string") {
+          parts.push(block.text);
+        }
+      }
+    }
+    const joined = parts.join("\n").trim();
+    if (joined) return joined;
+  }
+  if (typeof fallbackText === "string") {
+    return fallbackText.trim();
+  }
+  return "";
+}
+
+export function extractConversationTail(
+  ctx: ExtensionContext,
+  explicitEntries?: unknown[],
+  maxTurns = 6,
+  maxCharsPerTurn = 400,
+): HandoffTurn[] {
+  const sm = ctx?.sessionManager as unknown as {
+    getBranch?: () => unknown[];
+    getEntries?: () => unknown[];
+    getMessages?: () => unknown[];
+  } | undefined;
+
+  const rawEntries =
+    explicitEntries ??
+    sm?.getBranch?.() ??
+    sm?.getEntries?.() ??
+    sm?.getMessages?.() ??
+    [];
+
+  if (!Array.isArray(rawEntries) || rawEntries.length === 0) {
+    return [];
+  }
+
+  const turns: HandoffTurn[] = [];
+  for (const raw of rawEntries) {
+    if (!raw || typeof raw !== "object") continue;
+    const entry = raw as {
+      type?: string;
+      role?: string;
+      content?: unknown;
+      text?: unknown;
+      message?: { role?: string; content?: unknown; text?: unknown };
+    };
+    const msg = entry.message && typeof entry.message === "object" ? entry.message : entry;
+    const role = msg.role;
+    if (role !== "user" && role !== "assistant") continue;
+
+    const fullText = extractMessageText(msg.content, msg.text).replace(/\s+/g, " ").trim();
+    if (!fullText) continue;
+
+    const clipped =
+      fullText.length > maxCharsPerTurn
+        ? `${fullText.slice(0, maxCharsPerTurn)}...`
+        : fullText;
+    turns.push({ role, text: clipped });
+  }
+
+  return turns.slice(-maxTurns);
+}
+
+export function writeHandoffNote(ctx: ExtensionContext, explicitEntries?: unknown[]): string | null {
   try {
     const cwd = ctx.cwd || process.cwd();
     const piDir = ensurePiDirProtected(cwd);
@@ -60,12 +140,25 @@ export function writeHandoffNote(ctx: ExtensionContext): string | null {
       "",
       `- **Actualizado:** ${now}`,
       `- **CWD:** \`${cwd}\``,
-      sessionId ? `- **Session ID:** \`${sessionId}\`` : "",
-      sessionFile ? `- **Session File:** \`${sessionFile}\`` : "",
-      "",
     );
+    if (sessionId) {
+      lines.push(`- **Session ID:** \`${sessionId}\``);
+    }
+    if (sessionFile) {
+      lines.push(`- **Session File:** \`${sessionFile}\``);
+    }
 
-    writeFileSync(handoffPath, lines.filter(Boolean).join("\n"), "utf8");
+    const tail = extractConversationTail(ctx, explicitEntries);
+    if (tail.length > 0) {
+      lines.push("", "## Conversación Reciente", "");
+      for (const turn of tail) {
+        const label = turn.role === "user" ? "Usuario" : "Asistente";
+        lines.push(`- **${label}:** ${turn.text}`);
+      }
+    }
+
+    lines.push("");
+    writeFileSync(handoffPath, lines.join("\n"), "utf8");
     return handoffPath;
   } catch {
     return null;

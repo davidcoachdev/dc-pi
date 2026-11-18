@@ -46,7 +46,8 @@ export class ProfileDuel implements Component {
   private metrics(inner: number) {
     const N = Math.max(1, this.profiles.length);
     const divWidthTotal = (N - 1) * 3;
-    const colW = Math.max(20, Math.floor((inner - divWidthTotal) / N));
+    const rawColW = Math.floor((inner - divWidthTotal) / N);
+    const colW = Math.max(8, rawColW);
     const maxFaceH = Math.max(...this.profiles.map((p) => p.defaultFace.length), 3);
     return { colW, H: maxFaceH };
   }
@@ -62,19 +63,27 @@ export class ProfileDuel implements Component {
       ...Array<string>(Math.max(0, H - top - norm.length)).fill(" ".repeat(w)),
     ];
     return full.map((l) => {
-      const painted = selected ? paintBigLine(l, fg) : fg("dim", l);
-      const lp = Math.floor((colW - w) / 2);
-      const rp = Math.max(0, colW - w - lp);
-      return " ".repeat(Math.max(0, lp)) + painted + " ".repeat(rp);
+      let fitted = l;
+      const lw = visibleWidth(fitted);
+      if (lw > colW) {
+        const trimLeft = Math.floor((lw - colW) / 2);
+        fitted = truncateToWidth(fitted.slice(trimLeft), colW, "");
+      }
+      const fitW = visibleWidth(fitted);
+      const painted = selected ? paintBigLine(fitted, fg) : fg("dim", fitted);
+      const lp = Math.max(0, Math.floor((colW - fitW) / 2));
+      const rp = Math.max(0, colW - fitW - lp);
+      return " ".repeat(lp) + painted + " ".repeat(rp);
     });
   }
 
   private label(text: string, selected: boolean, colW: number): string {
     const fg = this.theme.fg;
-    const raw = `${selected ? "◉" : "○"} ${text}`;
+    const raw = truncateToWidth(`${selected ? "◉" : "○"} ${text}`, colW, "");
+    const rawW = visibleWidth(raw);
     const styled = selected ? fg("accent", this.theme.bold(raw)) : fg("dim", raw);
-    const lp = Math.floor((colW - visibleWidth(raw)) / 2);
-    return " ".repeat(Math.max(0, lp)) + styled + " ".repeat(Math.max(0, colW - lp - visibleWidth(raw)));
+    const lp = Math.max(0, Math.floor((colW - rawW) / 2));
+    return " ".repeat(lp) + styled + " ".repeat(Math.max(0, colW - lp - rawW));
   }
 
   render(width: number): string[] {

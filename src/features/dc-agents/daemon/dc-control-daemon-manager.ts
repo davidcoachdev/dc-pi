@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { randomBytes } from "node:crypto";
-import { spawn, type ChildProcess } from "node:child_process";
+import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { dcNotifier } from "../../../integrations/dc-notify/dc-notifier.ts";
 import { resolveCurrentRepoIdentity, type RepoIdentity } from "./dc-repo-resolver.ts";
@@ -29,10 +29,14 @@ export interface DaemonStatus {
  * - Spawnea el túnel oficial `gh webhook forward` en background sin bloquear la sesión.
  * - Al recibir un issue, dispara la notificación visual y el aislamiento en worktree.
  */
+const VALID_REPO_NWO_RE = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
+const VALID_HOOK_ID_RE = /^\d+$/;
+
 export class DcControlDaemonManager {
   private static instance?: DcControlDaemonManager;
   private receiver?: DcControlReceiver;
   private tunnelProcess?: ChildProcess;
+  private tunnelPid?: number;
   private currentRepo?: RepoIdentity;
   private isTunnelRunning = false;
   private inFlightWorkers = new Set<string>();
@@ -356,6 +360,10 @@ export class DcControlDaemonManager {
   }
 
   private startTunnel(repoNwo: string, port: number, capability: string, ctx?: ExtensionContext): void {
+    if (!VALID_REPO_NWO_RE.test(repoNwo)) {
+      this.isTunnelRunning = false;
+      return;
+    }
     const url = `http://127.0.0.1:${port}/github-webhook?capability=${capability}`;
     const args = ["webhook", "forward", `--repo=${repoNwo}`, "--events=issues,issue_comment", `--url=${url}`];
 
@@ -364,6 +372,7 @@ export class DcControlDaemonManager {
         stdio: ["ignore", "pipe", "pipe"],
       });
       this.tunnelProcess = child;
+      this.tunnelPid = child.pid;
       this.isTunnelRunning = true;
 
       child.stderr?.on("data", (data: Buffer) => {
@@ -377,6 +386,7 @@ export class DcControlDaemonManager {
       child.on("error", (err) => {
         if (this.tunnelProcess === child) {
           this.isTunnelRunning = false;
+          this.tunnelPid = undefined;
         }
         if (ctx) {
           dcNotifier.notify(ctx, "DC Control Tunnel", "Fallo túnel gh", "error");
@@ -386,6 +396,7 @@ export class DcControlDaemonManager {
       child.on("exit", (code) => {
         if (this.tunnelProcess === child) {
           this.isTunnelRunning = false;
+          this.tunnelPid = undefined;
         }
         if (code !== 0 && code !== null && ctx) {
           dcNotifier.notify(ctx, "DC Control Tunnel", `Túnel gh finalizado (código ${code})`, "warning");
@@ -395,6 +406,7 @@ export class DcControlDaemonManager {
       child.unref?.();
     } catch (err: any) {
       this.isTunnelRunning = false;
+      this.tunnelPid = undefined;
       if (ctx) {
         dcNotifier.notify(ctx, "DC Control Tunnel", "No se pudo iniciar gh webhook", "error");
       }
@@ -402,24 +414,62 @@ export class DcControlDaemonManager {
   }
 
   public async stop(): Promise<void> {
+    const trackedPid = this.tunnelPid ?? this.tunnelProcess?.pid;
+    let terminatedViaHandle = false;
+
     if (this.tunnelProcess) {
       const p = this.tunnelProcess;
       this.tunnelProcess = undefined;
+      this.tunnelPid = undefined;
       this.isTunnelRunning = false;
       try {
-        p.kill("SIGTERM");
+        terminatedViaHandle = p.kill("SIGTERM");
       } catch {
         /* noop */
       }
+    } else {
+      this.tunnelPid = undefined;
+      this.isTunnelRunning = false;
     }
 
-    // Purgar cualquier proceso huérfano de gh webhook forward y liberar el hook
+    if (!terminatedViaHandle && typeof trackedPid === "number" && trackedPid > 1) {
+      try {
+        process.kill(trackedPid, "SIGTERM");
+      } catch {
+        /* process already exited */
+      }
+    }
+
+    // Limpiar hooks temporales de forwarder en GitHub únicamente para el repositorio validado
     try {
-      const { execSync } = await import("node:child_process");
-      execSync("pkill -9 -f 'gh.*webhook.*forward' 2>/dev/null || true");
-      if (this.currentRepo?.fullNwo) {
-        // Limpiar hooks temporales de forwarder en GitHub para evitar HTTP 422
-        execSync(`gh api repos/${this.currentRepo.fullNwo}/hooks --jq '.[] | select(.config.url | contains("webhook-forwarder.github.com")) | .id' | xargs -r -I {} gh api repos/${this.currentRepo.fullNwo}/hooks/{} -X DELETE 2>/dev/null || true`);
+      const fullNwo = this.currentRepo?.fullNwo;
+      if (fullNwo && VALID_REPO_NWO_RE.test(fullNwo)) {
+        const rawHookIds = execFileSync(
+          "gh",
+          [
+            "api",
+            `repos/${fullNwo}/hooks`,
+            "--jq",
+            '.[] | select(.config.url | contains("webhook-forwarder.github.com")) | .id',
+          ],
+          {
+            encoding: "utf8",
+            stdio: ["ignore", "pipe", "ignore"],
+            timeout: 5000,
+          },
+        );
+
+        const hookIds = rawHookIds
+          .split(/\r?\n/)
+          .map((line) => line.trim())
+          .filter((id) => VALID_HOOK_ID_RE.test(id));
+
+        for (const hookId of hookIds) {
+          execFileSync("gh", ["api", `repos/${fullNwo}/hooks/${hookId}`, "-X", "DELETE"], {
+            stdio: ["ignore", "ignore", "ignore"],
+            timeout: 5000,
+          });
+        }
       }
     } catch {
       /* defensive */

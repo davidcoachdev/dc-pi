@@ -1,5 +1,6 @@
 import { getFleetStatusSummary } from "../../dc-agents/core/dc-taxi-dispatcher.ts";
 import { fetchAllTaxisQuotas } from "../../dc-agents/core/dc-taxi-quota.ts";
+import { isVipAccount } from "../../dc-agents/core/dc-taxi-accounts.ts";
 import type {
   DcTaxiUnit,
   DcTaxiPassenger,
@@ -123,9 +124,9 @@ export function getSidebarTaxiFleet(forceReload = false): SidebarTaxiFleetInfo {
       recargando: summary.recargando,
       en_taller: summary.en_taller,
       units: [...summary.units].sort((a, b) => {
-        const isVipA = a.tier === "vip" || (a.account && a.account.startsWith("cc"));
-        const isVipB = b.tier === "vip" || (b.account && b.account.startsWith("cc"));
-        // Cuentas normales (ac) primero, VIPs (cc) después
+        const isVipA = a.tier === "vip" || isVipAccount(a.account);
+        const isVipB = b.tier === "vip" || isVipAccount(b.account);
+        // Cuentas normales (ac) primero, VIPs (cc, nan, uc) después
         if (isVipA !== isVipB) {
           return isVipA ? 1 : -1;
         }

@@ -5,7 +5,7 @@ import { dcNotifier } from "../../integrations/dc-notify/dc-notifier.ts";
 import { openDcModal } from "../../ui/dc-modal.ts";
 import { ttsBridgeClient } from "../dc-face/core/dc-face-bridge.ts";
 import { callTtsBridge, fetchTtsStatus, fetchTtsVoices } from "./core/dc-tts-client.ts";
-import { ensureTtsDaemonRunning } from "./core/dc-tts-daemon.ts";
+import { ensureTtsDaemonRunning, terminateOwnedTtsDaemonIfIdle } from "./core/dc-tts-daemon.ts";
 import { readTtsPrefs, writeTtsPrefs } from "./core/dc-tts-prefs.ts";
 import {
   extractAssistantMessageText,
@@ -359,7 +359,11 @@ export default function dcTtsExtension(pi: ExtensionAPI): void {
     stopSpeechWatch();
     unsubInput?.();
     unsubInput = null;
-    void callTtsBridge("/stop", "POST", {}).catch(() => {});
+    void callTtsBridge("/stop", "POST", {})
+      .catch(() => {})
+      .finally(() => {
+        void terminateOwnedTtsDaemonIfIdle().catch(() => {});
+      });
   };
 
   (globalThis as any)[G_TTS_CLEANUP] = cleanupTtsSession;

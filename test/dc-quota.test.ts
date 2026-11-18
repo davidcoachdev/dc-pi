@@ -239,3 +239,25 @@ test("dcQuotaExtension registers only /dc-quota with Alt+Shift+Q", () => {
   assert.deepEqual(registeredCommands, ["dc-quota"]);
   assert.equal(registeredShortcut, "alt+shift+q");
 });
+
+test("readPiAuthKey honors PI_CODING_AGENT_DIR when no explicit authPath is passed", () => {
+  const tmpAgentDir = path.join(os.tmpdir(), `dc-quota-agent-dir-${Date.now()}`);
+  fs.mkdirSync(tmpAgentDir, { recursive: true });
+  const prevAgentDir = process.env.PI_CODING_AGENT_DIR;
+
+  try {
+    process.env.PI_CODING_AGENT_DIR = tmpAgentDir;
+    fs.writeFileSync(
+      path.join(tmpAgentDir, "auth.json"),
+      JSON.stringify({ "opencode-go": { key: "zen-secret-token-123" } }),
+      "utf8",
+    );
+
+    const key = readPiAuthKey();
+    assert.equal(key, "zen-secret-token-123");
+  } finally {
+    if (prevAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = prevAgentDir;
+    fs.rmSync(tmpAgentDir, { recursive: true, force: true });
+  }
+});

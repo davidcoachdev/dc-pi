@@ -8,7 +8,7 @@ import childProcess from "node:child_process";
 import { syncBuiltinESMExports } from "node:module";
 
 // Isolate before any singleton import, including parallel focused-suite runs.
-const home = fs.mkdtempSync(path.join(os.homedir(), "dc-daemon-home-"));
+const home = fs.mkdtempSync(path.join(os.tmpdir(), "dc-daemon-home-"));
 process.env.HOME = home;
 process.env.XDG_CONFIG_HOME = path.join(home, "xdg");
 process.env.PI_CODING_AGENT_DIR = path.join(home, "pi");
@@ -39,8 +39,15 @@ test("public daemon preserves one launch and records actual worker/delivery outc
   const preparedPlan = { leasedAccount: "fixture", fullModelRef: "fixture/model", tools: ["read"], effectiveEffort: "low", agentFilePath: "unused" };
   const launches: unknown[] = [];
   const history: { startedAt: number; endedAt: number; status: string; error?: string }[] = [];
+  const ext = import.meta.url.endsWith(".ts") ? ".ts" : ".js";
   const actualRunner = await import("../src/features/dc-agents/daemon/dc-worker-runner.ts");
+  const runInWorktreeMock = mock.method(
+    actualRunner.dcWorkerRunner,
+    "runInWorktree",
+    async () => ({ stdout: "", stderr: "", exitCode: 0 }),
+  );
   const runner = Object.create(actualRunner.dcWorkerRunner);
+  runner.runInWorktree = async () => ({ stdout: "", stderr: "", exitCode: 0 });
   runner.executeAutonomousLlmSession = async (options: unknown) => {
     launches.push(options);
     workers++; workerStarted(); await workerGate;
@@ -50,14 +57,14 @@ test("public daemon preserves one launch and records actual worker/delivery outc
       verification: { ok: outcome !== "verification-failed", commands: outcome === "verification-failed"
         ? [{ command: "pnpm", args: ["run", "test"], exitCode: 7, stdout: "", stderr: "assertion failed" }] : [] } };
   };
-  mock.module("../src/features/dc-agents/daemon/dc-worker-runner.js", { namedExports: {
+  mock.module(`../src/features/dc-agents/daemon/dc-worker-runner${ext}`, { namedExports: {
     dcWorkerRunner: runner, updateWorktreeOddRoadmap: actualRunner.updateWorktreeOddRoadmap,
   } });
-  mock.module("../src/features/dc-agents/core/dc-ephemeral-manager.js", { namedExports: {
+  mock.module(`../src/features/dc-agents/core/dc-ephemeral-manager${ext}`, { namedExports: {
     prepareEphemeralAgent: () => { prepares++; return preparedPlan; },
     cleanupEphemeralAgent: (_plan: unknown, result: typeof history[number]) => { history.push(result); cleanups++; cleaned(); },
   } });
-  mock.module("../src/features/dc-agents/daemon/dc-pr-delivery.js", { namedExports: {
+  mock.module(`../src/features/dc-agents/daemon/dc-pr-delivery${ext}`, { namedExports: {
     dcPrDelivery: { deliverIssue: async (options: { baseBranch: string }) => {
       deliveries++; assert.equal(options.baseBranch, "main");
       now += 250;
@@ -66,7 +73,7 @@ test("public daemon preserves one launch and records actual worker/delivery outc
       return { ok: true, prUrl: "fixture" };
     } },
   } });
-  mock.module("../src/integrations/dc-notify/dc-notifier.js", { namedExports: {
+  mock.module(`../src/integrations/dc-notify/dc-notifier${ext}`, { namedExports: {
     dcNotifier: { notify: (...args: unknown[]) => { logs.push(JSON.stringify(args)); }, notifyHerdr: (message: string) => { logs.push(message); } },
   } });
   let forwardingUrl = "";
@@ -104,6 +111,9 @@ test("public daemon preserves one launch and records actual worker/delivery outc
     exec: async (_command: string, args: string[], options: { cwd: string }) => {
       assert.equal(options.cwd, ctx.cwd);
       assert.equal(args[args.indexOf("--repo") + 1], manualRepo);
+      if (args[0] === "pr") {
+        return { code: 0, stdout: "[]", stderr: "", killed: false };
+      }
       return { code: 0, stdout: JSON.stringify(args[1] === "list" ? [detail()] : manualDetail ?? detail()), stderr: "", killed: false };
     },
   } as any);
@@ -211,6 +221,6 @@ test("public daemon preserves one launch and records actual worker/delivery outc
     assert.ok(!JSON.stringify(manager.getStatus()).includes(secret));
     assert.ok(!logs.join("\n").includes(secret));
   } finally {
-    releaseWorker(); await shutdown({ reason: "reload" }); await manager.stop(); spawnMock.mock.restore(); clock.mock.restore(); syncBuiltinESMExports(); mock.restoreAll();
+    releaseWorker(); await shutdown({ reason: "reload" }); await manager.stop(); runInWorktreeMock.mock.restore(); spawnMock.mock.restore(); clock.mock.restore(); syncBuiltinESMExports(); mock.restoreAll();
   }
 });

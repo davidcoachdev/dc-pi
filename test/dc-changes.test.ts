@@ -4,7 +4,7 @@ import type { ExtensionAPI, Theme } from "@earendil-works/pi-coding-agent";
 import type { TuiMouseEvent } from "@earendil-works/pi-tui";
 import { parseGitStatus, type GitWorktreeItem } from "../src/integrations/dc-git/dc-git.ts";
 import { DcChangesPanel } from "../src/features/dc-changes/dc-changes-panel.ts";
-import dcChangesExtension from "../src/features/dc-changes/dc-changes.ts";
+import dcChangesExtension, { parseEditorCommand } from "../src/features/dc-changes/dc-changes.ts";
 
 const dummyTheme: Pick<Theme, "fg" | "bg" | "bold"> = {
   fg: (_color: string, text: string) => text,
@@ -121,4 +121,19 @@ test("dcChangesExtension registers only /dc-changes with Alt+Shift+F", () => {
   dcChangesExtension(mockPi);
   assert.deepEqual(registeredCommands, ["dc-changes"]);
   assert.equal(registeredShortcut, "alt+shift+f");
+});
+
+test("parseEditorCommand splits editor executable and arguments cleanly", () => {
+  assert.deepEqual(parseEditorCommand("code --wait"), {
+    command: "code",
+    args: ["--wait"],
+  });
+  assert.deepEqual(parseEditorCommand('"/Applications/VS Code/bin/code" --wait --new-window'), {
+    command: "/Applications/VS Code/bin/code",
+    args: ["--wait", "--new-window"],
+  });
+  assert.deepEqual(parseEditorCommand(""), {
+    command: "nano",
+    args: [],
+  });
 });

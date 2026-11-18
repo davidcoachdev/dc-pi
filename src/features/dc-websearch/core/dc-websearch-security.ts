@@ -3,11 +3,17 @@ import dns from "node:dns/promises";
 import net from "node:net";
 
 const SENSITIVE_PATTERNS = [
+  /-----BEGIN (?:[A-Z0-9 ]+ )?PRIVATE KEY-----[\s\S]*?-----END (?:[A-Z0-9 ]+ )?PRIVATE KEY-----/g,
+  /-----BEGIN (?:[A-Z0-9 ]+ )?PRIVATE KEY-----/g,
   /bearer\s+[a-zA-Z0-9_\-\.]{20,}/gi,
   /(?:api[_-]?key|secret|token|password|auth)['"]?\s*[:=]\s*['"]?([a-zA-Z0-9_\-\.]{16,})['"]?/gi,
-  /ghp_[a-zA-Z0-9]{36}/g,
-  /gho_[a-zA-Z0-9]{36}/g,
-  /sk-[a-zA-Z0-9]{48}/g,
+  /github_pat_[a-zA-Z0-9_]{20,}/g,
+  /gh[pousr]_[a-zA-Z0-9]{36,}/g,
+  /sk-proj-[a-zA-Z0-9_\-]{16,}/g,
+  /sk-ant-[a-zA-Z0-9_\-]{16,}/g,
+  /sk-[a-zA-Z0-9]{32,}/g,
+  /\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/g,
+  /xox[baprs]-[a-zA-Z0-9\-]{10,}/g,
 ];
 
 /**

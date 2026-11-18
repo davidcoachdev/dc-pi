@@ -143,6 +143,7 @@ export function getFileDiff(cwd: string, file: string): string[] {
 
 /** Retrieve git log with graph and structured delimiters. */
 export function getGitCommitGraph(cwd: string, limit: number = 300): string {
+  const safeLimit = Number.isFinite(limit) && limit > 0 ? Math.min(Math.floor(limit), 1000) : 300;
   try {
     return execFileSync(
       "git",
@@ -153,7 +154,7 @@ export function getGitCommitGraph(cwd: string, limit: number = 300): string {
         "--date=short",
         "--pretty=format:COMMIT_REC:%H%x1f%h%x1f%d%x1f%s%x1f%an%x1f%ad",
         "-n",
-        String(limit),
+        String(safeLimit),
       ],
       {
         cwd,
@@ -171,13 +172,14 @@ export function getGitCommitGraph(cwd: string, limit: number = 300): string {
 
 /** Retrieve commit detail with stat and diff patch, safely bounded. */
 export function getGitCommitDetail(cwd: string, commitHash: string, maxLines: number = 500): string[] {
-  if (!commitHash || !commitHash.trim()) {
+  const trimmed = commitHash?.trim() ?? "";
+  if (!trimmed || trimmed.startsWith("-")) {
     return ["(no hay commit seleccionado)"];
   }
   try {
     const raw = execFileSync(
       "git",
-      ["show", "--stat", "-p", "--color=never", commitHash.trim()],
+      ["show", "--stat", "-p", "--color=never", trimmed],
       {
         cwd,
         encoding: "utf8",

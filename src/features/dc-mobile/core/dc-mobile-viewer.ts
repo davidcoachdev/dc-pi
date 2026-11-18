@@ -1,5 +1,5 @@
 import { execFileSync, spawn } from "node:child_process";
-import { copyFileSync, existsSync, mkdirSync, statSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -16,6 +16,9 @@ import { fileURLToPath } from "node:url";
  */
 
 export const DC_MOBILE_CACHE_ROOT = path.join(os.homedir(), ".cache", "dc-mobile");
+
+/** Maximum number of timestamped `frame-*.png` files retained per serial directory. */
+export const DC_MOBILE_MAX_RETAINED_FRAMES = 20;
 
 /** Measured cost of one capture is 0.75 s; one frame per second is the ceiling. */
 export const DC_MOBILE_VIEWER_INTERVAL_MS = 1_000;
@@ -171,7 +174,52 @@ export function getLatestFrameMtime(
   }
 }
 
-/** Writes the timestamped frame and refreshes latest.png (S3/S5). */
+/** Prunes older `frame-*.png` files in a serial directory beyond `maxFrames`. */
+export function pruneFrameCacheDir(
+  directory: string,
+  maxFrames = DC_MOBILE_MAX_RETAINED_FRAMES,
+): number {
+  let entries: string[];
+  try {
+    entries = readdirSync(directory);
+  } catch {
+    return 0;
+  }
+
+  const frames = entries
+    .filter((entry) => /^frame-.*\.png$/.test(entry))
+    .map((entry) => {
+      const fullPath = path.join(directory, entry);
+      let mtimeMs = 0;
+      try {
+        mtimeMs = statSync(fullPath).mtimeMs;
+      } catch {
+        /* ignore */
+      }
+      return { entry, fullPath, mtimeMs };
+    })
+    .sort((a, b) => {
+      if (a.mtimeMs !== b.mtimeMs) return a.mtimeMs - b.mtimeMs;
+      return a.entry.localeCompare(b.entry);
+    });
+
+  const limit = Math.max(1, maxFrames);
+  if (frames.length <= limit) return 0;
+
+  const toDelete = frames.slice(0, frames.length - limit);
+  let removed = 0;
+  for (const item of toDelete) {
+    try {
+      rmSync(item.fullPath, { force: true });
+      removed++;
+    } catch {
+      /* best effort */
+    }
+  }
+  return removed;
+}
+
+/** Writes the timestamped frame, refreshes latest.png, and prunes older frames (S3/S5/S8). */
 export function saveFrame(
   serial: string,
   png: Buffer,
@@ -186,6 +234,7 @@ export function saveFrame(
 
   writeFileSync(framePath, png);
   writeFileSync(latestPath, png);
+  pruneFrameCacheDir(directory, DC_MOBILE_MAX_RETAINED_FRAMES);
 
   return { serial, framePath, latestPath };
 }
@@ -318,6 +367,7 @@ export function openLiveViewer(
       latestPath,
     };
     refreshLatest(saved);
+    pruneFrameCacheDir(directory, DC_MOBILE_MAX_RETAINED_FRAMES);
   }
 
   const runningPid = getLiveViewerPid(serialId);

@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process";
 import * as fs from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
 import { promisify } from "node:util";
 import type {
@@ -15,8 +16,35 @@ const execFileAsync = promisify(execFile);
 const DEFAULT_TIMEOUT_MS = 25000;
 const MAX_OUTPUT_CHARS = 45000; // ~45 KB para proteger context window
 
-function resolveCodegraphBin(): string {
-  return process.env.CODEGRAPH_BIN || "/home/linuxbrew/.linuxbrew/bin/codegraph";
+export function resolveCodegraphBin(env: NodeJS.ProcessEnv = process.env): string {
+  const explicit = env.CODEGRAPH_BIN?.trim();
+  if (explicit) return explicit;
+
+  const binNames = process.platform === "win32" ? ["codegraph.exe", "codegraph.cmd", "codegraph"] : ["codegraph"];
+  const pathDirs = (env.PATH || "").split(path.delimiter).filter(Boolean);
+  for (const dir of pathDirs) {
+    for (const name of binNames) {
+      const candidate = path.join(dir, name);
+      if (fs.existsSync(candidate)) {
+        return candidate;
+      }
+    }
+  }
+
+  const fallbackCandidates = [
+    "/opt/homebrew/bin/codegraph",
+    "/home/linuxbrew/.linuxbrew/bin/codegraph",
+    "/usr/local/bin/codegraph",
+    "/usr/bin/codegraph",
+    path.join(os.homedir(), ".local", "bin", "codegraph"),
+  ];
+  for (const candidate of fallbackCandidates) {
+    if (fs.existsSync(candidate)) {
+      return candidate;
+    }
+  }
+
+  return "codegraph";
 }
 
 async function runCodegraphCli(

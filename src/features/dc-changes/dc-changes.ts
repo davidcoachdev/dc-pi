@@ -6,6 +6,49 @@ import { openDcModal } from "../../ui/dc-modal.ts";
 import { getGitChanges, getFileDiff, listGitWorktrees } from "../../integrations/dc-git/dc-git.ts";
 import { DcChangesPanel } from "./dc-changes-panel.ts";
 
+export function parseEditorCommand(rawEditor?: string): { command: string; args: string[] } {
+  const input = (rawEditor ?? process.env.VISUAL ?? process.env.EDITOR ?? "nano").trim();
+  if (!input) {
+    return { command: "nano", args: [] };
+  }
+
+  const tokens: string[] = [];
+  let current = "";
+  let quote: "'" | '"' | null = null;
+
+  for (let i = 0; i < input.length; i++) {
+    const ch = input[i]!;
+    if (quote) {
+      if (ch === quote) {
+        quote = null;
+      } else if (ch === "\\" && quote === '"' && i + 1 < input.length) {
+        current += input[++i]!;
+      } else {
+        current += ch;
+      }
+      continue;
+    }
+
+    if (ch === "'" || ch === '"') {
+      quote = ch;
+    } else if (/\s/.test(ch)) {
+      if (current.length > 0) {
+        tokens.push(current);
+        current = "";
+      }
+    } else {
+      current += ch;
+    }
+  }
+
+  if (current.length > 0) {
+    tokens.push(current);
+  }
+
+  const [command = "nano", ...args] = tokens;
+  return { command, args };
+}
+
 /**
  * Open the DC Studio Git Changes & Diff Viewer in a two-panel modal with multi-worktree support.
  */
@@ -45,19 +88,20 @@ export async function openChangesViewer(ctx: ExtensionContext): Promise<void> {
         getDiff: getFileDiff,
         listWorktreesFn: listGitWorktrees,
         onOpenEditor: (file, worktreePath) => {
-          const editor = process.env.VISUAL || process.env.EDITOR || "nano";
+          const rawEditor = process.env.VISUAL || process.env.EDITOR || "nano";
+          const { command, args } = parseEditorCommand(rawEditor);
           const baseDir = worktreePath || cwd;
           const fullPath = path.resolve(baseDir, file);
           try {
-            const child = spawn(editor, [fullPath], { stdio: "inherit" });
+            const child = spawn(command, [...args, fullPath], { stdio: "inherit" });
             child.on("error", (err) => {
-              dcNotifier.notify(ctx, "DC Cambios", `No se pudo abrir el editor (${editor}): ${err.message}`, "error");
+              dcNotifier.notify(ctx, "DC Cambios", `No se pudo abrir el editor (${command}): ${err.message}`, "error");
             });
             child.on("exit", () => {
               tui.requestRender();
             });
           } catch {
-            dcNotifier.notify(ctx, "DC Cambios", `No se pudo abrir el editor: ${editor}`, "error");
+            dcNotifier.notify(ctx, "DC Cambios", `No se pudo abrir el editor: ${command}`, "error");
           }
         },
         requestRender: () => tui.requestRender(),

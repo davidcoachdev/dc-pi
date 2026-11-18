@@ -31,11 +31,30 @@ export function clearCachedQuotasForTesting(): void {
   isFetching = false;
 }
 
+export interface DiscoverAccountPrefixesOptions {
+  settingsPath?: string;
+  agentDir?: string;
+}
+
+function resolveQuotaSettingsPath(options?: DiscoverAccountPrefixesOptions | string): string {
+  if (typeof options === "string" && options.trim()) {
+    const trimmed = options.trim();
+    return trimmed.endsWith(".json") ? trimmed : path.join(trimmed, "settings.json");
+  }
+  if (options && typeof options === "object") {
+    if (options.settingsPath?.trim()) return options.settingsPath.trim();
+    if (options.agentDir?.trim()) return path.join(options.agentDir.trim(), "settings.json");
+  }
+  const envAgentDir = process.env.PI_CODING_AGENT_DIR?.trim();
+  const baseDir = envAgentDir || path.join(os.homedir(), ".pi", "agent");
+  return path.join(baseDir, "settings.json");
+}
+
 /**
  * Descubre los prefijos de cuenta activos a consultar según el modelo activo
  * y settings.json.
  */
-export function discoverAccountPrefixes(): string[] {
+export function discoverAccountPrefixes(options?: DiscoverAccountPrefixesOptions | string): string[] {
   const accounts = new Set<string>();
 
   // 1. Contexto activo en Pi
@@ -64,7 +83,7 @@ export function discoverAccountPrefixes(): string[] {
 
   // 2. settings.json (defaultModel)
   try {
-    const settingsPath = path.join(os.homedir(), ".pi", "agent", "settings.json");
+    const settingsPath = resolveQuotaSettingsPath(options);
     if (fs.existsSync(settingsPath)) {
       const raw = fs.readFileSync(settingsPath, "utf8");
       const s = JSON.parse(raw);
