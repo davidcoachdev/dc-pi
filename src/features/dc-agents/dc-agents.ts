@@ -94,6 +94,13 @@ export function sanitizeWorkshopReason(reason?: string): string {
   }
 
   // Mapeos canónicos a motivos breves (máximo 3 palabras)
+  if (
+    lower.includes("tos_violation") ||
+    lower.includes("terms of service") ||
+    lower.includes("violation of terms")
+  ) {
+    return "Violacion ToS";
+  }
   if (lower.includes("google auth") || lower.includes("auth error") || lower.includes("fatal_auth")) {
     return "Google Auth Error";
   }
@@ -198,6 +205,8 @@ export function isProviderAuthError(errorMessage?: string, statusCode?: number):
 
   return (
     /\b(401|403)\b/.test(msg) ||
+    msg.includes("tos_violation") ||
+    msg.includes("terms of service") ||
     msg.includes("unauthorized") ||
     msg.includes("forbidden") ||
     msg.includes("fatal_auth") ||

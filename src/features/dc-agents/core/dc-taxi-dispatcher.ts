@@ -26,8 +26,10 @@ import {
   getEffectiveQuotaPct,
   type DcTaxiQuotaInfo,
 } from "./dc-taxi-quota.ts";
+import { getTaxiLedgerDb } from "./dc-taxi-ledger-db.ts";
+import { getDcTaxisPaths } from "../../../core/dc-paths.ts";
 
-const FLEET_STATE_PATH = path.join(os.homedir(), ".pi", "agent", "dc-studio", "dc-taxis.json");
+const FLEET_STATE_PATH = getDcTaxisPaths().fleetState;
 const LOCK_STALE_MS = 10_000;
 const LOCK_MAX_WAIT_MS = 15_000;
 
@@ -1369,6 +1371,18 @@ export function sendTaxiToWorkshop(
       workshopSince: unit.workshopSince,
     });
 
+    // Registrar evento de taller en la base SQLite Soberana
+    try {
+      getTaxiLedgerDb().recordEvent({
+        account,
+        eventType: "workshop_enter",
+        reason,
+        timestamp: unit.workshopSince,
+      });
+    } catch {
+      /* fallback */
+    }
+
     return true;
   });
 }
@@ -1429,6 +1443,16 @@ export function repairTaxiFromWorkshop(
     appendTaxiLog("INFO", "TAXI_WORKSHOP_REPAIRED", {
       account,
     });
+
+    // Registrar salida de taller en SQLite Soberana
+    try {
+      getTaxiLedgerDb().recordEvent({
+        account,
+        eventType: "workshop_exit",
+      });
+    } catch {
+      /* fallback */
+    }
 
     return true;
   });
