@@ -28,6 +28,7 @@ import {
   getAgentUsageRanking,
   type DcTaxiHistoryMetrics,
 } from "../core/dc-taxi-history.ts";
+import { getTaxiLedgerDb } from "../core/dc-taxi-ledger-db.ts";
 import { readRecentTaxiLogs } from "../core/dc-taxi-logger.ts";
 import { fetchAllTaxisQuotas, type DcTaxiQuotaInfo } from "../core/dc-taxi-quota.ts";
 import { isVipAccount } from "../core/dc-taxi-accounts.ts";
@@ -551,18 +552,63 @@ export class DcTaxisPanel implements Component {
 
     lines.push(th.fg("muted", "┄".repeat(Math.max(10, width - 4))));
 
-    // 3. Estadísticas Históricas Acumuladas de esta Unidad
-    lines.push(` ${th.bold(th.fg("dim", `RENDIMIENTO HISTÓRICO DE LA UNIDAD [${unit.account.toUpperCase()}]:`))}`);
-    const avgSec = Math.round(metrics.avgDurationMs / 1000);
-    const totalMin = (metrics.totalDurationMs / 60000).toFixed(1);
+    // 3. Estadísticas Históricas Acumuladas de esta Unidad (SQLite Soberano)
+    let accountSummary;
+    let recentEvents: any[] = [];
+    try {
+      const ledger = getTaxiLedgerDb();
+      accountSummary = ledger.getAccountSummary(unit.account);
+      recentEvents = ledger.getRecentAccountEvents(unit.account, 8);
+    } catch {
+      /* fallback a métricas de memoria */
+    }
 
-    lines.push(`  Viajes Realizados:  ${th.bold(String(metrics.totalTrips))}  (✓ ${metrics.completedTrips} exitosos  ·  ✖ ${metrics.failedTrips} fallidos  ·  ⊘ ${metrics.cancelledTrips} cancelados)`);
-    lines.push(`  Tasa de Éxito:      ${th.bold(metrics.successRate >= 90 ? th.fg("success", `${metrics.successRate}%`) : th.fg("warning", `${metrics.successRate}%`))}`);
-    lines.push(`  Tokens Totales:     ${th.bold(metrics.totalTokens.toLocaleString("es-ES"))}  (In: ${metrics.totalInputTokens.toLocaleString("es-ES")}  ·  Out: ${metrics.totalOutputTokens.toLocaleString("es-ES")}  ·  Reasoning: ${metrics.totalReasoningTokens.toLocaleString("es-ES")})`);
-    lines.push(`  Tiempo Acumulado:   ${th.bold(`${totalMin}m`)}  (Promedio por viaje: ${avgSec}s)`);
+    const effectiveTotalTrips = accountSummary?.totalTrips ?? metrics.totalTrips;
+    const effectiveCompleted = accountSummary?.completedTrips ?? metrics.completedTrips;
+    const effectiveFailed = accountSummary?.failedTrips ?? metrics.failedTrips;
+    const effectiveCancelled = accountSummary?.cancelledTrips ?? metrics.cancelledTrips;
+    const effectiveSuccessRate = accountSummary?.successRate ?? metrics.successRate;
+    const effectiveTotalTokens = accountSummary?.totalTokens ?? metrics.totalTokens;
+    const effectiveIn = accountSummary?.totalInputTokens ?? metrics.totalInputTokens;
+    const effectiveOut = accountSummary?.totalOutputTokens ?? metrics.totalOutputTokens;
+    const effectiveReasoning = accountSummary?.totalReasoningTokens ?? metrics.totalReasoningTokens;
+    const effectiveTotalCost = accountSummary?.totalCostEstimated ?? 0;
+    const effectiveDurationMs = accountSummary?.totalDurationMs ?? metrics.totalDurationMs;
+    const totalMin = (effectiveDurationMs / 60000).toFixed(1);
+    const avgSec = effectiveTotalTrips > 0 ? Math.round(effectiveDurationMs / effectiveTotalTrips / 1000) : 0;
 
-    if (metrics.lastError) {
+    lines.push(` ${th.bold(th.fg("dim", `RENDIMIENTO HISTÓRICO Y GASTO [${unit.account.toUpperCase()}]:`))}`);
+    lines.push(`  Viajes Realizados:  ${th.bold(String(effectiveTotalTrips))}  (✓ ${effectiveCompleted} exitosos  ·  ✖ ${effectiveFailed} fallidos  ·  ⊘ ${effectiveCancelled} cancelados)`);
+    lines.push(`  Tasa de Éxito:      ${th.bold(effectiveSuccessRate >= 90 ? th.fg("success", `${effectiveSuccessRate}%`) : th.fg("warning", `${effectiveSuccessRate}%`))}`);
+    lines.push(`  Tokens Totales:     ${th.bold(effectiveTotalTokens.toLocaleString("es-ES"))}  (In: ${effectiveIn.toLocaleString("es-ES")}  ·  Out: ${effectiveOut.toLocaleString("es-ES")}  ·  Reasoning: ${effectiveReasoning.toLocaleString("es-ES")})`);
+    lines.push(`  Costo Acumulado:    ${th.bold(th.fg("accent", `$${effectiveTotalCost.toFixed(4)} USD`))}  (Tiempo: ${totalMin}m · Prom: ${avgSec}s/viaje)`);
+
+    if (accountSummary?.workshopEntries) {
+      lines.push(`  Visitas a Taller:   ${th.bold(String(accountSummary.workshopEntries))}  (Último motivo: ${th.fg("error", accountSummary.lastWorkshopReason || "Desconocido")})`);
+    } else if (metrics.lastError) {
       lines.push(`  Último Fallo:       ${th.fg("error", metrics.lastError.slice(0, Math.max(20, width - 25)))}`);
+    }
+
+    // 4. Bitácora de Últimos Movimientos y Fallos de la Unidad
+    if (recentEvents.length > 0) {
+      lines.push("");
+      lines.push(` ${th.bold(th.fg("dim", `ÚLTIMOS MOVIMIENTOS Y REGISTRO DE TALLER:`))}`);
+      for (const ev of recentEvents) {
+        const timeStr = new Date(ev.createdAt).toLocaleTimeString();
+        let evBadge = th.fg("dim", `[${ev.eventType}]`);
+        if (ev.eventType === "workshop_enter") {
+          evBadge = th.fg("error", `[🛠️ ENTRA TALLER]`);
+        } else if (ev.eventType === "workshop_exit") {
+          evBadge = th.fg("success", `[✅ SALE TALLER]`);
+        } else if (ev.eventType === "lease") {
+          evBadge = th.fg("warning", `[🚕 ARRENDADO]`);
+        } else if (ev.eventType === "release") {
+          evBadge = th.fg("muted", `[🏁 LIBERADO]`);
+        }
+        const reasonStr = ev.reason ? ` · ${th.bold(ev.reason)}` : "";
+        const lineText = `   ${th.fg("dim", timeStr)} ${evBadge}${reasonStr}`;
+        lines.push(truncateToWidth(lineText, Math.max(10, width - 4)));
+      }
     }
 
     lines.push("");
