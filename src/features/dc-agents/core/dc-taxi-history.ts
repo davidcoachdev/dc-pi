@@ -13,8 +13,10 @@ import type {
   DcTaxiUnitMetrics,
   DcAgentUsageMetrics,
 } from "./dc-ephemeral-types.ts";
+import { getTaxiLedgerDb } from "./dc-taxi-ledger-db.ts";
+import { getDcTaxisPaths } from "../../../core/dc-paths.ts";
 
-const HISTORY_FILE_PATH = path.join(os.homedir(), ".pi", "agent", "dc-studio", "dc-taxis-history.json");
+const HISTORY_FILE_PATH = getDcTaxisPaths().legacyHistory;
 const MAX_HISTORY_RECORDS = 200;
 
 function ensureHistoryDirectory(targetPath: string = HISTORY_FILE_PATH): void {
@@ -110,6 +112,34 @@ export function recordTaxiTrip(
         /* defensive */
       }
     }
+  }
+
+  // Dual-write determinista: Registrar de inmediato en la base SQLite Soberana (WAL mode)
+  try {
+    const ledger = getTaxiLedgerDb();
+    ledger.recordTrip({
+      tripId: trip.tripId,
+      account: trip.account,
+      passengerType: trip.passengerType,
+      model: trip.model,
+      effort: trip.effort,
+      taskId: trip.taskId,
+      agentName: trip.agentName,
+      sessionId: trip.sessionId,
+      taskLabel: trip.taskLabel,
+      startedAt: trip.startedAt,
+      endedAt: trip.endedAt,
+      durationMs: trip.durationMs,
+      status: trip.status,
+      inputTokens: trip.tokens?.input,
+      outputTokens: trip.tokens?.output,
+      reasoningTokens: trip.tokens?.reasoning,
+      totalTokens: trip.tokens?.total,
+      costEstimated: trip.costEstimated,
+      error: trip.error,
+    });
+  } catch {
+    /* fallback hermético */
   }
 }
 
