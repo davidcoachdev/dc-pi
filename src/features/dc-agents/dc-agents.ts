@@ -32,6 +32,7 @@ import { TaxiWorkshopCoordinator } from "./core/dc-taxi-workshop.ts";
 import { installSubagentInboxInterceptor, uninstallSubagentInboxInterceptor } from "./core/dc-subagent-inbox.ts";
 import { registerSubagentInboxTools } from "./tools/dc-subagent-inbox-tools.ts";
 import { isVipAccount } from "./core/dc-taxi-accounts.ts";
+import { getTaxiLedgerDb } from "./core/dc-taxi-ledger-db.ts";
 import { DcAgentsPanel } from "./views/dc-agents-panel.ts";
 import { registerControlDaemonCommands } from "./daemon/dc-control-commands.ts";
 import { DcTaxisPanel } from "./views/dc-taxis-panel.ts";
@@ -1637,6 +1638,58 @@ export default function dcAgentsExtension(
     description: "DC Studio: abrir monitor de Flota de Taxis y tokens",
     handler: async (ctx: ExtensionContext) => {
       openTaxisViewer(ctx);
+    },
+  });
+
+  // Comando /dc-cost (muestra el ranking de consumo, costos y fallos por cuenta desde SQLite)
+  pi.registerCommand("dc-cost", {
+    description: "DC Studio: ranking de costo acumulado en USD, tokens y fallos por cuenta de taxi",
+    handler: async (_args: string | undefined, ctx: ExtensionContext) => {
+      try {
+        const ledger = getTaxiLedgerDb();
+        const ranked = ledger.getAllAccountsRankedByCost(50);
+        if (ranked.length === 0) {
+          if (ctx.hasUI) {
+            dcNotifier.notify(ctx, "DC Cost", "No hay registros de viajes o consumo acumulado en el ledger SQLite.", "info");
+          }
+          return;
+        }
+
+        const lines = [
+          "📊 Ranking de Consumo y Costos por Cuenta (DC Taxi Ledger):",
+          "-------------------------------------------------------------",
+          "CUENTA   VIAJES   COSTO TOTAL      TOKENS TOTALES   FALLOS",
+        ];
+
+        let totalFleetCost = 0;
+        let totalFleetTokens = 0;
+        for (const item of ranked) {
+          totalFleetCost += item.totalCost;
+          totalFleetTokens += item.totalTokens;
+          const acStr = item.account.toUpperCase().padEnd(8);
+          const tripsStr = String(item.totalTrips).padEnd(8);
+          const costStr = `$${item.totalCost.toFixed(4)} USD`.padEnd(16);
+          const tokensStr = item.totalTokens.toLocaleString("es-ES").padEnd(16);
+          const failedStr = item.failedTrips > 0 ? `✖ ${item.failedTrips}` : "✓ 0";
+          lines.push(`${acStr} ${tripsStr} ${costStr} ${tokensStr} ${failedStr}`);
+        }
+
+        lines.push("-------------------------------------------------------------");
+        lines.push(`TOTAL FLOTA: $${totalFleetCost.toFixed(4)} USD  ·  ${totalFleetTokens.toLocaleString("es-ES")} tokens`);
+
+        if (ctx.hasUI) {
+          dcNotifier.notify(
+            ctx,
+            "DC Cost Ranking",
+            `Total Flota: $${totalFleetCost.toFixed(4)} USD (${ranked.length} cuentas con consumo)`,
+            "info",
+          );
+        }
+      } catch (err: any) {
+        if (ctx.hasUI) {
+          dcNotifier.notify(ctx, "DC Cost Error", err?.message || String(err), "error");
+        }
+      }
     },
   });
 
