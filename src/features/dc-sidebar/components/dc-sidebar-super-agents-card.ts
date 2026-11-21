@@ -3,6 +3,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import * as os from "node:os";
 import { DcSidebarCard } from "../../../ui/dc-sidebar-card.ts";
 import { DcVStack } from "../../../ui/dc-vstack.ts";
 import { DcJustifiedRow } from "../views/dc-sidebar-body.ts";
@@ -11,6 +12,8 @@ import { dcControlDaemonManager } from "../../dc-agents/daemon/dc-control-daemon
 import { openControlCenterModal } from "../../dc-agents/views/dc-control-center-modal.ts";
 import { checkPendingIssues } from "../../dc-agents/daemon/dc-pending-issues.ts";
 import { getSidebarContext } from "../dc-sidebar.ts";
+import { dcSupervisorBus, type SupervisorSessionInfo } from "../../dc-control/core/dc-supervisor-bus.ts";
+import { DcSupervisorLauncher } from "../../dc-control/core/dc-supervisor-launcher.ts";
 
 const execFileAsync = promisify(execFile);
 
@@ -68,13 +71,24 @@ function parseOddTasksFromWorktree(worktreePath: string, taskSlug?: string): Arr
 }
 
 export class DcSuperAgentsSidebarCard implements Component {
-  private activeSubtab: "86" | "config" = "86";
+  private activeSubtab: "86" | "multisession" | "config" = "86";
   private requestRender?: () => void;
   private currentCard?: DcSidebarCard;
+  private launcher = new DcSupervisorLauncher();
+  private activeSessions: SupervisorSessionInfo[] = [];
 
   constructor(requestRender?: () => void) {
     this.requestRender = requestRender;
     void checkGhBinary().then(() => this.requestRender?.());
+
+    // Suscribirse a eventos de dc-control para actualizar en tiempo real
+    const onUpdate = () => {
+      this.requestRender?.();
+    };
+    dcSupervisorBus.on("session:discovered", onUpdate);
+    dcSupervisorBus.on("session:state_changed", onUpdate);
+    dcSupervisorBus.on("session:hung", onUpdate);
+    dcSupervisorBus.on("session:terminated", onUpdate);
   }
 
   invalidate(): void {
@@ -82,7 +96,9 @@ export class DcSuperAgentsSidebarCard implements Component {
   }
 
   private toggleSubtab(): void {
-    this.activeSubtab = this.activeSubtab === "86" ? "config" : "86";
+    if (this.activeSubtab === "86") this.activeSubtab = "multisession";
+    else if (this.activeSubtab === "multisession") this.activeSubtab = "config";
+    else this.activeSubtab = "86";
     this.requestRender?.();
   }
 
@@ -104,23 +120,115 @@ export class DcSuperAgentsSidebarCard implements Component {
 
     // ── 1. Barra de Sub-Tabs Interactiva ──
     const tab86Style = this.activeSubtab === "86"
-      ? `\x1b[48;2;60;15;20m\x1b[1;38;2;255;77;77m [1: AGENT #86] \x1b[0m`
+      ? `\x1b[48;2;60;15;20m\x1b[1;38;2;255;77;77m [1: #86] \x1b[0m`
       : ` ${dim("[1: #86]")} `;
+    const tabMultiStyle = this.activeSubtab === "multisession"
+      ? `\x1b[48;2;60;15;20m\x1b[1;38;2;255;77;77m [2: LABS & HUB] \x1b[0m`
+      : ` ${dim("[2: LABS]")} `;
     const tabCfgStyle = this.activeSubtab === "config"
-      ? `\x1b[48;2;60;15;20m\x1b[1;38;2;255;77;77m [2: CONFIG & BIN] \x1b[0m`
-      : ` ${dim("[2: CONFIG]")} `;
+      ? `\x1b[48;2;60;15;20m\x1b[1;38;2;255;77;77m [3: CFG] \x1b[0m`
+      : ` ${dim("[3: CFG]")} `;
 
     rows.push(
       new DcJustifiedRow(
-        ` ${tab86Style} ${tabCfgStyle}`,
-        `${bloodBright("[cambiar ⇄]")} `,
+        ` ${tab86Style} ${tabMultiStyle} ${tabCfgStyle}`,
+        `${bloodBright("[⇄]")} `,
         () => this.toggleSubtab()
       )
     );
     rows.push(new DcJustifiedRow(`  ${dim("─".repeat(Math.max(10, width - 8)))}`, ""));
 
     // ── 2. Contenido según la Sub-Tab activa ──
-    if (this.activeSubtab === "86") {
+    if (this.activeSubtab === "multisession") {
+      // ── Sub-Tab LABS & DAEMON HUB ──
+      const pidFile = path.join(os.tmpdir(), "dc-supervisor.pid");
+      let hubRunning = false;
+      let hubPidStr = "off";
+
+      if (fs.existsSync(pidFile)) {
+        try {
+          const raw = fs.readFileSync(pidFile, "utf-8").trim();
+          const pid = parseInt(raw, 10);
+          if (!isNaN(pid)) {
+            process.kill(pid, 0);
+            hubRunning = true;
+            hubPidStr = `PID ${pid}`;
+          }
+        } catch {}
+      }
+
+      const hubStatusStr = hubRunning ? greenBright(`● ONLINE (${hubPidStr})`) : dim("○ OFFLINE");
+      rows.push(
+        new DcJustifiedRow(
+          `  ${bloodSoft("Daemon Hub:")}`,
+          `${hubStatusStr} `
+        )
+      );
+
+      // Leer sesiones de Pi directamente desde ~/.pi/agent/sessions
+      const sessionsDir = path.join(os.homedir(), ".pi", "agent", "sessions");
+      let activeLabsCount = 0;
+      const recentLabs: Array<{ name: string; ageStr: string }> = [];
+
+      if (fs.existsSync(sessionsDir)) {
+        try {
+          const entries = fs.readdirSync(sessionsDir);
+          const now = Date.now();
+          for (const ent of entries) {
+            if (ent.startsWith("--") && ent.endsWith("--")) {
+              const fullDir = path.join(sessionsDir, ent);
+              try {
+                const stat = fs.statSync(fullDir);
+                // Si la carpeta tuvo actividad en los últimos 10 minutos
+                if (now - stat.mtimeMs < 10 * 60 * 1000) {
+                  activeLabsCount++;
+                  const cleanName = ent.replace(/^--home-[^-]+-/, "").replace(/--$/, "").replace(/-/g, "/");
+                  const minsAgo = Math.round((now - stat.mtimeMs) / 60000);
+                  recentLabs.push({ name: cleanName || ent, ageStr: minsAgo === 0 ? "activo" : `${minsAgo}m` });
+                }
+              } catch {}
+            }
+          }
+        } catch {}
+      }
+
+      rows.push(
+        new DcJustifiedRow(
+          `  ${bloodSoft("Labs recientes:")}`,
+          `${bloodBright(`${activeLabsCount} detectados`)} `
+        )
+      );
+
+      if (recentLabs.length === 0) {
+        rows.push(
+          new DcJustifiedRow(
+            `    ${dim("Sin otras sesiones activas")}`,
+            `${dim("[idle]")} `
+          )
+        );
+      } else {
+        for (const lab of recentLabs.slice(0, 4)) {
+          const shortName = lab.name.length > 22 ? lab.name.slice(0, 21) + "…" : lab.name;
+          rows.push(
+            new DcJustifiedRow(
+              `    ${greenBright("●")} ${bloodWhite(shortName)}`,
+              `${dim(lab.ageStr)} `
+            )
+          );
+        }
+      }
+
+      rows.push(new DcJustifiedRow(`  ${dim("─".repeat(Math.max(10, width - 8)))}`, ""));
+      rows.push(
+        new DcJustifiedRow(
+          `  ${bloodWhite("⚡ Asegurar Daemon Hub")}`,
+          `${bloodBright("[Iniciar/Chequear]")} `,
+          () => {
+            void this.launcher.ensureDaemonRunning().then(() => this.requestRender?.());
+          }
+        )
+      );
+    } else if (this.activeSubtab === "86") {
       // Estado del Daemon y Túnel
       const daemonStatusStr = isDaemonRunning ? greenBright("● ACTIVO") : dim("○ DETENIDO");
       const tunnelStatusStr = isTunnelRunning ? greenBright("✓ GH TÚNEL") : dim("○ SIN TÚNEL");

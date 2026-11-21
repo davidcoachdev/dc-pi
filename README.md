@@ -103,9 +103,9 @@ All extensions are unified under the canonical `dcStudioExtension` entrypoint.
 
 | Key | Tab | Content |
 | :--- | :--- | :--- |
-| `1` | MAIN | Project, context and the session todo |
-| `2` | FLEET | Provider quotas, taxi fleet and ephemeral subagents |
-| `3` | CTRL | Central Office of Super-Agents |
+| `1` | MAIN | Project, context and ephemeral subagents & active jobs |
+| `2` | WORK | ODD missions, tasks todo and provider quota capacity |
+| `3` | CTRL | Unified DC-Control Tower: Super-Agents (#86), Daemon Hub & live Pi labs |
 | `4` | MOBILE | dc-mobile supervisor: devices, live activity log, `[Reconectar]` / `[Apagar vínculo]` / `[Abrir visor]` |
 | `5` | TREE | Project file explorer |
 | `6` | MEM | Engram daemon and memory sentinel |

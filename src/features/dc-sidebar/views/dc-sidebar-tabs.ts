@@ -4,7 +4,7 @@ import { readSidebarPrefs, writeSidebarPrefs } from "../core/dc-sidebar-prefs.ts
 
 export const SIDEBAR_TABS: readonly DcTabItem[] = [
   { id: "main", key: "1", label: "MAIN" },
-  { id: "fleet", key: "2", label: "FLEET" },
+  { id: "work", key: "2", label: "WORK" },
   { id: "ctrl", key: "3", label: "CTRL" },
   { id: "mobile", key: "4", label: "MOBILE" },
   { id: "tree", key: "5", label: "TREE" },

@@ -51,17 +51,17 @@ test("DcSidebarPagedBody routes views according to active tab", () => {
   const mainLines = pagedBody.render(50);
   assert.ok(mainLines.some((l) => l.includes("Path:") || l.includes("Proyecto")));
 
-  // Tab 2: FLEET (Quotas, Taxis, Agents)
-  pagedBody.setTab("fleet");
-  assert.equal(pagedBody.getActiveTab(), "fleet");
-  const fleetLines = pagedBody.render(50);
-  assert.ok(fleetLines.some((l) => l.includes("Quotas:") || l.includes("Flota")));
+  // Tab 2: WORK (Todos, Quotas)
+  pagedBody.setTab("work");
+  assert.equal(pagedBody.getActiveTab(), "work");
+  const workLines = pagedBody.render(50);
+  assert.ok(workLines.some((l) => l.includes("Quotas:") || l.includes("Flota") || l.includes("TODO")));
 
-  // Tab 3: CTRL (Oficina de Super-Agentes)
+  // Tab 3: CTRL (Torre de Control unificada)
   pagedBody.setTab("ctrl");
   assert.equal(pagedBody.getActiveTab(), "ctrl");
   const ctrlLines = pagedBody.render(50);
-  assert.ok(ctrlLines.some((l) => l.includes("SUPER-AGENTS") || l.includes("DC-CONTROL")));
+  assert.ok(ctrlLines.some((l) => l.includes("SUPER-AGENTS") || l.includes("DC-CONTROL") || l.includes("DC-Control")));
 
   // Tab 4: TREE (Explorador de Archivos)
   pagedBody.setTab("tree");
@@ -109,7 +109,7 @@ test("framedRail incorporates fixed DcSidebarTabs at the top without displacing 
 
 test("findSidebarTab resolves tabs 1 to 7 and safely returns undefined for tabs 8 to 9", () => {
   assert.equal(findSidebarTab(1)?.id, "main");
-  assert.equal(findSidebarTab(2)?.id, "fleet");
+  assert.equal(findSidebarTab(2)?.id, "work");
   assert.equal(findSidebarTab(3)?.id, "ctrl");
   assert.equal(findSidebarTab(4)?.id, "mobile");
   assert.equal(findSidebarTab(5)?.id, "tree");
@@ -181,9 +181,9 @@ test("switchSidebarTab switches active tab, updates preferences and notifies", (
 
   const res = switchSidebarTab(2, mockCtx, mockTui);
   assert.equal(res.success, true);
-  assert.equal(res.tab?.id, "fleet");
-  assert.equal(readSidebarPrefs().activeTab, "fleet");
-  assert.ok(notifications.some((n) => n.includes("FLEET")));
+  assert.equal(res.tab?.id, "work");
+  assert.equal(readSidebarPrefs().activeTab, "work");
+  assert.ok(notifications.some((n) => n.includes("WORK")));
 });
 
 test("switchSidebarTab unhides sidebar when navigating directly if terminal width is sufficient", () => {
@@ -292,5 +292,5 @@ test("dcSidebarExtension registers alt+1 to alt+9 shortcuts and /dc-sidebar comm
     },
   };
   alt2Handler(mockCtx);
-  assert.equal(readSidebarPrefs().activeTab, "fleet");
+  assert.equal(readSidebarPrefs().activeTab, "work");
 });
