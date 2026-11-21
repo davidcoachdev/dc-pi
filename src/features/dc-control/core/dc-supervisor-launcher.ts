@@ -2,8 +2,11 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
 import * as net from "node:net";
+import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
 import { getCanonicalDcSupervisorPaths } from "./dc-supervisor-paths.ts";
+
+const currentDir = path.dirname(fileURLToPath(import.meta.url));
 
 export interface LauncherOptions {
   socketPath?: string;
@@ -44,6 +47,35 @@ export class DcSupervisorLauncher {
     });
   }
 
+  private resolveDaemonScript(): { command: string; args: string[] } | null {
+    if (this.daemonScriptPath && fs.existsSync(this.daemonScriptPath)) {
+      return { command: process.execPath, args: [this.daemonScriptPath] };
+    }
+
+    const candidates = [
+      path.join(currentDir, "dc-control-daemon-hub.js"),
+      path.join(process.cwd(), ".test-build", "src", "features", "dc-control", "core", "dc-control-daemon-hub.js"),
+      path.join(os.homedir(), ".pi", "agent", "dc-studio", "control", "daemon-entry.js"),
+    ];
+
+    for (const cand of candidates) {
+      if (fs.existsSync(cand)) {
+        return { command: process.execPath, args: [cand] };
+      }
+    }
+
+    // Si estamos en entorno de desarrollo con TypeScript y existe el .ts
+    const tsCandidate = path.join(currentDir, "dc-control-daemon-hub.ts");
+    if (fs.existsSync(tsCandidate)) {
+      return {
+        command: process.execPath,
+        args: ["--no-warnings", "--loader", "ts-node/esm", tsCandidate],
+      };
+    }
+
+    return null;
+  }
+
   /**
    * Garantiza que el Daemon esté corriendo:
    * 1. Si ya responde, retorna true de inmediato.
@@ -60,11 +92,37 @@ export class DcSupervisorLauncher {
     // Limpiar restos huérfanos si el daemon murió abruptamente
     this.cleanupOrphanedFiles();
 
-    // Determinar la ruta del script del daemon compilado o tsx/node
-    const script = this.daemonScriptPath ?? path.join(__dirname, "dc-control-daemon-hub.js");
+    // Determinar comando y script de arranque
+    let launchTarget = this.resolveDaemonScript();
+
+    // Si no se encontró un .js existente, creamos el entrypoint JS canónico en runtimeDir
+    if (!launchTarget) {
+      const canonical = getCanonicalDcSupervisorPaths();
+      const entryFile = path.join(canonical.runtimeDir, "daemon-entry.mjs");
+      const compiledHub = path.join(process.cwd(), ".test-build", "src", "features", "dc-control", "core", "dc-control-daemon-hub.js");
+      
+      const fileToImport = fs.existsSync(compiledHub) ? compiledHub : path.join(currentDir, "dc-control-daemon-hub.js");
+      const content = `import { DcControlDaemonHub } from ${JSON.stringify(fileToImport)};
+const daemon = new DcControlDaemonHub();
+daemon.start().catch((err) => {
+  process.stderr.write("[dc-control-daemon] Error: " + err.message + "\\n");
+  process.exit(1);
+});
+`;
+      try {
+        fs.writeFileSync(entryFile, content, "utf-8");
+        launchTarget = { command: process.execPath, args: [entryFile] };
+      } catch {
+        /* best-effort */
+      }
+    }
+
+    if (!launchTarget) {
+      return false;
+    }
 
     try {
-      const child = spawn(process.execPath, [script], {
+      const child = spawn(launchTarget.command, launchTarget.args, {
         detached: true,
         stdio: "ignore",
         env: {

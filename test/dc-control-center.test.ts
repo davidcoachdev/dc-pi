@@ -190,6 +190,7 @@ test("DcControlCenterPanel: interfaz Central con Decisiones, Tareas, Resumen, Ac
     dummyTheme,
     () => { doneCalled = true; },
     () => { renderRequested = true; },
+    true, // modo simulado explícito para validar fidelidad visual de los componentes
   );
 
   // Verificamos render inicial en pestaña 1 (Central / Worktrees)
