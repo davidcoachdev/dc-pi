@@ -154,13 +154,27 @@ export class DcSuperAgentsSidebarCard implements Component {
     );
 
     if (runningLabs.length > 0) {
-      for (const lab of runningLabs.slice(0, 4)) {
-        const shortName = lab.projectName.length > 18 ? lab.projectName.slice(0, 17) + "…" : lab.projectName;
-        const currentBadge = lab.isCurrent ? " (este)" : "";
+      for (const lab of runningLabs.slice(0, 5)) {
+        const glyph = lab.role.startsWith("super_agent") || lab.role === "worker"
+          ? yellowBright("🤖")
+          : lab.osState === "stopped"
+            ? dim("⏸")
+            : greenBright("●");
+
+        const statusTag = lab.osState === "stopped"
+          ? dim("[suspendido]")
+          : lab.role.startsWith("super_agent")
+            ? yellowBright(`[${lab.role.replace("super_agent_", "#")}]`)
+            : dim(`PID ${lab.pid}`);
+
+        const nameDisplay = lab.displayLabel.length > 18
+          ? lab.displayLabel.slice(0, 17) + "…"
+          : lab.displayLabel;
+
         rows.push(
           new DcJustifiedRow(
-            `    ${greenBright("●")} ${bloodWhite(shortName + currentBadge)}`,
-            `${dim(`PID ${lab.pid}`)} `
+            `    ${glyph} ${bloodWhite(nameDisplay)}`,
+            `${statusTag} `
           )
         );
       }
