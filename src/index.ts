@@ -77,6 +77,7 @@ import dcPtcExtension from "./features/dc-ptc/index.ts";
 import dcApprovalExtension from "./features/dc-approval/index.ts";
 import dcIceExtension from "./features/dc-ice/index.ts";
 import dcTakeoverExtension from "./features/dc-takeover/index.ts";
+import dcControlSupervisorExtension from "./features/dc-control/index.ts";
 
 export const profileDuelExtension = dcFaceExtension;
 export const dcFacesExtension = dcFaceExtension;
@@ -137,6 +138,7 @@ export {
   dcApprovalExtension,
   dcIceExtension,
   dcTakeoverExtension,
+  dcControlSupervisorExtension,
 };
 
 export * from "./features/dc-engram/index.ts";
@@ -166,6 +168,7 @@ export * from "./features/dc-ptc/index.ts";
 export * from "./features/dc-approval/index.ts";
 export * from "./features/dc-ice/index.ts";
 export * from "./features/dc-takeover/index.ts";
+export * from "./features/dc-control/index.ts";
 
 /**
  * Unified DC Studio Extension.
@@ -227,6 +230,7 @@ export function dcStudioExtension(pi: ExtensionAPI, ctx?: ExtensionContext): voi
     dcApprovalExtension,
     dcIceExtension,
     dcTakeoverExtension,
+    dcControlSupervisorExtension,
     (api) => dcDialogsExtension(api, ctx),
   ];
 
