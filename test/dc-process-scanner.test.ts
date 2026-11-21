@@ -11,5 +11,10 @@ test("scanRunningPiProcesses detecta el proceso actual de Node/Pi o retorna arra
     assert.equal(typeof p.cwd, "string");
     assert.equal(typeof p.projectName, "string");
     assert.equal(typeof p.isCurrent, "boolean");
+    assert.ok(["orchestrator", "super_agent_86", "super_agent_99", "worker"].includes(p.role));
+    assert.equal(typeof p.displayLabel, "string");
+    if (p.osState) {
+      assert.ok(["running", "sleeping", "stopped", "zombie"].includes(p.osState));
+    }
   }
 });
