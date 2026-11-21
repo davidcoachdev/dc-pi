@@ -3,6 +3,7 @@ import * as path from "node:path";
 import * as os from "node:os";
 import * as net from "node:net";
 import { spawn } from "node:child_process";
+import { getCanonicalDcSupervisorPaths } from "./dc-supervisor-paths.ts";
 
 export interface LauncherOptions {
   socketPath?: string;
@@ -16,8 +17,9 @@ export class DcSupervisorLauncher {
   private daemonScriptPath?: string;
 
   constructor(options?: LauncherOptions) {
-    this.socketPath = options?.socketPath ?? path.join(os.tmpdir(), "dc-supervisor.sock");
-    this.pidPath = options?.pidPath ?? path.join(os.tmpdir(), "dc-supervisor.pid");
+    const canonical = getCanonicalDcSupervisorPaths();
+    this.socketPath = options?.socketPath ?? canonical.socketPath;
+    this.pidPath = options?.pidPath ?? canonical.pidPath;
     this.daemonScriptPath = options?.daemonScriptPath;
   }
 
