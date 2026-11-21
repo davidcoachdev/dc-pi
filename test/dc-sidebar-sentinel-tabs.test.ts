@@ -9,7 +9,7 @@ import dcSidebarExtension from "../src/features/dc-sidebar/dc-sidebar.ts";
 import { writeSidebarPrefs, readSidebarPrefs } from "../src/features/dc-sidebar/core/dc-sidebar-prefs.ts";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
-test("DcSidebarTabs renders all 7 sentinel tabs and allows switching", () => {
+test("DcSidebarTabs renders all 8 sentinel tabs and allows switching", () => {
   let switched = "";
   const tabs = new DcSidebarTabs(undefined, (id) => {
     switched = id;
@@ -28,13 +28,14 @@ test("DcSidebarTabs renders all 7 sentinel tabs and allows switching", () => {
   assert.ok(lines[0].includes("[5]"));
   assert.ok(lines[0].includes("[6]"));
   assert.ok(lines[0].includes("[7]"));
+  assert.ok(lines[0].includes("[8]"));
 
   tabs.setActiveTab("ctrl");
   assert.equal(tabs.getActiveTab(), "ctrl");
   assert.equal(switched, "ctrl");
 
   const linesCtrl = tabs.render(50);
-  assert.ok(linesCtrl[0].includes("[ 3 CTRL ]"));
+  assert.ok(linesCtrl[0].includes("[ 4 CTRL ]"));
   assert.ok(!linesCtrl[0].includes("MAIN"));
 });
 
@@ -55,27 +56,39 @@ test("DcSidebarPagedBody routes views according to active tab", () => {
   pagedBody.setTab("work");
   assert.equal(pagedBody.getActiveTab(), "work");
   const workLines = pagedBody.render(50);
-  assert.ok(workLines.some((l) => l.includes("Quotas:") || l.includes("Flota") || l.includes("TODO")));
+  assert.ok(workLines.some((l) => l.includes("Quota:") || l.includes("TODO")));
 
-  // Tab 3: CTRL (Torre de Control unificada)
+  // Tab 3: TAXIS (Flota de Taxis dedicada)
+  pagedBody.setTab("taxis");
+  assert.equal(pagedBody.getActiveTab(), "taxis");
+  const taxisLines = pagedBody.render(50);
+  assert.ok(taxisLines.some((l) => l.includes("Taxis:") || l.includes("Flota")));
+
+  // Tab 4: CTRL (Torre de Control unificada)
   pagedBody.setTab("ctrl");
   assert.equal(pagedBody.getActiveTab(), "ctrl");
   const ctrlLines = pagedBody.render(50);
   assert.ok(ctrlLines.some((l) => l.includes("SUPER-AGENTS") || l.includes("DC-CONTROL") || l.includes("DC-Control")));
 
-  // Tab 4: TREE (Explorador de Archivos)
+  // Tab 5: MOBILE (dc-mobile)
+  pagedBody.setTab("mobile");
+  assert.equal(pagedBody.getActiveTab(), "mobile");
+  const mobileLines = pagedBody.render(50);
+  assert.ok(mobileLines.some((l) => l.includes("MOBILE") || l.includes("Dispositivos") || l.includes("ADB")));
+
+  // Tab 6: TREE (Explorador de Archivos)
   pagedBody.setTab("tree");
   assert.equal(pagedBody.getActiveTab(), "tree");
   const treeLines = pagedBody.render(50);
   assert.ok(treeLines.some((l) => l.includes("Explorador")));
 
-  // Tab 5: MEM (Engram, Centinela)
+  // Tab 7: MEM (Engram, Centinela)
   pagedBody.setTab("mem");
   assert.equal(pagedBody.getActiveTab(), "mem");
   const memLines = pagedBody.render(50);
   assert.ok(memLines.some((l) => l.includes("Engram:") || l.includes("Centinela:")));
 
-  // Tab 6: SYS (Profile, MCP)
+  // Tab 8: SYS (Profile, MCP)
   pagedBody.setTab("sys");
   assert.equal(pagedBody.getActiveTab(), "sys");
   const sysLines = pagedBody.render(50);
@@ -107,21 +120,22 @@ test("framedRail incorporates fixed DcSidebarTabs at the top without displacing 
   assert.equal(innerStack.entries[2].grow, 0);       // Footer fijo
 });
 
-test("findSidebarTab resolves tabs 1 to 7 and safely returns undefined for tabs 8 to 9", () => {
+test("findSidebarTab resolves tabs 1 to 8 and safely returns undefined for tab 9", () => {
   assert.equal(findSidebarTab(1)?.id, "main");
   assert.equal(findSidebarTab(2)?.id, "work");
-  assert.equal(findSidebarTab(3)?.id, "ctrl");
-  assert.equal(findSidebarTab(4)?.id, "mobile");
-  assert.equal(findSidebarTab(5)?.id, "tree");
-  assert.equal(findSidebarTab(6)?.id, "mem");
-  assert.equal(findSidebarTab(7)?.id, "sys");
+  assert.equal(findSidebarTab(3)?.id, "taxis");
+  assert.equal(findSidebarTab(4)?.id, "ctrl");
+  assert.equal(findSidebarTab(5)?.id, "mobile");
+  assert.equal(findSidebarTab(6)?.id, "tree");
+  assert.equal(findSidebarTab(7)?.id, "mem");
+  assert.equal(findSidebarTab(8)?.id, "sys");
 
-  // Tabs 8..9 aún no existen en el catálogo base de 7 tabs
-  assert.equal(findSidebarTab(8), undefined);
+  // Tab 9 aún no existe en el catálogo base de 8 tabs
   assert.equal(findSidebarTab(9), undefined);
 
   // Búsqueda por id o label
   assert.equal(findSidebarTab("CTRL")?.id, "ctrl");
+  assert.equal(findSidebarTab("taxis")?.id, "taxis");
   assert.equal(findSidebarTab("tree")?.id, "tree");
 });
 
@@ -135,30 +149,25 @@ test("S1: bare key, ordinal position and Alt+N shortcut all name the same tab", 
     assert.equal(findSidebarTab(String(ordinal))?.id, tab.id, `string ${ordinal} resolves ${tab.id}`);
   });
 
-  // La pestaña MOBILE ocupa el slot 4, entre CTRL y TREE.
+  // La pestaña MOBILE ocupa el slot 5, entre CTRL y TREE.
   const ids = SIDEBAR_TABS.map((tab) => tab.id);
-  assert.equal(ids.indexOf("mobile"), 3);
+  assert.equal(ids.indexOf("mobile"), 4);
   assert.equal(ids[ids.indexOf("mobile") - 1], "ctrl");
   assert.equal(ids[ids.indexOf("mobile") + 1], "tree");
-  assert.equal(SIDEBAR_TABS[3].label, "MOBILE");
+  assert.equal(SIDEBAR_TABS[4].label, "MOBILE");
 });
 
 test("findSidebarTab dynamically supports adding tabs up to 9", () => {
   const customTabs = new DcSidebarTabs();
   customTabs.setTabs([
     ...SIDEBAR_TABS,
-    { id: "logs", key: "8", label: "LOGS" },
     { id: "network", key: "9", label: "NET" },
   ]);
-
-  const tab8 = findSidebarTab(8, customTabs);
-  assert.ok(tab8);
-  assert.equal(tab8?.id, "logs");
-  assert.equal(tab8?.label, "LOGS");
 
   const tab9 = findSidebarTab(9, customTabs);
   assert.ok(tab9);
   assert.equal(tab9?.id, "network");
+  assert.equal(tab9?.label, "NET");
 });
 
 test("switchSidebarTab switches active tab, updates preferences and notifies", () => {
@@ -204,12 +213,12 @@ test("switchSidebarTab unhides sidebar when navigating directly if terminal widt
     requestRender() {},
   };
 
-  const res = switchSidebarTab(3, mockCtx, mockTuiWide);
+  const res = switchSidebarTab(4, mockCtx, mockTuiWide);
   assert.equal(res.success, true);
   assert.equal(res.tab?.id, "ctrl");
   assert.equal(readSidebarPrefs().hidden, false);
   assert.equal(readSidebarPrefs().activeTab, "ctrl");
-  assert.ok(notifications.some((n) => n.includes("DC Sidebar visible: [3 CTRL]")));
+  assert.ok(notifications.some((n) => n.includes("DC Sidebar visible: [4 CTRL]")));
 });
 
 test("switchSidebarTab blocks unhiding if terminal width is insufficient", () => {
@@ -248,10 +257,10 @@ test("switchSidebarTab warns when target tab 1-9 is not available", () => {
     },
   };
 
-  const res = switchSidebarTab(8, mockCtx);
+  const res = switchSidebarTab(9, mockCtx);
   assert.equal(res.success, false);
   assert.equal(res.reason, "tab_not_found");
-  assert.ok(notifications.some((n) => n.includes("pestaña [8] no disponible")));
+  assert.ok(notifications.some((n) => n.includes("pestaña [9] no disponible")));
 });
 
 test("dcSidebarExtension registers alt+1 to alt+9 shortcuts and /dc-sidebar command", () => {

@@ -5,6 +5,8 @@ import {
   createStatusCard,
   createProjectStatusCard,
   createFleetQuotaCard,
+  createQuotaOnlyCard,
+  createTaxisOnlyCard,
   createMemoryVaultCard,
   createSystemCard,
 } from "../components/dc-sidebar-status-card.ts";
@@ -121,31 +123,36 @@ export class DcSidebarPagedBody implements Component {
       case "work": {
         // [2:WORK] Misiones y Capacidad: Tareas ODD + Cuotas de proveedores
         const todoCard = createTodoCard(this.tui, this.reqRender, { hideWhenEmpty: false });
-        const quotaCard = createFleetQuotaCard(this.reqRender);
+        const quotaCard = createQuotaOnlyCard(this.reqRender);
         return new DcPadding(new DcVStack([todoCard, quotaCard]), 0, 0, 1);
       }
+      case "taxis": {
+        // [3:TAXIS] Flota de Taxis dedicada: Unidades, estados, taller y consumo
+        const taxisCard = createTaxisOnlyCard(this.reqRender);
+        return new DcPadding(taxisCard, 0, 0, 1);
+      }
       case "ctrl": {
-        // [3:CTRL] Torre de Control Unificada: Super-Agentes (#86) + Daemon Hub multisesión y Labs
+        // [4:CTRL] Torre de Control Unificada: Super-Agentes (#86) + Daemon Hub multisesión y Labs
         const ctrlCard = createSuperAgentsSidebarCard(this.reqRender);
         return new DcPadding(ctrlCard, 0, 0, 1);
       }
       case "mobile": {
-        // [4:MOBILE] Supervisor dc-mobile: conexión, bitácora y visor
+        // [5:MOBILE] Supervisor dc-mobile: conexión, bitácora y visor
         const mobileCard = createDcMobileSidebarCard(this.reqRender);
         return new DcPadding(mobileCard, 0, 0, 1);
       }
       case "tree": {
-        // [5:TREE] Explorador de Archivos del Proyecto
+        // [6:TREE] Explorador de Archivos del Proyecto
         const treeCard = createProjectTreeCard(this.projectRoot, undefined, this.reqRender);
         return new DcPadding(treeCard, 0, 0, 1);
       }
       case "mem": {
-        // [6:MEM] Memoria Soberana: Engram Daemon + Centinela
+        // [7:MEM] Memoria Soberana: Engram Daemon + Centinela
         const memCard = createMemoryVaultCard(this.reqRender);
         return new DcPadding(memCard, 0, 0, 1);
       }
       case "sys": {
-        // [7:SYS] Perfiles de Modelo + MCP Servers
+        // [8:SYS] Perfiles de Modelo + MCP Servers
         const sysCard = createSystemCard(this.reqRender);
         return new DcPadding(sysCard, 0, 0, 1);
       }

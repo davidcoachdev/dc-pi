@@ -99,17 +99,18 @@ All extensions are unified under the canonical `dcStudioExtension` entrypoint.
 
 ### Sidebar Tabs / Pestañas del Sidebar
 
-`Alt+1..7` or `/dc-sidebar <n>` jump straight to a tab; both resolve to the same tab, and the rail is 50 columns wide with text-only rendering.
+`Alt+1..8` or `/dc-sidebar <n>` jump straight to a tab; both resolve to the same tab, and the rail is 50 columns wide with text-only rendering.
 
 | Key | Tab | Content |
 | :--- | :--- | :--- |
 | `1` | MAIN | Project, context and ephemeral subagents & active jobs |
 | `2` | WORK | ODD missions, tasks todo and provider quota capacity |
-| `3` | CTRL | Unified DC-Control Tower: Super-Agents (#86), Daemon Hub & live Pi labs |
-| `4` | MOBILE | dc-mobile supervisor: devices, live activity log, `[Reconectar]` / `[Apagar vínculo]` / `[Abrir visor]` |
-| `5` | TREE | Project file explorer |
-| `6` | MEM | Engram daemon and memory sentinel |
-| `7` | SYS | Model profiles and MCP servers |
+| `3` | TAXIS | Dedicated taxi fleet: available units, busy, workshop and token cost |
+| `4` | CTRL | Unified DC-Control Tower: Super-Agents (#86), Daemon Hub & live Pi labs |
+| `5` | MOBILE | dc-mobile supervisor: devices, live activity log, `[Reconectar]` / `[Apagar vínculo]` / `[Abrir visor]` |
+| `6` | TREE | Project file explorer |
+| `7` | MEM | Engram daemon and memory sentinel |
+| `8` | SYS | Model profiles and MCP servers |
 
 `[Abrir visor]` streams the device screen at about one frame per second from `adb` through a detached child process, so the TUI itself never runs adb or a timer. It needs a connected device in `device` state; when a capture fails, the viewer window shows the reason in text instead of staying blank.
 

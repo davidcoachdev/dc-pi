@@ -5,11 +5,12 @@ import { readSidebarPrefs, writeSidebarPrefs } from "../core/dc-sidebar-prefs.ts
 export const SIDEBAR_TABS: readonly DcTabItem[] = [
   { id: "main", key: "1", label: "MAIN" },
   { id: "work", key: "2", label: "WORK" },
-  { id: "ctrl", key: "3", label: "CTRL" },
-  { id: "mobile", key: "4", label: "MOBILE" },
-  { id: "tree", key: "5", label: "TREE" },
-  { id: "mem", key: "6", label: "MEM" },
-  { id: "sys", key: "7", label: "SYS" },
+  { id: "taxis", key: "3", label: "TAXIS" },
+  { id: "ctrl", key: "4", label: "CTRL" },
+  { id: "mobile", key: "5", label: "MOBILE" },
+  { id: "tree", key: "6", label: "TREE" },
+  { id: "mem", key: "7", label: "MEM" },
+  { id: "sys", key: "8", label: "SYS" },
 ];
 
 export class DcSidebarTabs implements Component {
