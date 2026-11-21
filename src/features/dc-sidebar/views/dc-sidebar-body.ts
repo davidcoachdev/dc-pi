@@ -118,14 +118,14 @@ export class DcSidebarPagedBody implements Component {
 
   private buildTabComponent(tabId: string): Component {
     switch (tabId) {
-      case "fleet": {
-        // [2:FLEET] Quotas de proveedores, Flota de Taxis y Subagentes efímeros
-        const fleetCard = createFleetQuotaCard(this.reqRender);
-        const agentsCard = createAgentsCard(this.tui, this.reqRender, { hideWhenEmpty: false });
-        return new DcPadding(new DcVStack([fleetCard, agentsCard]), 0, 0, 1);
+      case "work": {
+        // [2:WORK] Misiones y Capacidad: Tareas ODD + Cuotas de proveedores
+        const todoCard = createTodoCard(this.tui, this.reqRender, { hideWhenEmpty: false });
+        const quotaCard = createFleetQuotaCard(this.reqRender);
+        return new DcPadding(new DcVStack([todoCard, quotaCard]), 0, 0, 1);
       }
       case "ctrl": {
-        // [3:CTRL] Oficina Central de Super-Agentes (Agente #86, Misiones ODD, Binarios y Botones)
+        // [3:CTRL] Torre de Control Unificada: Super-Agentes (#86) + Daemon Hub multisesión y Labs
         const ctrlCard = createSuperAgentsSidebarCard(this.reqRender);
         return new DcPadding(ctrlCard, 0, 0, 1);
       }
@@ -151,11 +151,11 @@ export class DcSidebarPagedBody implements Component {
       }
       case "main":
       default: {
-        // [1:MAIN] Dashboard Central: Proyecto + Contexto + Todos
+        // [1:MAIN] Orquestador Local: Proyecto + Contexto + Subagentes efímeros & Jobs
         const projectCard = createProjectStatusCard(this.reqRender);
         const contextCard = createContextCard();
-        const todoCard = createTodoCard(this.tui, this.reqRender, { hideWhenEmpty: true });
-        return new DcPadding(new DcVStack([projectCard, contextCard, todoCard]), 0, 0, 1);
+        const agentsCard = createAgentsCard(this.tui, this.reqRender, { hideWhenEmpty: false });
+        return new DcPadding(new DcVStack([projectCard, contextCard, agentsCard]), 0, 0, 1);
       }
     }
   }
