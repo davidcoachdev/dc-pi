@@ -205,6 +205,27 @@ export class DcSupervisorIpcServer {
         break;
       }
 
+      case "query_sessions": {
+        const activeList = this.registry.listSessions({ onlyActive: true }).map((s) => ({
+          sessionId: s.sessionId,
+          pid: s.pid,
+          cwd: s.cwd,
+          projectName: s.projectName,
+          model: s.model,
+          state: s.state,
+          role: (s.metadata?.role as string) || "orchestrator",
+          lastActivityAt: s.lastActivityAt,
+        }));
+
+        const report: SupervisorToClientMessage = {
+          type: "sessions_report",
+          sessions: activeList,
+          timestamp: Date.now(),
+        };
+        socket.write(JSON.stringify(report) + "\n");
+        break;
+      }
+
       case "session_offline": {
         this.registry.markTerminated(msg.sessionId, msg.reason);
         this.clientSockets.delete(msg.sessionId);

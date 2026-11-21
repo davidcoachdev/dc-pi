@@ -15,6 +15,7 @@ import { getSidebarContext } from "../dc-sidebar.ts";
 import { dcSupervisorBus } from "../../dc-control/core/dc-supervisor-bus.ts";
 import { DcSupervisorLauncher } from "../../dc-control/core/dc-supervisor-launcher.ts";
 import { getCanonicalDcSupervisorPaths } from "../../dc-control/core/dc-supervisor-paths.ts";
+import { scanRunningPiProcesses } from "../../dc-control/core/dc-process-scanner.ts";
 
 const execFileAsync = promisify(execFile);
 
@@ -142,30 +143,8 @@ export class DcSuperAgentsSidebarCard implements Component {
     );
 
     // ── 2. SESIONES Y LABS ACTIVOS EN TIEMPO REAL ──
-    const sessionsDir = path.join(os.homedir(), ".pi", "agent", "sessions");
-    let activeLabsCount = 0;
-    const recentLabs: Array<{ name: string; ageStr: string }> = [];
-
-    if (fs.existsSync(sessionsDir)) {
-      try {
-        const entries = fs.readdirSync(sessionsDir);
-        const now = Date.now();
-        for (const ent of entries) {
-          if (ent.startsWith("--") && ent.endsWith("--")) {
-            const fullDir = path.join(sessionsDir, ent);
-            try {
-              const stat = fs.statSync(fullDir);
-              if (now - stat.mtimeMs < 10 * 60 * 1000) {
-                activeLabsCount++;
-                const cleanName = ent.replace(/^--home-[^-]+-/, "").replace(/--$/, "").replace(/-/g, "/");
-                const minsAgo = Math.round((now - stat.mtimeMs) / 60000);
-                recentLabs.push({ name: cleanName || ent, ageStr: minsAgo === 0 ? "activo" : `${minsAgo}m` });
-              }
-            } catch {}
-          }
-        }
-      } catch {}
-    }
+    const runningLabs = scanRunningPiProcesses();
+    const activeLabsCount = runningLabs.length;
 
     rows.push(
       new DcJustifiedRow(
@@ -174,16 +153,24 @@ export class DcSuperAgentsSidebarCard implements Component {
       )
     );
 
-    if (recentLabs.length > 0) {
-      for (const lab of recentLabs.slice(0, 3)) {
-        const shortName = lab.name.length > 20 ? lab.name.slice(0, 19) + "…" : lab.name;
+    if (runningLabs.length > 0) {
+      for (const lab of runningLabs.slice(0, 4)) {
+        const shortName = lab.projectName.length > 18 ? lab.projectName.slice(0, 17) + "…" : lab.projectName;
+        const currentBadge = lab.isCurrent ? " (este)" : "";
         rows.push(
           new DcJustifiedRow(
-            `    ${greenBright("●")} ${bloodWhite(shortName)}`,
-            `${dim(lab.ageStr)} `
+            `    ${greenBright("●")} ${bloodWhite(shortName + currentBadge)}`,
+            `${dim(`PID ${lab.pid}`)} `
           )
         );
       }
+    } else {
+      rows.push(
+        new DcJustifiedRow(
+          `    ${dim("Sin otras sesiones detectadas")}`,
+          `${dim("[idle]")} `
+        )
+      );
     }
 
     rows.push(new DcJustifiedRow(sep, ""));

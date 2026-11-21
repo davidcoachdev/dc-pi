@@ -155,3 +155,46 @@ test("DcSupervisorIPC - Comunicación entre pares (Peer Messaging) coordinada po
   peerB.disconnect();
   await server.stop();
 });
+
+test("DcSupervisorIPC - Cliente consulta y recibe sesiones activas conectadas en vivo", async () => {
+  const socketPath = path.join(os.tmpdir(), `test-dc-sup-${Date.now()}-${Math.random().toString(36).slice(2)}.sock`);
+  const registry = new DcSessionRegistry();
+  const server = new DcSupervisorIpcServer({ socketPath, registry });
+
+  await server.start();
+
+  const client1 = new DcSupervisorIpcClient({
+    sessionId: "live-session-alpha",
+    role: "orchestrator",
+    socketPath,
+    cwd: "/home/dc-studio/dc-lab/lab-alpha",
+    projectName: "lab-alpha",
+  });
+
+  const client2 = new DcSupervisorIpcClient({
+    sessionId: "live-session-beta",
+    role: "worker",
+    socketPath,
+    cwd: "/home/dc-studio/dc-lab/lab-beta",
+    projectName: "lab-beta",
+  });
+
+  await client1.connect();
+  await client2.connect();
+  await new Promise((r) => setTimeout(r, 60));
+
+  const list = await client1.querySessions();
+  assert.ok(Array.isArray(list));
+  assert.equal(list.length, 2);
+
+  const alpha = list.find((s) => s.sessionId === "live-session-alpha");
+  const beta = list.find((s) => s.sessionId === "live-session-beta");
+  assert.ok(alpha);
+  assert.equal(alpha?.projectName, "lab-alpha");
+  assert.ok(beta);
+  assert.equal(beta?.projectName, "lab-beta");
+
+  client1.disconnect();
+  client2.disconnect();
+  await server.stop();
+});
