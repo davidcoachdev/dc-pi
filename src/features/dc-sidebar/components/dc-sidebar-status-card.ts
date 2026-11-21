@@ -964,7 +964,118 @@ export function createProjectStatusCard(requestRender?: () => void): DcSidebarCa
 }
 
 /**
- * Tarjeta dedicada de Flota de Taxis y Quotas de Proveedores para la pestaña FLEET
+ * Tarjeta dedicada de Quotas de Proveedores para la pestaña WORK o MAIN
+ */
+export function createQuotaOnlyCard(requestRender?: () => void): DcSidebarCard {
+  const reqRender = requestRender || (() => {});
+  const bold = (s: string) => `\x1b[1m${s}\x1b[22m`;
+
+  const quotaAccounts = getCachedAccountQuotas(reqRender);
+  const providerList = new QuotaProviderList(reqRender);
+  providerList.update(quotaAccounts);
+
+  class LiveQuotaCollapsible extends DcCollapsible {
+    render(width: number) {
+      const latestAccounts = getCachedAccountQuotas(reqRender);
+      providerList.update(latestAccounts);
+      const primaryCollapsed = latestAccounts[0]?.collapsedSummary ?? "ac06-100%-100%";
+      this.options.collapsedInfo = bloodWhite(bold(primaryCollapsed));
+      return super.render(width);
+    }
+  }
+
+  const quotaCollapsible = new LiveQuotaCollapsible({
+    title: `🧮 ${bloodBright(bold("Quota:"))}`,
+    collapsedInfo: bloodWhite(bold(quotaAccounts[0]?.collapsedSummary ?? "ac06-100%-100%")),
+    titleRight: dim("[↗]"),
+    onTitleRightClick: () => {
+      const ctx = getSidebarContext();
+      if (ctx) {
+        void openQuotaViewer(ctx);
+      }
+    },
+    expanded: true,
+    children: [
+      providerList,
+      new DcJustifiedRow(
+        `    ⚙️ ${dim("Gestor /quota")}`, 
+        `${dim("[abrir ↗]")} `,
+        () => {
+          const ctx = getSidebarContext();
+          if (ctx) {
+            void openQuotaViewer(ctx);
+          }
+        }
+      )
+    ],
+    requestRender: reqRender
+  });
+
+  return new DcSidebarCard({
+    glyph: "🧮 ",
+    title: "Cuotas de Proveedores",
+    content: new DcVStack([quotaCollapsible]),
+    paddingX: 1,
+  });
+}
+
+/**
+ * Tarjeta dedicada exclusivamente a la Flota de Taxis para la pestaña TAXIS
+ */
+export function createTaxisOnlyCard(requestRender?: () => void): DcSidebarCard {
+  const reqRender = requestRender || (() => {});
+  const bold = (s: string) => `\x1b[1m${s}\x1b[22m`;
+
+  const initialFleet = getSidebarTaxiFleet();
+  const taxiUnitList = new TaxiUnitList(reqRender);
+  taxiUnitList.update(initialFleet.units);
+
+  class LiveTaxisCollapsible extends DcCollapsible {
+    render(width: number) {
+      const latestFleet = getSidebarTaxiFleet();
+      taxiUnitList.update(latestFleet.units);
+      this.options.collapsedInfo = bloodWhite(bold(latestFleet.summaryText));
+      return super.render(width);
+    }
+  }
+
+  const taxisCollapsible = new LiveTaxisCollapsible({
+    title: `🚕 ${bloodBright(bold("Taxis:"))}`,
+    collapsedInfo: bloodWhite(bold(initialFleet.summaryText)),
+    titleRight: dim("[↗]"),
+    onTitleRightClick: () => {
+      const ctx = getSidebarContext();
+      if (ctx) {
+        void openTaxisViewer(ctx);
+      }
+    },
+    expanded: true,
+    children: [
+      taxiUnitList,
+      new DcJustifiedRow(
+        `    ⚙️ ${dim("Gestor /taxis")}`, 
+        `${dim("[abrir ↗]")} `,
+        () => {
+          const ctx = getSidebarContext();
+          if (ctx) {
+            void openTaxisViewer(ctx);
+          }
+        }
+      )
+    ],
+    requestRender: reqRender
+  });
+
+  return new DcSidebarCard({
+    glyph: "🚖 ",
+    title: "Flota de Taxis",
+    content: new DcVStack([taxisCollapsible]),
+    paddingX: 1,
+  });
+}
+
+/**
+ * Tarjeta dedicada de Flota de Taxis y Quotas de Proveedores (combinada por compatibilidad)
  */
 export function createFleetQuotaCard(requestRender?: () => void): DcSidebarCard {
   const reqRender = requestRender || (() => {});
