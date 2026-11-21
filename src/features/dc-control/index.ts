@@ -6,6 +6,7 @@ export * from "./core/dc-supervisor-ipc-server.ts";
 export * from "./core/dc-supervisor-ipc-client.ts";
 export * from "./core/dc-supervisor-launcher.ts";
 export * from "./core/dc-control-daemon-hub.ts";
+export * from "./core/dc-process-scanner.ts";
 export * from "./dc-control-lifecycle.ts";
 
 import { registerDcControlLifecycle } from "./dc-control-lifecycle.ts";

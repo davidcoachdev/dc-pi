@@ -43,6 +43,11 @@ export type ClientToSupervisorMessage =
       sessionId: string;
       reason?: string;
       timestamp: number;
+    }
+  | {
+      type: "query_sessions"; // Cliente consulta las sesiones activas en vivo
+      fromSessionId: string;
+      timestamp: number;
     };
 
 // Eventos y directivas que dc-control envía a las sesiones
@@ -72,5 +77,19 @@ export type SupervisorToClientMessage =
       type: "emergency_stop"; // Detención forzosa por cuelgue, cuota o directiva global
       sessionId: string;
       reason: string;
+      timestamp: number;
+    }
+  | {
+      type: "sessions_report"; // Lista de sesiones conectadas al socket en tiempo real
+      sessions: Array<{
+        sessionId: string;
+        pid?: number;
+        cwd: string;
+        projectName?: string;
+        model?: string;
+        state: SupervisorSessionState;
+        role?: string;
+        lastActivityAt: number;
+      }>;
       timestamp: number;
     };

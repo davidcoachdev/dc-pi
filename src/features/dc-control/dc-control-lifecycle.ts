@@ -63,6 +63,22 @@ export class DcControlSupervisorLifecycle {
   public getIpcClient(): DcSupervisorIpcClient | undefined {
     return this.client;
   }
+
+  public async queryConnectedSessions(): Promise<Array<{
+    sessionId: string;
+    pid?: number;
+    cwd: string;
+    projectName?: string;
+    model?: string;
+    state: any;
+    role?: string;
+    lastActivityAt: number;
+  }>> {
+    if (this.client?.connected) {
+      return this.client.querySessions();
+    }
+    return [];
+  }
 }
 
 export const dcControlSupervisorLifecycle = DcControlSupervisorLifecycle.getInstance();

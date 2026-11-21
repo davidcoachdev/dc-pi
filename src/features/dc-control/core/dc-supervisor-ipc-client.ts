@@ -135,6 +135,45 @@ export class DcSupervisorIpcClient extends EventEmitter {
     });
   }
 
+  public async querySessions(timeoutMs = 1500): Promise<Array<{
+    sessionId: string;
+    pid?: number;
+    cwd: string;
+    projectName?: string;
+    model?: string;
+    state: SupervisorSessionState;
+    role?: string;
+    lastActivityAt: number;
+  }>> {
+    if (!this.isConnected) {
+      return [];
+    }
+
+    return new Promise((resolve) => {
+      const onReport = (msg: any) => {
+        cleanup();
+        resolve(msg.sessions || []);
+      };
+
+      const timer = setTimeout(() => {
+        cleanup();
+        resolve([]);
+      }, timeoutMs);
+
+      const cleanup = () => {
+        clearTimeout(timer);
+        this.off("sessions_report", onReport);
+      };
+
+      this.once("sessions_report", onReport);
+      this.sendMessage({
+        type: "query_sessions",
+        fromSessionId: this.sessionId,
+        timestamp: Date.now(),
+      });
+    });
+  }
+
   private sendOnlineSignal(): void {
     this.sendMessage({
       type: "session_online",
@@ -160,6 +199,9 @@ export class DcSupervisorIpcClient extends EventEmitter {
     switch (msg.type) {
       case "ack_registration":
         this.emit("registered", msg);
+        break;
+      case "sessions_report":
+        this.emit("sessions_report", msg);
         break;
       case "takeover_decision":
         this.emit("takeover_decision", msg);
