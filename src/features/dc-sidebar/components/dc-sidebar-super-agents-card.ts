@@ -72,12 +72,9 @@ function parseOddTasksFromWorktree(worktreePath: string, taskSlug?: string): Arr
 }
 
 /**
- * Tarjeta de la Torre de Control (dc-control):
- * Jerarquía limpia y unificada de un vistazo:
- * 1. Daemon Hub multisesión (Online/Offline, PID real, botón de aseguramiento).
- * 2. Labs y Orquestadores activos en tiempo real.
- * 3. Misión y pipeline ODD del Super-Agente #86.
- * 4. Botones de acción directa (Revisar issues, abrir oficina modal).
+ * Tarjeta completa de la Torre de Control (dc-control):
+ * Reúne la supervisión multisesión en vivo y la oficina completa de Super-Agentes
+ * con máxima fidelidad técnica, sin amputar información.
  */
 export class DcSuperAgentsSidebarCard implements Component {
   private requestRender?: () => void;
@@ -132,12 +129,12 @@ export class DcSuperAgentsSidebarCard implements Component {
 
     const hubStatusBadge = hubRunning
       ? greenBright(`● ONLINE (PID ${hubPid})`)
-      : dim("○ APAGADO");
+      : dim("○ INACTIVO");
 
     rows.push(
       new DcJustifiedRow(
-        `  ${bloodSoft(bold("Daemon Hub:"))}`,
-        `${hubStatusBadge} `,
+        `  ${bloodSoft(bold("Daemon Hub:"))} ${hubStatusBadge}`,
+        hubRunning ? `${greenBright("[Listo]")} ` : `${bloodBright("[Iniciar ▶]")} `,
         () => {
           void this.launcher.ensureDaemonRunning().then(() => this.requestRender?.());
         }
@@ -191,16 +188,19 @@ export class DcSuperAgentsSidebarCard implements Component {
 
     rows.push(new DcJustifiedRow(sep, ""));
 
-    // ── 3. SUPER-AGENTE #86 (MISIÓN & ODD) ──
+    // ── 3. SUPER-AGENTE #86 (MISIÓN & ODD ROADMAP) ──
     const status = dcControlDaemonManager.getStatus();
     const dispatches = status.activeDispatches;
+    const isDaemonRunning = status.running;
     const isTunnelRunning = status.tunnelActive;
 
-    const tunnelStr = isTunnelRunning ? greenBright("✓ GH TÚNEL") : dim("○ SIN TÚNEL");
+    const daemonStatusStr = isDaemonRunning ? greenBright("● ACTIVO") : dim("○ DETENIDO");
+    const tunnelStatusStr = isTunnelRunning ? greenBright("✓ GH TÚNEL") : dim("○ SIN TÚNEL");
+
     rows.push(
       new DcJustifiedRow(
-        `  ${bloodSoft(bold("Super-Agente #86:"))}`,
-        `${tunnelStr} `
+        `  ${bloodSoft(bold("Daemon #86:"))} ${daemonStatusStr}`,
+        `${tunnelStatusStr} `
       )
     );
 
@@ -209,6 +209,12 @@ export class DcSuperAgentsSidebarCard implements Component {
         new DcJustifiedRow(
           `  ${dim("Misión actual:")}`,
           `${dim("en espera")} `
+        )
+      );
+      rows.push(
+        new DcJustifiedRow(
+          `  ${dim("↳ Escuchando issues en GitHub...")}`,
+          ""
         )
       );
     } else {
@@ -221,6 +227,14 @@ export class DcSuperAgentsSidebarCard implements Component {
         )
       );
 
+      const worktreeName = path.basename(active.worktreePath);
+      rows.push(
+        new DcJustifiedRow(
+          `    ${dim("Worktree:")} ${dim(worktreeName)}`,
+          `${yellowBright("[en curso]")} `
+        )
+      );
+
       const oddTasks = parseOddTasksFromWorktree(active.worktreePath, active.taskSlug);
       if (oddTasks.length > 0) {
         const doneSteps = oddTasks.filter((t) => t.status === "done").length;
@@ -230,20 +244,76 @@ export class DcSuperAgentsSidebarCard implements Component {
 
         rows.push(
           new DcJustifiedRow(
-            `    ${bloodSoft("Pipeline:")} ${bar}`,
+            `    ${bloodSoft("Pipeline ODD:")} ${bar}`,
             `${bloodBright(`${doneSteps}/${totalSteps}`)} `
           )
         );
+
+        for (const t of oddTasks.slice(0, 4)) {
+          let glyph = dim("○");
+          let badge = dim("[pend]");
+          if (t.status === "done") {
+            glyph = greenBright("✓");
+            badge = greenBright("[done]");
+          } else if (t.status === "in_progress") {
+            glyph = yellowBright("▶");
+            badge = yellowBright(bold("[work]"));
+          } else if (t.status === "failed") {
+            glyph = bloodBright("✗");
+            badge = bloodBright("[fail]");
+          }
+          const taskLabel = t.title.length > 20 ? t.title.slice(0, 19) + "…" : t.title;
+          rows.push(
+            new DcJustifiedRow(
+              `      ${glyph} ${dim(t.id + ":")} ${bloodWhite(taskLabel)}`,
+              `${badge} `
+            )
+          );
+        }
       }
     }
 
     rows.push(new DcJustifiedRow(sep, ""));
 
-    // ── 4. ACCIONES Y BOTONES DE CONTROL ──
+    // ── 4. DETALLES DE CONFIGURACIÓN & BINARIOS ──
+    const gh = cachedGhStatus;
+    const ghStr = gh?.ghInstalled ? greenBright("✓ INSTALADO") : bloodBright("✗ FALTANTE");
     rows.push(
       new DcJustifiedRow(
-        `  ${bloodWhite(bold("🏢 ABRIR OFICINA MODAL"))}`,
-        `${bloodBright("[Abrir ↗]")} `,
+        `  ${dim("GitHub CLI:")}`,
+        `${ghStr} `
+      )
+    );
+
+    const portStr = status.port ? `${status.port}` : "4545";
+    const receiverStr = status.running ? greenBright(`✓ 127.0.0.1:${portStr}`) : dim("○ Inactivo");
+    rows.push(
+      new DcJustifiedRow(
+        `  ${dim("Receptor Local:")}`,
+        `${receiverStr} `
+      )
+    );
+
+    rows.push(
+      new DcJustifiedRow(
+        `  ${dim("Arquetipo:")} ${bloodWhite("dc-odd-worker")}`,
+        `${dim("Thinking:")} ${yellowBright("High")} `
+      )
+    );
+    rows.push(
+      new DcJustifiedRow(
+        `  ${dim("Herramientas:")} ${bloodWhite("fs, terminal, tdd")}`,
+        `${dim("Flota:")} ${bloodBright("Taxis")} `
+      )
+    );
+
+    rows.push(new DcJustifiedRow(sep, ""));
+
+    // ── 5. BOTONES DE ACCIÓN DIRECTA ──
+    rows.push(
+      new DcJustifiedRow(
+        `  ${bloodWhite(bold("🏢 OFICINA DC-CONTROL"))}`,
+        `${bloodBright("[Abrir Oficina ↗]")} `,
         () => {
           const ctx = getSidebarContext();
           if (ctx) void openControlCenterModal(ctx);
@@ -251,20 +321,10 @@ export class DcSuperAgentsSidebarCard implements Component {
       )
     );
 
-    if (!hubRunning) {
+    if (isTunnelRunning) {
       rows.push(
         new DcJustifiedRow(
-          `  ${greenBright("▶ Iniciar Daemon Hub")}`,
-          `${greenBright("[Iniciar]")} `,
-          () => {
-            void this.launcher.ensureDaemonRunning().then(() => this.requestRender?.());
-          }
-        )
-      );
-    } else {
-      rows.push(
-        new DcJustifiedRow(
-          `  ${dim("⚡ Revisar Issues")}`,
+          `  ${bloodWhite("⚡ Revisar Issues GitHub")}`,
           `${bloodBright("[Check Issues]")} `,
           () => {
             const ctx = getSidebarContext();
@@ -277,6 +337,35 @@ export class DcSuperAgentsSidebarCard implements Component {
                 } catch {}
               }, 50);
             }
+          }
+        )
+      );
+    }
+
+    if (isDaemonRunning) {
+      rows.push(
+        new DcJustifiedRow(
+          `  ${dim("↻ Reiniciar Daemon #86")}`,
+          `${bloodBright("[Reiniciar]")} `,
+          () => {
+            const ctx = getSidebarContext();
+            if (ctx) {
+              void dcControlDaemonManager.stop().then(async () => {
+                await dcControlDaemonManager.start(ctx);
+                this.requestRender?.();
+              });
+            }
+          }
+        )
+      );
+    } else {
+      rows.push(
+        new DcJustifiedRow(
+          `  ${greenBright("▶ Iniciar Daemon #86 & Túnel")}`,
+          `${greenBright("[Iniciar]")} `,
+          () => {
+            const ctx = getSidebarContext();
+            if (ctx) void dcControlDaemonManager.start(ctx).then(() => this.requestRender?.());
           }
         )
       );

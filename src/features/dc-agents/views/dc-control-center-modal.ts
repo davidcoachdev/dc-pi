@@ -1,5 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
+import * as os from "node:os";
 import type { Theme, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import {
   Key, matchesKey, truncateToWidth, visibleWidth,
@@ -140,8 +141,8 @@ export class DcControlCenterPanel implements Component {
   private scrollOffset = 0;
   private readonly collabDb = getCollaboratorsDatabase();
 
-  // Estados interactivos para Central
-  private simulatedMode = true;
+  // Estados interactivos para Central (simulatedMode apagado por defecto para mostrar la realidad de la máquina)
+  private simulatedMode = false;
   private isInputMode = false;
   private inputText = "";
   private isHelpMode = false;
@@ -235,7 +236,10 @@ export class DcControlCenterPanel implements Component {
     private readonly theme: Theme,
     private readonly onDone: () => void,
     private readonly requestRender?: () => void,
-  ) {}
+    initialSimulatedMode = false,
+  ) {
+    this.simulatedMode = initialSimulatedMode;
+  }
 
   invalidate(): void {}
 
@@ -302,7 +306,7 @@ export class DcControlCenterPanel implements Component {
       }
     }
 
-    // Tareas en vivo de dispatches
+    // Tareas en vivo de dispatches o worktrees reales existentes
     const activeDispatches = dcIssueDispatcher.getActiveDispatches();
     for (const disp of activeDispatches) {
       items.push({
@@ -326,6 +330,44 @@ export class DcControlCenterPanel implements Component {
           },
         } as CentralTaskItem,
       });
+    }
+
+    // Si no hay dispatches en vuelo y no estamos en modo simulado, buscar worktrees en disco
+    if (!this.simulatedMode && items.filter((i) => i.kind === "task").length === 0) {
+      try {
+        const wtBase = path.join(os.homedir(), ".pi", "agent", "dc-studio", "agents", "worktrees");
+        if (fs.existsSync(wtBase)) {
+          const repos = fs.readdirSync(wtBase);
+          for (const repo of repos) {
+            const repoDir = path.join(wtBase, repo);
+            if (fs.statSync(repoDir).isDirectory()) {
+              const wts = fs.readdirSync(repoDir);
+              for (const wt of wts) {
+                const fullWt = path.join(repoDir, wt);
+                items.push({
+                  kind: "task",
+                  data: {
+                    id: `wt-${wt}`,
+                    taskNumber: items.length + 1,
+                    title: `${repo}/${wt}`,
+                    status: "in_progress",
+                    statusIcon: "▶",
+                    timeAgo: "worktree local",
+                    scopeText: `Worktree: ${fullWt}`,
+                    worktreePath: fullWt,
+                    branchName: wt,
+                    summaryCard: {
+                      estado: "Worktree persistente",
+                      subagente: "dc-super-agent",
+                      sugerido: "Worktree aislado en disco",
+                    },
+                  } as CentralTaskItem,
+                });
+              }
+            }
+          }
+        }
+      } catch {}
     }
 
     if (this.simulatedMode) {
@@ -1020,10 +1062,6 @@ export async function openControlCenterModal(ctx: ExtensionContext): Promise<voi
     maxHeight: 40,
     scrollable: false,
     showScrollbar: false,
-    footer: (theme) => ({
-      left: ` [1..3/Tab/←→] Pestaña   [↑/↓] Navegar   [a] Arreglar   [n] Descartar   [d] Mañana   [/] Escribir   [?] Ayuda`,
-      right: `[Esc Salir] `,
-    }),
     content: (done, theme, tui) => {
       panelRef = new DcControlCenterPanel(
         theme,
