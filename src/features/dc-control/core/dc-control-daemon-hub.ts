@@ -4,6 +4,7 @@ import * as os from "node:os";
 import { DcSessionRegistry } from "./dc-session-registry.ts";
 import { DcSupervisorIpcServer } from "./dc-supervisor-ipc-server.ts";
 import { DcSupervisorWatchdog } from "./dc-supervisor-watchdog.ts";
+import { getCanonicalDcSupervisorPaths } from "./dc-supervisor-paths.ts";
 
 export interface DaemonHubConfig {
   socketPath?: string;
@@ -21,8 +22,9 @@ export class DcControlDaemonHub {
   private isRunning = false;
 
   constructor(config?: DaemonHubConfig) {
-    this.socketPath = config?.socketPath ?? path.join(os.tmpdir(), "dc-supervisor.sock");
-    this.pidPath = config?.pidPath ?? path.join(os.tmpdir(), "dc-supervisor.pid");
+    const canonical = getCanonicalDcSupervisorPaths();
+    this.socketPath = config?.socketPath ?? canonical.socketPath;
+    this.pidPath = config?.pidPath ?? canonical.pidPath;
 
     this.registry = new DcSessionRegistry({
       sessionsBaseDir: config?.sessionsBaseDir,

@@ -5,6 +5,7 @@ import * as os from "node:os";
 import { dcSupervisorBus, type SupervisorSessionInfo } from "./dc-supervisor-bus.ts";
 import type { DcSessionRegistry } from "./dc-session-registry.ts";
 import type { ClientToSupervisorMessage, SupervisorToClientMessage } from "./dc-supervisor-ipc-protocol.ts";
+import { getCanonicalDcSupervisorPaths } from "./dc-supervisor-paths.ts";
 
 export interface IpcServerOptions {
   socketPath?: string;
@@ -19,7 +20,7 @@ export class DcSupervisorIpcServer {
   private isListening = false;
 
   constructor(options: IpcServerOptions) {
-    const defaultSocket = path.join(os.tmpdir(), "dc-supervisor.sock");
+    const defaultSocket = getCanonicalDcSupervisorPaths().socketPath;
     this.socketPath = options.socketPath ?? defaultSocket;
     this.registry = options.registry;
   }

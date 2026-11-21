@@ -2,6 +2,7 @@ import * as net from "node:net";
 import * as path from "node:path";
 import * as os from "node:os";
 import { EventEmitter } from "node:events";
+import { getCanonicalDcSupervisorPaths } from "./dc-supervisor-paths.ts";
 import type {
   ClientToSupervisorMessage,
   SupervisorToClientMessage,
@@ -33,7 +34,7 @@ export class DcSupervisorIpcClient extends EventEmitter {
     super();
     this.sessionId = options.sessionId;
     this.role = options.role ?? "orchestrator";
-    this.socketPath = options.socketPath ?? path.join(os.tmpdir(), "dc-supervisor.sock");
+    this.socketPath = options.socketPath ?? getCanonicalDcSupervisorPaths().socketPath;
     this.cwd = options.cwd ?? process.cwd();
     this.projectName = options.projectName ?? path.basename(this.cwd);
     this.model = options.model;

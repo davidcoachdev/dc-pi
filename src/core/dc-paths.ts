@@ -238,3 +238,30 @@ export function getDcTtsPaths(): DcTtsPaths {
   };
 }
 
+export interface DcControlPaths {
+  dir: string;
+  socket: string;
+  pid: string;
+}
+
+/**
+ * Rutas canónicas para el subsistema dc-control (supervisor multisesión).
+ * Ubicación centralizada en: ~/.pi/agent/dc-studio/control/
+ */
+export function getDcControlPaths(): DcControlPaths {
+  const dir = path.join(getDcStudioDir(), "control");
+  try {
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  } catch { /* best-effort */ }
+
+  const socket = process.env.DC_SUPERVISOR_SOCKET || path.join(dir, "supervisor.sock");
+  const pid = process.env.DC_SUPERVISOR_PID || path.join(dir, "supervisor.pid");
+
+  return {
+    dir,
+    socket,
+    pid,
+  };
+}
+
+
