@@ -303,9 +303,24 @@ export class DcChatMessengerPanel implements Component {
       return true;
     }
 
-    // Ctrl + Arriba / Ctrl + Abajo: Scrollear el área del chat
-    const isCtrlUp = data === "\x1b[1;5A" || data === "\x1bOA" || data === "\x1b[5~";
-    const isCtrlDown = data === "\x1b[1;5B" || data === "\x1bOB" || data === "\x1b[6~";
+    // Ctrl + Arriba / Ctrl + Abajo: Scrollear el área del chat (soporta múltiples emuladores y terminales)
+    const isCtrlUp =
+      matchesKey(data, "ctrl+up") ||
+      matchesKey(data, Key.ctrl("up")) ||
+      matchesKey(data, Key.pageUp) ||
+      data === "\x1b[1;5A" ||
+      data === "\x1b[5A" ||
+      data === "\x1bOa" ||
+      data === "\x1b[5~";
+
+    const isCtrlDown =
+      matchesKey(data, "ctrl+down") ||
+      matchesKey(data, Key.ctrl("down")) ||
+      matchesKey(data, Key.pageDown) ||
+      data === "\x1b[1;5B" ||
+      data === "\x1b[5B" ||
+      data === "\x1bOb" ||
+      data === "\x1b[6~";
 
     if (isCtrlUp) {
       this.autoScrollToBottom = false;
