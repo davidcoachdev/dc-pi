@@ -149,8 +149,11 @@ export class DcSuperAgentsSidebarCard implements Component {
     rows.push(
       new DcJustifiedRow(
         `  ${dim("Labs supervisados:")}`,
-        `${bloodBright(`${activeLabsCount} vivos`)} ${bloodBright("[↻]")} `,
+        `${bloodBright(`${activeLabsCount} vivos`)} ${bloodBright("[↻] ")}`,
         () => {
+          // Si el botón [↻] de Labs es presionado, regenerar cache de binarios y pedir re-render
+          cachedGhStatus = null;
+          void checkGhBinary().then(() => this.requestRender?.());
           this.requestRender?.();
         }
       )
@@ -353,12 +356,12 @@ export class DcSuperAgentsSidebarCard implements Component {
           `${bloodBright("[Reiniciar]")} `,
           () => {
             const ctx = getSidebarContext();
-            if (ctx) {
-              void dcControlDaemonManager.stop().then(async () => {
-                await dcControlDaemonManager.start(ctx);
-                this.requestRender?.();
-              });
-            }
+            void dcControlDaemonManager.stop().then(async () => {
+              await dcControlDaemonManager.start(ctx);
+              this.requestRender?.();
+              dcSupervisorBus.emit("session:state_changed", null as any, null as any);
+              setTimeout(() => this.requestRender?.(), 1000);
+            });
           }
         )
       );
@@ -369,15 +372,13 @@ export class DcSuperAgentsSidebarCard implements Component {
           `${greenBright("[Iniciar]")} `,
           () => {
             const ctx = getSidebarContext();
-            if (ctx) {
-              void dcControlDaemonManager.start(ctx).then(() => {
-                this.requestRender?.();
-                // Notificar en el bus para actualizar cualquier vista de supervisión
-                dcSupervisorBus.emit("session:state_changed", null as any, null as any);
-                // Si pasados unos instantes el worker ya inició proceso, refrescar de nuevo
-                setTimeout(() => this.requestRender?.(), 1000);
-              });
-            }
+            void dcControlDaemonManager.start(ctx).then(() => {
+              this.requestRender?.();
+              // Notificar en el bus para actualizar cualquier vista de supervisión
+              dcSupervisorBus.emit("session:state_changed", null as any, null as any);
+              // Si pasados unos instantes el worker ya inició proceso, refrescar de nuevo
+              setTimeout(() => this.requestRender?.(), 1000);
+            });
           }
         )
       );
