@@ -4,6 +4,8 @@ import {
   matchesKey,
   truncateToWidth,
   visibleWidth,
+  Markdown,
+  type MarkdownTheme,
   type Component,
   type TuiMouseEvent,
   type TuiMouseEventResult,
@@ -20,12 +22,12 @@ import { dcIssueDispatcher } from "../daemon/dc-issue-dispatcher.ts";
 /**
  * Panel interactivo tipo "WhatsApp / Messenger" para Super-Agentes:
  * - Panel Izquierdo: Lista de hilos/conversaciones (Issues, Terceros, Agentes) con conteo de no leídos.
- * - Panel Derecho: Historial de mensajes, réplicas citadas y respuestas del Super-Agente con scroll independiente.
+ * - Panel Derecho: Historial de mensajes con renderizado Markdown enriquecido, réplicas citadas y respuestas con scroll independiente.
  * - Caja de entrada inferior: Permite al usuario escribir directamente al Super-Agente y recibir respuesta en vivo.
  * - Navegación:
  *   - Flechas Izquierda / Derecha: Cambiar foco entre panel de hilos y panel de mensajes/input.
  *   - Flechas Arriba / Abajo: Cambiar de conversación / hilo seleccionado.
- *   - Ctrl + Flechas Arriba / Abajo: Scrollear el área del chat de mensajes.
+ *   - Ctrl + Flechas Arriba / Abajo (o Rueda del mouse / PageUp / PageDown): Scrollear el área del chat de mensajes.
  */
 export class DcChatMessengerPanel implements Component {
   private threads: ChatThread[] = [];
@@ -37,13 +39,53 @@ export class DcChatMessengerPanel implements Component {
   private chatScrollOffset = 0;
   private maxChatScroll = 0;
   private autoScrollToBottom = true;
+  private mdTheme: MarkdownTheme;
 
   constructor(
     private readonly theme: Theme,
     private readonly onClose: () => void,
     private readonly requestRender?: () => void,
   ) {
+    this.mdTheme = this.createMarkdownTheme(theme);
     this.refresh();
+  }
+
+  private createMarkdownTheme(theme: Theme): MarkdownTheme {
+    const fg = (color: string, s: string) => {
+      try {
+        if (theme && typeof theme.fg === "function") return theme.fg(color as any, s);
+      } catch {}
+      return s;
+    };
+    const bold = (s: string) => {
+      try {
+        if (theme && typeof theme.bold === "function") return theme.bold(s);
+      } catch {}
+      return `\x1b[1m${s}\x1b[22m`;
+    };
+
+    return {
+      heading: (s: string) => fg("accent", bold(s)),
+      bold: (s: string) => bold(s),
+      italic: (s: string) => `\x1b[3m${s}\x1b[23m`,
+      underline: (s: string) => `\x1b[4m${s}\x1b[24m`,
+      strikethrough: (s: string) => `\x1b[9m${s}\x1b[29m`,
+      code: (s: string) => `\x1b[38;2;250;204;21m${s}\x1b[0m`,
+      codeBlock: (s: string) => `\x1b[38;2;250;204;21m${s}\x1b[0m`,
+      codeBlockBorder: (s: string) => fg("dim", s),
+      listBullet: (s: string) => fg("accent", s),
+      quote: (s: string) => fg("dim", s),
+      quoteBorder: (s: string) => fg("dim", s),
+      hr: (s: string) => fg("border", s),
+      link: (s: string) => fg("accent", `\x1b[4m${s}\x1b[24m`),
+      linkUrl: (s: string) => fg("dim", s),
+    };
+  }
+
+  private renderMarkdown(rawText: string, width: number): string[] {
+    const safeW = Math.max(16, width);
+    const md = new Markdown(rawText || "", 0, 0, this.mdTheme);
+    return md.render(safeW);
   }
 
   private refresh(): void {
@@ -91,7 +133,6 @@ export class DcChatMessengerPanel implements Component {
     const lines: string[] = [];
 
     const bloodBright = (s: string) => `\x1b[38;2;255;51;51m${s}\x1b[0m`;
-    const bloodSoft = (s: string) => `\x1b[38;2;255;128;128m${s}\x1b[0m`;
     const greenBright = (s: string) => `\x1b[38;2;46;204;113m${s}\x1b[0m`;
     const yellowBright = (s: string) => `\x1b[38;2;250;204;21m${s}\x1b[0m`;
     const cyanBright = (s: string) => `\x1b[38;2;56;189;248m${s}\x1b[0m`;
@@ -103,7 +144,7 @@ export class DcChatMessengerPanel implements Component {
 
     // Calcular altura dinámica disponible basada en terminal o default 22 filas
     const termRows = (process.stdout?.rows && process.stdout.rows > 0) ? process.stdout.rows : 30;
-    // 80% de alto de pantalla menos márgenes del marco DcWindow (título, borde, footer, input)
+    // 80% de alto de pantalla menos márgenes del marco DcWindow
     const chatViewportHeight = Math.max(12, Math.min(35, Math.floor(termRows * 0.8) - 8));
 
     // --- COLUMNA IZQUIERDA (Hilos / Conversaciones) ---
@@ -133,7 +174,7 @@ export class DcChatMessengerPanel implements Component {
       leftLines.push("");
     }
 
-    // --- COLUMNA DERECHA (Historial de Mensajes del hilo activo) ---
+    // --- COLUMNA DERECHA (Historial de Mensajes del hilo activo con Markdown) ---
     const allRightLines: string[] = [];
     const activeThread = this.threads[this.selectedThreadIndex];
     const isChatFocused = this.activePanel === "chat";
@@ -160,6 +201,7 @@ export class DcChatMessengerPanel implements Component {
 
           allRightLines.push(senderTag);
 
+          // Cita previa si existe
           if (msg.quotedText) {
             const quoteLines = msg.quotedText.split("\n");
             for (const ql of quoteLines) {
@@ -167,16 +209,18 @@ export class DcChatMessengerPanel implements Component {
             }
           }
 
-          const inLines = this.wrapText(msg.incomingText, rightColW - 4);
-          for (const il of inLines) {
-            allRightLines.push(`  ${msg.isMalicious ? bloodBright(il) : il}`);
+          // Mensaje recibido renderizado con Markdown completo
+          const contentMdLines = this.renderMarkdown(msg.incomingText, rightColW - 4);
+          for (const ml of contentMdLines) {
+            allRightLines.push(`  ${msg.isMalicious ? bloodBright(ml) : ml}`);
           }
 
+          // Respuesta del agente si existe renderizada con Markdown
           if (msg.replyText) {
             allRightLines.push(`  ${greenBright("↳")} ${dim("Respuesta del Agente:")}`);
-            const repLines = this.wrapText(msg.replyText, rightColW - 6);
-            for (const rl of repLines) {
-              allRightLines.push(`    ${greenBright("┃")} ${rl}`);
+            const replyMdLines = this.renderMarkdown(msg.replyText, rightColW - 6);
+            for (const rml of replyMdLines) {
+              allRightLines.push(`    ${greenBright("┃")} ${rml}`);
             }
           }
           allRightLines.push("");
@@ -214,7 +258,6 @@ export class DcChatMessengerPanel implements Component {
       const lText = leftLines[r] ?? "";
       let rText = visibleRightLines[r] ?? "";
 
-      // Añadir indicador sutil de scroll en la primera fila de la derecha si hay overflow
       if (r === 0 && scrollInfo && rText) {
         rText = truncateToWidth(rText, rightColW - visibleWidth(scrollInfo), "") + scrollInfo;
       }
@@ -242,25 +285,6 @@ export class DcChatMessengerPanel implements Component {
     return lines;
   }
 
-  private wrapText(text: string, maxWidth: number): string[] {
-    const words = text.split(/\s+/);
-    const result: string[] = [];
-    let cur = "";
-
-    for (const word of words) {
-      if (!cur) {
-        cur = word;
-      } else if (visibleWidth(cur + " " + word) <= maxWidth) {
-        cur += " " + word;
-      } else {
-        result.push(cur);
-        cur = word;
-      }
-    }
-    if (cur) result.push(cur);
-    return result.length > 0 ? result : ["(vacío)"];
-  }
-
   handleInput(data: string): boolean | void {
     if (matchesKey(data, Key.escape)) {
       this.onClose();
@@ -280,9 +304,8 @@ export class DcChatMessengerPanel implements Component {
     }
 
     // Ctrl + Arriba / Ctrl + Abajo: Scrollear el área del chat
-    // Secuencias ANSI comunes en terminales para Ctrl+Up: \x1b[1;5A, \x1bOA; Ctrl+Down: \x1b[1;5B, \x1bOB
-    const isCtrlUp = data === "\x1b[1;5A" || data === "\x1bOA" || data === "\x1b[5~" /* PageUp fallback */;
-    const isCtrlDown = data === "\x1b[1;5B" || data === "\x1bOB" || data === "\x1b[6~" /* PageDown fallback */;
+    const isCtrlUp = data === "\x1b[1;5A" || data === "\x1bOA" || data === "\x1b[5~";
+    const isCtrlDown = data === "\x1b[1;5B" || data === "\x1bOB" || data === "\x1b[6~";
 
     if (isCtrlUp) {
       this.autoScrollToBottom = false;
@@ -331,7 +354,7 @@ export class DcChatMessengerPanel implements Component {
       return true;
     }
 
-    // Manejo de escritura en la barra de entrada (cuando el foco está en el chat o escribe)
+    // Manejo de escritura en la barra de entrada
     if (matchesKey(data, Key.backspace)) {
       if (this.inputText.length > 0) {
         this.inputText = this.inputText.slice(0, -1);
