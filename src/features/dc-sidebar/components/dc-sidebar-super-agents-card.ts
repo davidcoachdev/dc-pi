@@ -149,7 +149,7 @@ export class DcSuperAgentsSidebarCard implements Component {
     rows.push(
       new DcJustifiedRow(
         `  ${dim("Labs supervisados:")}`,
-        `${bloodBright(`${activeLabsCount} vivos`)} ${bloodBright("[↻] ")}`,
+        `${bloodBright(`${activeLabsCount} vivos`)}  ${bloodBright("[↻]")}  `,
         () => {
           // Si el botón [↻] de Labs es presionado, regenerar cache de binarios y pedir re-render
           cachedGhStatus = null;
@@ -353,7 +353,7 @@ export class DcSuperAgentsSidebarCard implements Component {
       rows.push(
         new DcJustifiedRow(
           `  ${dim("↻ Reiniciar Daemon #86")}`,
-          `${bloodBright("[Reiniciar]")} `,
+          `${bloodBright("[Reiniciar]")}  `,
           () => {
             const ctx = getSidebarContext();
             void dcControlDaemonManager.stop().then(async () => {
@@ -369,7 +369,7 @@ export class DcSuperAgentsSidebarCard implements Component {
       rows.push(
         new DcJustifiedRow(
           `  ${greenBright("▶ Iniciar Daemon #86 & Túnel")}`,
-          `${greenBright("[Iniciar]")} `,
+          `${greenBright("[Iniciar]")}  `,
           () => {
             const ctx = getSidebarContext();
             void dcControlDaemonManager.start(ctx).then(() => {
