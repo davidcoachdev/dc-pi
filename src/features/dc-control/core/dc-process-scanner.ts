@@ -72,6 +72,8 @@ export function scanRunningPiProcesses(): RunningPiProcess[] {
   if (fs.existsSync("/proc")) {
     try {
       const pids = fs.readdirSync("/proc");
+      const candidatePids = new Map<number, { ppid: number; comm: string; cmdline: string; cwd: string; osState: RunningPiProcess["osState"] }>();
+
       for (const entry of pids) {
         if (!/^\d+$/.test(entry)) continue;
         const pid = parseInt(entry, 10);
@@ -107,33 +109,47 @@ export function scanRunningPiProcesses(): RunningPiProcess[] {
             }
 
             let osState: RunningPiProcess["osState"] = "running";
+            let ppid = 0;
             if (fs.existsSync(statPath)) {
               try {
                 const statRaw = fs.readFileSync(statPath, "utf-8");
                 const parts = statRaw.split(" ");
-                // El estado de Linux es el 3er campo en /proc/[pid]/stat
+                // En Linux /proc/[pid]/stat: campo 2 es stateChar, campo 3 es ppid (índice 3 en split)
                 const stateChar = parts[2] || "R";
                 osState = parseLinuxProcessState(stateChar);
+                ppid = parseInt(parts[3] || "0", 10);
               } catch {}
             }
 
-            const isCurrent = pid === currentPid;
-            const projectName = cwd ? path.basename(cwd) : `PID ${pid}`;
-            const { role, displayLabel } = classifyProcessRole(cwd, cmdline, isCurrent);
-
-            results.push({
-              pid,
-              cwd,
-              projectName,
-              isCurrent,
-              role,
-              displayLabel,
-              osState,
-            });
+            candidatePids.set(pid, { ppid, comm: "pi", cmdline, cwd, osState });
           }
         } catch {
           // El proceso pudo terminar mientras se escaneaba
         }
+      }
+
+      // Filtrar subprocesos hijos de Pi (workers internos o helpers como pty/language-server)
+      // Si el PPID de un proceso 'pi' es OTRO proceso 'pi' candidato, es un worker hijo interno,
+      // no una sesión de terminal independiente.
+      for (const [pid, data] of candidatePids.entries()) {
+        if (candidatePids.has(data.ppid)) {
+          // Es un hijo interno de otra sesión Pi ya contabilizada
+          continue;
+        }
+
+        const isCurrent = pid === currentPid;
+        const projectName = data.cwd ? path.basename(data.cwd) : `PID ${pid}`;
+        const { role, displayLabel } = classifyProcessRole(data.cwd, data.cmdline, isCurrent);
+
+        results.push({
+          pid,
+          cwd: data.cwd,
+          projectName,
+          isCurrent,
+          role,
+          displayLabel,
+          osState: data.osState,
+        });
       }
 
       if (results.length > 0) {
