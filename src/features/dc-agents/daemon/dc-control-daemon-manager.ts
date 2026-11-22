@@ -440,6 +440,13 @@ export class DcControlDaemonManager {
       }
     }
 
+    // Matar cualquier subproceso huérfano de `gh webhook forward` o `gh-webhook`
+    try {
+      execFileSync("pkill", ["-f", "gh.*webhook.*forward"], { stdio: "ignore" });
+    } catch {
+      /* no processes found */
+    }
+
     // Limpiar hooks temporales de forwarder en GitHub únicamente para el repositorio validado
     try {
       const fullNwo = this.currentRepo?.fullNwo;
