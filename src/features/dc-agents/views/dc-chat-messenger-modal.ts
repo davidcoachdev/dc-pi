@@ -16,8 +16,7 @@ import {
   type ChatThread,
   type ChatMessageRecord,
 } from "../daemon/dc-chat-sqlite-db.ts";
-import { dcIssueConversationalAgent } from "../daemon/dc-issue-conversational-agent.ts";
-import { dcIssueDispatcher } from "../daemon/dc-issue-dispatcher.ts";
+import { dcChatDispatcher } from "../daemon/dc-chat-dispatcher.ts";
 
 /**
  * Panel interactivo tipo "WhatsApp / Messenger" para Super-Agentes:
@@ -90,7 +89,30 @@ export class DcChatMessengerPanel implements Component {
 
   private refresh(): void {
     this.threads = dcChatDatabase.listThreads();
-    if (this.threads.length === 0) {
+    const hasControl = this.threads.some((t) => t.id === "dc-control");
+    const hasAgent86 = this.threads.some((t) => t.id === "general-86");
+
+    if (!hasControl) {
+      dcChatDatabase.upsertThread({
+        id: "dc-control",
+        title: "DC-Control • Centro de Mando",
+        participant: "dc_control",
+        unreadCount: 0,
+        updatedAt: Date.now() + 1000,
+      });
+      dcChatDatabase.addMessage({
+        id: `welcome-control-${Date.now()}`,
+        threadId: "dc-control",
+        sender: "dc_control",
+        senderRole: "agent",
+        incomingText: "Inicialización de la Torre de Control.",
+        replyText: "### 🎮 DC-Control Online\nConsulta aquí el estado de sesiones vivas, labs, o envía directivas globales al sistema.",
+        status: "sent",
+        timestamp: Date.now(),
+      });
+    }
+
+    if (!hasAgent86) {
       dcChatDatabase.upsertThread({
         id: "general-86",
         title: "Super-Agente #86 • General",
@@ -99,7 +121,7 @@ export class DcChatMessengerPanel implements Component {
         updatedAt: Date.now(),
       });
       dcChatDatabase.addMessage({
-        id: `welcome-${Date.now()}`,
+        id: `welcome-86-${Date.now()}`,
         threadId: "general-86",
         sender: "super_agent_86",
         senderRole: "agent",
@@ -108,8 +130,9 @@ export class DcChatMessengerPanel implements Component {
         status: "sent",
         timestamp: Date.now(),
       });
-      this.threads = dcChatDatabase.listThreads();
     }
+
+    this.threads = dcChatDatabase.listThreads();
 
     if (this.selectedThreadIndex >= this.threads.length) {
       this.selectedThreadIndex = Math.max(0, this.threads.length - 1);
@@ -269,10 +292,16 @@ export class DcChatMessengerPanel implements Component {
 
     lines.push(dim("─".repeat(innerW)));
 
-    // Caja de entrada interactiva de mensaje para el Super-Agente
+    // Caja de entrada interactiva de mensaje
+    const activeParticipant = activeThread?.participant === "dc_control"
+      ? "DC-Control"
+      : activeThread?.participant === "super_agent_86"
+        ? "Agente #86"
+        : activeThread?.title || "Destino";
+
     const promptPrefix = isChatFocused
-      ? `  ${bloodBright("💬 Tú ➔ Agente #86:")} `
-      : `  ${dim("💬 Tú ➔ Agente #86:")} `;
+      ? `  ${bloodBright(`💬 Tú ➔ ${activeParticipant}:`)} `
+      : `  ${dim(`💬 Tú ➔ ${activeParticipant}:`)} `;
     const cursorChar = isChatFocused ? "\x1b[7m \x1b[27m" : "";
     const availableInputW = innerW - visibleWidth(promptPrefix) - 2;
     const displayInput = truncateToWidth(this.inputText, availableInputW, "");
@@ -405,35 +434,41 @@ export class DcChatMessengerPanel implements Component {
       this.refresh();
       this.requestRender?.();
 
-      // Consultar al motor conversacional del Super-Agente
+      // Consultar al despachador inteligente central (DC-Control / Super-Agentes)
       void (async () => {
         try {
-          const dispatch = dcIssueDispatcher.getActiveDispatches().find((d) => d.issueNumber === issueNum);
-          const replyResult = await dcIssueConversationalAgent.generateReply({
-            authorLogin: "davidcoachdev",
-            commentBody: text,
-            issueNumber: issueNum,
-            issueTitle: activeThread?.title || `Issue #${issueNum}`,
-            worktreePath: dispatch?.worktreePath,
-            taskSlug: dispatch?.taskSlug,
-            branchName: dispatch?.branchName,
-            isOwner: true,
+          const result = await dcChatDispatcher.dispatch({
+            threadId,
+            sender: "davidcoachdev",
+            text,
+            issueNumber: activeThread?.issueNumber,
+            issueTitle: activeThread?.title,
           });
 
           const agentMsgId = `agent-${Date.now()}`;
           dcChatDatabase.addMessage({
             id: agentMsgId,
             threadId,
-            sender: "super_agent_86",
+            sender: result.respondent,
             senderRole: "agent",
             incomingText: text,
             quotedText: `> ${text}`,
-            replyText: replyResult.reply,
+            replyText: result.reply,
             status: "sent",
             timestamp: Date.now(),
           });
-        } catch {
-          /* fallback */
+        } catch (err: any) {
+          const errMsgId = `err-${Date.now()}`;
+          dcChatDatabase.addMessage({
+            id: errMsgId,
+            threadId,
+            sender: "system",
+            senderRole: "agent",
+            incomingText: text,
+            replyText: `⚠️ Error procesando consulta: ${err?.message || "Desconocido"}`,
+            status: "sent",
+            timestamp: Date.now(),
+          });
         } finally {
           this.isProcessing = false;
           this.refresh();
@@ -490,7 +525,7 @@ export class DcChatMessengerPanel implements Component {
  */
 export async function openAgentChatMessengerModal(ctx: ExtensionContext): Promise<void> {
   await openDcModal(ctx, {
-    title: "💬 DC Studio • Super-Agent Messenger (SQLite)",
+    title: "💬 DC Studio • Centro de Mando & Mensajería Global",
     glyph: "💬 ",
     width: "80%",
     maxHeight: "80%",
