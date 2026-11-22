@@ -66,6 +66,18 @@ export function getSidebarScrollView(tui: any): ScrollView {
     }
     cachedScrollView = new ScrollView(cachedBody);
     cachedScrollView.setScrollbar?.("hidden");
+
+    // pi-tui omite el ruteo de eventos de mouse hacia los hijos de ScrollView si
+    // handleMouse === Container.prototype.handleMouse. Proporcionamos un despachador
+    // explícito para propagar clicks hacia el cuerpo y las tarjetas internas (con scroll offset).
+    cachedScrollView.handleMouse = function (event: any) {
+      const child = (this as any).child || cachedBody;
+      if (!child) return undefined;
+      const childEvent = event.y !== undefined
+        ? { ...event, y: event.y + this.scrollTop }
+        : event;
+      return (child as any).handleMouse?.(childEvent);
+    };
   }
   return cachedScrollView;
 }
