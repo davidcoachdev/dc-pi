@@ -497,7 +497,8 @@ export class DcControlDaemonManager {
     // Respaldo de inspección viva ante reinicio de Pi o sesiones concurrentes:
     // Si la instancia en memoria aún no tiene receiver local o tunnelProcess activo,
     // pero en el sistema operativo el túnel y el puerto siguen vivos escuchando para ESTE repositorio:
-    if (!tunnelActive || !running) {
+    // Excluir si estamos en entorno de testing (NODE_ENV=test o tests unitarios herméticos)
+    if ((!tunnelActive || !running) && process.env.NODE_ENV !== "test" && !process.argv.some(a => a.includes("test"))) {
       try {
         const stdout = execFileSync("pgrep", ["-x", "gh"], {
           encoding: "utf8",

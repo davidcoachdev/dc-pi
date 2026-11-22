@@ -14,18 +14,21 @@ import {
   type ChatThread,
   type ChatMessageRecord,
 } from "../daemon/dc-chat-sqlite-db.ts";
+import { dcIssueConversationalAgent } from "../daemon/dc-issue-conversational-agent.ts";
+import { dcIssueDispatcher } from "../daemon/dc-issue-dispatcher.ts";
 
 /**
  * Panel interactivo tipo "WhatsApp / Messenger" para Super-Agentes:
  * - Panel Izquierdo: Lista de hilos/conversaciones (Issues, Terceros, Agentes) con conteo de no leídos.
  * - Panel Derecho: Historial de mensajes, réplicas citadas y respuestas del Super-Agente.
+ * - Caja de entrada inferior: Permite al usuario escribir directamente al Super-Agente y recibir respuesta en vivo.
  */
 export class DcChatMessengerPanel implements Component {
   private threads: ChatThread[] = [];
   private selectedThreadIndex = 0;
   private messages: ChatMessageRecord[] = [];
-  private isFocusOnMessages = false;
-  private messageScrollOffset = 0;
+  private inputText = "";
+  private isProcessing = false;
 
   constructor(
     private readonly theme: Theme,
@@ -38,7 +41,6 @@ export class DcChatMessengerPanel implements Component {
   private refresh(): void {
     this.threads = dcChatDatabase.listThreads();
     if (this.threads.length === 0) {
-      // Si aún no hay hilos reales, registrar uno informativo
       dcChatDatabase.upsertThread({
         id: "general-86",
         title: "Super-Agente #86 • General",
@@ -52,7 +54,7 @@ export class DcChatMessengerPanel implements Component {
         sender: "super_agent_86",
         senderRole: "agent",
         incomingText: "Buzón de mensajería autónomo inicializado en SQLite.",
-        replyText: "Listo para supervisar y registrar réplicas de comentarios de GitHub.",
+        replyText: "Listo para supervisar y registrar réplicas de comentarios de GitHub. Puedes escribirme abajo.",
         status: "sent",
         timestamp: Date.now(),
       });
@@ -128,16 +130,21 @@ export class DcChatMessengerPanel implements Component {
       if (this.messages.length === 0) {
         rightLines.push(dim("  (Sin mensajes en este hilo)"));
       } else {
-        for (const msg of this.messages) {
+        // Mostrar los últimos mensajes que quepan
+        for (const msg of this.messages.slice(-8)) {
           const dateStr = new Date(msg.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-          const isThird = msg.senderRole === "third_party";
-          const senderLabel = isThird
-            ? `${yellowBright(`@${msg.sender}`)} ${dim(`[${dateStr}]`)}`
-            : `${greenBright(`🤖 Super-Agent 86`)} ${dim(`[${dateStr}]`)}`;
+          const isOwner = msg.senderRole === "owner";
+          const isAgent = msg.senderRole === "agent";
 
-          rightLines.push(senderLabel);
+          let senderTag = `${yellowBright(`@${msg.sender}`)} ${dim(`[${dateStr}]`)}`;
+          if (isOwner) {
+            senderTag = `${bloodBright(`👤 @${msg.sender} (Tú)`)} ${dim(`[${dateStr}]`)}`;
+          } else if (isAgent) {
+            senderTag = `${greenBright(`🤖 Super-Agent 86`)} ${dim(`[${dateStr}]`)}`;
+          }
 
-          // Si hay réplica / cita previa
+          rightLines.push(senderTag);
+
           if (msg.quotedText) {
             const quoteLines = msg.quotedText.split("\n");
             for (const ql of quoteLines) {
@@ -145,15 +152,13 @@ export class DcChatMessengerPanel implements Component {
             }
           }
 
-          // Mensaje recibido
           const inLines = this.wrapText(msg.incomingText, rightColW - 4);
           for (const il of inLines) {
             rightLines.push(`  ${msg.isMalicious ? bloodBright(il) : il}`);
           }
 
-          // Respuesta dada por el bot si existe
           if (msg.replyText) {
-            rightLines.push(`  ${greenBright("↳")} ${dim("Respuesta enviada:")}`);
+            rightLines.push(`  ${greenBright("↳")} ${dim("Respuesta del Agente:")}`);
             const repLines = this.wrapText(msg.replyText, rightColW - 6);
             for (const rl of repLines) {
               rightLines.push(`    ${greenBright("┃")} ${rl}`);
@@ -166,9 +171,9 @@ export class DcChatMessengerPanel implements Component {
       rightLines.push(dim("Selecciona un hilo a la izquierda."));
     }
 
-    // Componer ambas columnas lado a lado
-    const maxRows = Math.max(leftLines.length, rightLines.length, 16);
-    for (let r = 0; r < maxRows; r++) {
+    // Componer ambas columnas lado a lado (altura controlada: 14 filas)
+    const bodyHeight = 14;
+    for (let r = 0; r < bodyHeight; r++) {
       const lText = leftLines[r] ?? "";
       const rText = rightLines[r] ?? "";
       const lPadded = lText + " ".repeat(Math.max(0, leftColW - visibleWidth(lText)));
@@ -177,7 +182,16 @@ export class DcChatMessengerPanel implements Component {
     }
 
     lines.push(dim("─".repeat(innerW)));
-    lines.push(dim("↑/↓: navegar hilos | Tab: cambiar | Esc: cerrar ventana"));
+
+    // Caja de entrada interactiva de mensaje para el Super-Agente
+    const promptPrefix = `  ${bloodBright("💬 Tú ➔ Agente #86:")} `;
+    const cursorChar = "\x1b[7m \x1b[27m";
+    const availableInputW = innerW - visibleWidth(promptPrefix) - 2;
+    const displayInput = truncateToWidth(this.inputText, availableInputW, "");
+    const placeholder = !this.inputText ? dim("Escribe tu pregunta o directiva y presiona Enter...") : "";
+
+    lines.push(`${promptPrefix}${displayInput}${cursorChar} ${placeholder}`);
+    lines.push(dim(`  ↑/↓: cambiar hilo | Escribe y presiona Enter para enviar | Esc: salir`));
 
     return lines;
   }
@@ -207,6 +221,7 @@ export class DcChatMessengerPanel implements Component {
       return true;
     }
 
+    // Navegación de hilos
     if (matchesKey(data, Key.up)) {
       if (this.selectedThreadIndex > 0) {
         this.selectedThreadIndex--;
@@ -230,6 +245,87 @@ export class DcChatMessengerPanel implements Component {
         }
         this.requestRender?.();
       }
+      return true;
+    }
+
+    // Manejo de escritura en la barra de entrada
+    if (matchesKey(data, Key.backspace)) {
+      if (this.inputText.length > 0) {
+        this.inputText = this.inputText.slice(0, -1);
+        this.requestRender?.();
+      }
+      return true;
+    }
+
+    // Enviar mensaje al Super-Agente
+    if (matchesKey(data, Key.enter)) {
+      const text = this.inputText.trim();
+      if (!text || this.isProcessing) return true;
+
+      this.inputText = "";
+      this.isProcessing = true;
+
+      const activeThread = this.threads[this.selectedThreadIndex];
+      const threadId = activeThread?.id || "general-86";
+      const issueNum = activeThread?.issueNumber || 86;
+
+      const userMsgId = `usr-${Date.now()}`;
+      dcChatDatabase.addMessage({
+        id: userMsgId,
+        threadId,
+        sender: "davidcoachdev",
+        senderRole: "owner",
+        incomingText: text,
+        status: "sent",
+        timestamp: Date.now(),
+      });
+
+      this.refresh();
+      this.requestRender?.();
+
+      // Consultar al motor conversacional del Super-Agente
+      void (async () => {
+        try {
+          const dispatch = dcIssueDispatcher.getActiveDispatches().find((d) => d.issueNumber === issueNum);
+          const replyResult = await dcIssueConversationalAgent.generateReply({
+            authorLogin: "davidcoachdev",
+            commentBody: text,
+            issueNumber: issueNum,
+            issueTitle: activeThread?.title || `Issue #${issueNum}`,
+            worktreePath: dispatch?.worktreePath,
+            taskSlug: dispatch?.taskSlug,
+            branchName: dispatch?.branchName,
+            isOwner: true,
+          });
+
+          const agentMsgId = `agent-${Date.now()}`;
+          dcChatDatabase.addMessage({
+            id: agentMsgId,
+            threadId,
+            sender: "super_agent_86",
+            senderRole: "agent",
+            incomingText: text,
+            quotedText: `> ${text}`,
+            replyText: replyResult.reply,
+            status: "sent",
+            timestamp: Date.now(),
+          });
+        } catch {
+          /* fallback */
+        } finally {
+          this.isProcessing = false;
+          this.refresh();
+          this.requestRender?.();
+        }
+      })();
+
+      return true;
+    }
+
+    // Caracteres imprimibles en la caja de entrada
+    if (data.length === 1 && data.charCodeAt(0) >= 32) {
+      this.inputText += data;
+      this.requestRender?.();
       return true;
     }
 
