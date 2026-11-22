@@ -20,8 +20,12 @@ import { dcIssueDispatcher } from "../daemon/dc-issue-dispatcher.ts";
 /**
  * Panel interactivo tipo "WhatsApp / Messenger" para Super-Agentes:
  * - Panel Izquierdo: Lista de hilos/conversaciones (Issues, Terceros, Agentes) con conteo de no leídos.
- * - Panel Derecho: Historial de mensajes, réplicas citadas y respuestas del Super-Agente.
+ * - Panel Derecho: Historial de mensajes, réplicas citadas y respuestas del Super-Agente con scroll independiente.
  * - Caja de entrada inferior: Permite al usuario escribir directamente al Super-Agente y recibir respuesta en vivo.
+ * - Navegación:
+ *   - Flechas Izquierda / Derecha: Cambiar foco entre panel de hilos y panel de mensajes/input.
+ *   - Flechas Arriba / Abajo: Cambiar de conversación / hilo seleccionado.
+ *   - Ctrl + Flechas Arriba / Abajo: Scrollear el área del chat de mensajes.
  */
 export class DcChatMessengerPanel implements Component {
   private threads: ChatThread[] = [];
@@ -29,6 +33,10 @@ export class DcChatMessengerPanel implements Component {
   private messages: ChatMessageRecord[] = [];
   private inputText = "";
   private isProcessing = false;
+  private activePanel: "threads" | "chat" = "chat";
+  private chatScrollOffset = 0;
+  private maxChatScroll = 0;
+  private autoScrollToBottom = true;
 
   constructor(
     private readonly theme: Theme,
@@ -72,6 +80,7 @@ export class DcChatMessengerPanel implements Component {
     } else {
       this.messages = [];
     }
+    this.autoScrollToBottom = true;
   }
 
   invalidate(): void {}
@@ -85,33 +94,38 @@ export class DcChatMessengerPanel implements Component {
     const bloodSoft = (s: string) => `\x1b[38;2;255;128;128m${s}\x1b[0m`;
     const greenBright = (s: string) => `\x1b[38;2;46;204;113m${s}\x1b[0m`;
     const yellowBright = (s: string) => `\x1b[38;2;250;204;21m${s}\x1b[0m`;
+    const cyanBright = (s: string) => `\x1b[38;2;56;189;248m${s}\x1b[0m`;
     const dim = (s: string) => `\x1b[2m${s}\x1b[22m`;
     const bold = (s: string) => `\x1b[1m${s}\x1b[22m`;
 
-    const leftColW = Math.min(32, Math.max(22, Math.floor(innerW * 0.35)));
+    const leftColW = Math.min(36, Math.max(24, Math.floor(innerW * 0.32)));
     const rightColW = innerW - leftColW - 1;
 
-    // Encabezado
-    const titleBar = ` ${bold("💬 DC MESSENGER")} ${dim("·")} ${bloodSoft("Historial Soberano SQLite")} ${dim("─".repeat(Math.max(2, innerW - 40)))} ${dim("[Esc: Salir]")}`;
-    lines.push(titleBar);
-    lines.push(dim("─".repeat(innerW)));
+    // Calcular altura dinámica disponible basada en terminal o default 22 filas
+    const termRows = (process.stdout?.rows && process.stdout.rows > 0) ? process.stdout.rows : 30;
+    // 80% de alto de pantalla menos márgenes del marco DcWindow (título, borde, footer, input)
+    const chatViewportHeight = Math.max(12, Math.min(35, Math.floor(termRows * 0.8) - 8));
 
-    // Preparar líneas de la columna izquierda (Hilos)
+    // --- COLUMNA IZQUIERDA (Hilos / Conversaciones) ---
     const leftLines: string[] = [];
-    leftLines.push(bold("Hilos & Issues"));
+    const isThreadsFocused = this.activePanel === "threads";
+    const leftHeaderTag = isThreadsFocused ? bloodBright("▶ ") : "  ";
+    leftLines.push(`${leftHeaderTag}${bold("Hilos & Issues")} ${dim(`(${this.threads.length})`)}`);
     leftLines.push(dim("─".repeat(leftColW)));
 
     for (let i = 0; i < this.threads.length; i++) {
       const th = this.threads[i]!;
       const isSel = i === this.selectedThreadIndex;
-      const pointer = isSel ? bloodBright("▶ ") : "  ";
+      const pointer = isSel ? (isThreadsFocused ? bloodBright("● ") : cyanBright("○ ")) : "  ";
       const badge = th.unreadCount > 0 ? bloodBright(` (${th.unreadCount})`) : "";
       const rawTitle = `${th.title}${badge}`;
       const title = truncateToWidth(rawTitle, leftColW - 3, "…");
       const part = truncateToWidth(`  ${dim(th.participant)}`, leftColW - 1, "");
 
-      if (isSel) {
+      if (isSel && isThreadsFocused) {
         leftLines.push(`\x1b[7m${pointer}${title}\x1b[27m`);
+      } else if (isSel) {
+        leftLines.push(`${pointer}${bold(title)}`);
       } else {
         leftLines.push(`${pointer}${title}`);
       }
@@ -119,19 +133,20 @@ export class DcChatMessengerPanel implements Component {
       leftLines.push("");
     }
 
-    // Preparar líneas de la columna derecha (Mensajes del hilo activo)
-    const rightLines: string[] = [];
+    // --- COLUMNA DERECHA (Historial de Mensajes del hilo activo) ---
+    const allRightLines: string[] = [];
     const activeThread = this.threads[this.selectedThreadIndex];
+    const isChatFocused = this.activePanel === "chat";
 
     if (activeThread) {
-      rightLines.push(`${bold(greenBright("●"))} ${bold(activeThread.title)} ${dim(`(${activeThread.participant})`)}`);
-      rightLines.push(dim("─".repeat(rightColW)));
+      const activeHeaderTag = isChatFocused ? bloodBright("▶ ") : "  ";
+      allRightLines.push(`${activeHeaderTag}${bold(greenBright("●"))} ${bold(activeThread.title)} ${dim(`(${activeThread.participant})`)}`);
+      allRightLines.push(dim("─".repeat(rightColW)));
 
       if (this.messages.length === 0) {
-        rightLines.push(dim("  (Sin mensajes en este hilo)"));
+        allRightLines.push(dim("  (Sin mensajes en este hilo)"));
       } else {
-        // Mostrar los últimos mensajes que quepan
-        for (const msg of this.messages.slice(-8)) {
+        for (const msg of this.messages) {
           const dateStr = new Date(msg.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
           const isOwner = msg.senderRole === "owner";
           const isAgent = msg.senderRole === "agent";
@@ -143,39 +158,67 @@ export class DcChatMessengerPanel implements Component {
             senderTag = `${greenBright(`🤖 Super-Agent 86`)} ${dim(`[${dateStr}]`)}`;
           }
 
-          rightLines.push(senderTag);
+          allRightLines.push(senderTag);
 
           if (msg.quotedText) {
             const quoteLines = msg.quotedText.split("\n");
             for (const ql of quoteLines) {
-              rightLines.push(`  ${dim("│")} ${dim(ql.replace(/^>\s*/, ""))}`);
+              allRightLines.push(`  ${dim("│")} ${dim(ql.replace(/^>\s*/, ""))}`);
             }
           }
 
           const inLines = this.wrapText(msg.incomingText, rightColW - 4);
           for (const il of inLines) {
-            rightLines.push(`  ${msg.isMalicious ? bloodBright(il) : il}`);
+            allRightLines.push(`  ${msg.isMalicious ? bloodBright(il) : il}`);
           }
 
           if (msg.replyText) {
-            rightLines.push(`  ${greenBright("↳")} ${dim("Respuesta del Agente:")}`);
+            allRightLines.push(`  ${greenBright("↳")} ${dim("Respuesta del Agente:")}`);
             const repLines = this.wrapText(msg.replyText, rightColW - 6);
             for (const rl of repLines) {
-              rightLines.push(`    ${greenBright("┃")} ${rl}`);
+              allRightLines.push(`    ${greenBright("┃")} ${rl}`);
             }
           }
-          rightLines.push("");
+          allRightLines.push("");
         }
       }
     } else {
-      rightLines.push(dim("Selecciona un hilo a la izquierda."));
+      allRightLines.push(dim("Selecciona un hilo a la izquierda."));
     }
 
-    // Componer ambas columnas lado a lado (altura controlada: 14 filas)
-    const bodyHeight = 14;
-    for (let r = 0; r < bodyHeight; r++) {
+    // Calcular scroll de la columna derecha
+    const totalRightLines = allRightLines.length;
+    this.maxChatScroll = Math.max(0, totalRightLines - chatViewportHeight);
+
+    if (this.autoScrollToBottom) {
+      this.chatScrollOffset = this.maxChatScroll;
+    } else {
+      this.chatScrollOffset = Math.max(0, Math.min(this.chatScrollOffset, this.maxChatScroll));
+    }
+
+    const visibleRightLines = allRightLines.slice(
+      this.chatScrollOffset,
+      this.chatScrollOffset + chatViewportHeight,
+    );
+
+    // Indicador visual de scrollbar para el chat derecho
+    const scrollPercent = this.maxChatScroll > 0
+      ? Math.round((this.chatScrollOffset / this.maxChatScroll) * 100)
+      : 100;
+    const scrollInfo = this.maxChatScroll > 0
+      ? dim(` [Scroll ${scrollPercent}%]`)
+      : "";
+
+    // Componer ambas columnas lado a lado dentro del viewport
+    for (let r = 0; r < chatViewportHeight; r++) {
       const lText = leftLines[r] ?? "";
-      const rText = rightLines[r] ?? "";
+      let rText = visibleRightLines[r] ?? "";
+
+      // Añadir indicador sutil de scroll en la primera fila de la derecha si hay overflow
+      if (r === 0 && scrollInfo && rText) {
+        rText = truncateToWidth(rText, rightColW - visibleWidth(scrollInfo), "") + scrollInfo;
+      }
+
       const lPadded = lText + " ".repeat(Math.max(0, leftColW - visibleWidth(lText)));
       const rPadded = truncateToWidth(rText, rightColW, "");
       lines.push(`${lPadded} ${dim("│")} ${rPadded}`);
@@ -184,14 +227,17 @@ export class DcChatMessengerPanel implements Component {
     lines.push(dim("─".repeat(innerW)));
 
     // Caja de entrada interactiva de mensaje para el Super-Agente
-    const promptPrefix = `  ${bloodBright("💬 Tú ➔ Agente #86:")} `;
-    const cursorChar = "\x1b[7m \x1b[27m";
+    const promptPrefix = isChatFocused
+      ? `  ${bloodBright("💬 Tú ➔ Agente #86:")} `
+      : `  ${dim("💬 Tú ➔ Agente #86:")} `;
+    const cursorChar = isChatFocused ? "\x1b[7m \x1b[27m" : "";
     const availableInputW = innerW - visibleWidth(promptPrefix) - 2;
     const displayInput = truncateToWidth(this.inputText, availableInputW, "");
-    const placeholder = !this.inputText ? dim("Escribe tu pregunta o directiva y presiona Enter...") : "";
+    const placeholder = !this.inputText
+      ? (isChatFocused ? dim("Escribe tu pregunta o directiva y presiona Enter...") : dim("(Presiona ➔ para escribir)"))
+      : "";
 
     lines.push(`${promptPrefix}${displayInput}${cursorChar} ${placeholder}`);
-    lines.push(dim(`  ↑/↓: cambiar hilo | Escribe y presiona Enter para enviar | Esc: salir`));
 
     return lines;
   }
@@ -221,7 +267,40 @@ export class DcChatMessengerPanel implements Component {
       return true;
     }
 
-    // Navegación de hilos
+    // Flechas Izquierda / Derecha: cambiar de panel activo
+    if (matchesKey(data, Key.left)) {
+      this.activePanel = "threads";
+      this.requestRender?.();
+      return true;
+    }
+    if (matchesKey(data, Key.right)) {
+      this.activePanel = "chat";
+      this.requestRender?.();
+      return true;
+    }
+
+    // Ctrl + Arriba / Ctrl + Abajo: Scrollear el área del chat
+    // Secuencias ANSI comunes en terminales para Ctrl+Up: \x1b[1;5A, \x1bOA; Ctrl+Down: \x1b[1;5B, \x1bOB
+    const isCtrlUp = data === "\x1b[1;5A" || data === "\x1bOA" || data === "\x1b[5~" /* PageUp fallback */;
+    const isCtrlDown = data === "\x1b[1;5B" || data === "\x1bOB" || data === "\x1b[6~" /* PageDown fallback */;
+
+    if (isCtrlUp) {
+      this.autoScrollToBottom = false;
+      this.chatScrollOffset = Math.max(0, this.chatScrollOffset - 3);
+      this.requestRender?.();
+      return true;
+    }
+
+    if (isCtrlDown) {
+      this.chatScrollOffset = Math.min(this.maxChatScroll, this.chatScrollOffset + 3);
+      if (this.chatScrollOffset >= this.maxChatScroll) {
+        this.autoScrollToBottom = true;
+      }
+      this.requestRender?.();
+      return true;
+    }
+
+    // Flechas Arriba / Abajo: Cambiar de conversación / hilo
     if (matchesKey(data, Key.up)) {
       if (this.selectedThreadIndex > 0) {
         this.selectedThreadIndex--;
@@ -230,6 +309,8 @@ export class DcChatMessengerPanel implements Component {
           this.messages = dcChatDatabase.getMessagesForThread(currentThread.id);
           dcChatDatabase.markThreadRead(currentThread.id);
         }
+        this.autoScrollToBottom = true;
+        this.chatScrollOffset = 0;
         this.requestRender?.();
       }
       return true;
@@ -243,12 +324,14 @@ export class DcChatMessengerPanel implements Component {
           this.messages = dcChatDatabase.getMessagesForThread(currentThread.id);
           dcChatDatabase.markThreadRead(currentThread.id);
         }
+        this.autoScrollToBottom = true;
+        this.chatScrollOffset = 0;
         this.requestRender?.();
       }
       return true;
     }
 
-    // Manejo de escritura en la barra de entrada
+    // Manejo de escritura en la barra de entrada (cuando el foco está en el chat o escribe)
     if (matchesKey(data, Key.backspace)) {
       if (this.inputText.length > 0) {
         this.inputText = this.inputText.slice(0, -1);
@@ -264,6 +347,7 @@ export class DcChatMessengerPanel implements Component {
 
       this.inputText = "";
       this.isProcessing = true;
+      this.autoScrollToBottom = true;
 
       const activeThread = this.threads[this.selectedThreadIndex];
       const threadId = activeThread?.id || "general-86";
@@ -315,6 +399,7 @@ export class DcChatMessengerPanel implements Component {
         } finally {
           this.isProcessing = false;
           this.refresh();
+          this.autoScrollToBottom = true;
           this.requestRender?.();
         }
       })();
@@ -325,6 +410,7 @@ export class DcChatMessengerPanel implements Component {
     // Caracteres imprimibles en la caja de entrada
     if (data.length === 1 && data.charCodeAt(0) >= 32) {
       this.inputText += data;
+      this.activePanel = "chat";
       this.requestRender?.();
       return true;
     }
@@ -333,6 +419,25 @@ export class DcChatMessengerPanel implements Component {
   }
 
   handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
+    // Rueda del mouse sobre el área del chat para hacer scroll
+    if (event.type === "wheel" && typeof event.wheelDelta === "number") {
+      if (event.wheelDelta > 0) {
+        this.chatScrollOffset = Math.min(this.maxChatScroll, this.chatScrollOffset + 2);
+        if (this.chatScrollOffset >= this.maxChatScroll) {
+          this.autoScrollToBottom = true;
+        } else {
+          this.autoScrollToBottom = false;
+        }
+        this.requestRender?.();
+        return { handled: true };
+      } else if (event.wheelDelta < 0) {
+        this.autoScrollToBottom = false;
+        this.chatScrollOffset = Math.max(0, this.chatScrollOffset - 2);
+        this.requestRender?.();
+        return { handled: true };
+      }
+    }
+
     if (event.type === "click" && event.button === "left") {
       this.requestRender?.();
       return { handled: true };
@@ -343,10 +448,19 @@ export class DcChatMessengerPanel implements Component {
 
 /**
  * Abre el visor completo de Chat Messenger de Super-Agentes respaldado en SQLite.
+ * Dimensiones: 80% de ancho y 80% de alto con el footer oficial de DcWindow.
  */
 export async function openAgentChatMessengerModal(ctx: ExtensionContext): Promise<void> {
   await openDcModal(ctx, {
     title: "💬 DC Studio • Super-Agent Messenger (SQLite)",
+    glyph: "💬 ",
+    width: "80%",
+    maxHeight: "80%",
+    scrollable: false, // El scrolling interno lo maneja DcChatMessengerPanel con Ctrl+Up/Down
+    footer: {
+      left: "[←/→] Cambiar Panel  [↑/↓] Cambiar Conversación  [Ctrl+↑/↓] Scroll Chat",
+      right: "[Esc] Cerrar",
+    },
     content: (done, theme, tui) => {
       return new DcChatMessengerPanel(
         theme,
