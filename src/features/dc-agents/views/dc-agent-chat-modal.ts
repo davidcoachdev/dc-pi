@@ -27,12 +27,14 @@ export type ChatApprovalDecision =
 /**
  * Modal flotante tipo "WhatsApp / Messenger" para Super-Agentes:
  * Muestra el mensaje recibido a la izquierda, la respuesta propuesta por el agente a la derecha,
- * y permite al Owner editar la respuesta en vivo antes de enviarla a GitHub.
+ * y permite al Owner editar la respuesta en vivo con teclado/mouse antes de enviarla a GitHub.
  */
 export class DcAgentChatModalPanel implements Component {
   private customReplyText: string;
   private isEditing = false;
   private selectedButtonIndex = 0; // 0: Enviar, 1: Editar, 2: Ignorar
+  private buttonsY = -1;
+  private btnRanges: Array<{ start: number; end: number }> = [];
 
   constructor(
     private readonly message: PendingChatMessage,
@@ -68,30 +70,60 @@ export class DcAgentChatModalPanel implements Component {
     }
     lines.push("");
 
-    // Burbuja derecha (Respuesta propuesta por el Super-Agente)
-    lines.push(`  ${greenBright("🤖 Super-Agent 86")} ${dim("(borrador de respuesta)")}:`);
-    const outLines = this.wrapText(this.customReplyText, innerW - 4);
-    for (const l of outLines) {
-      lines.push(`    ${greenBright("┃")} ${l}`);
+    // Burbuja derecha (Respuesta propuesta por el Super-Agente o modo edición)
+    if (this.isEditing) {
+      lines.push(`  ${yellowBright(bold("✏ EDITANDO RESPUESTA"))} ${dim("(Escribe tu opinión o ajusta el texto, pulsa Enter para guardar)")}:`);
+      const editLines = this.wrapText(this.customReplyText, innerW - 6);
+      for (let i = 0; i < editLines.length; i++) {
+        const isLast = i === editLines.length - 1;
+        lines.push(`    ${yellowBright("┃")} ${editLines[i]}${isLast ? "\x1b[7m \x1b[27m" : ""}`);
+      }
+    } else {
+      lines.push(`  ${greenBright("🤖 Super-Agent 86")} ${dim("(borrador de respuesta)")}:`);
+      const outLines = this.wrapText(this.customReplyText, innerW - 4);
+      for (const l of outLines) {
+        lines.push(`    ${greenBright("┃")} ${l}`);
+      }
     }
     lines.push("");
     lines.push(`  ${dim("─".repeat(innerW))}`);
 
-    // Botones de acción
+    // Fila de Botones de acción
+    this.buttonsY = lines.length;
+    this.btnRanges = [];
+
+    const sendLabel = " [✓ Enviar a GitHub] ";
+    const editLabel = this.isEditing ? " [✓ Listo / Guardar] " : " [✏ Editar Respuesta] ";
+    const rejectLabel = " [✕ Ignorar / Descartar] ";
+
     const btnSend = this.selectedButtonIndex === 0
-      ? `\x1b[7m${greenBright(" [✓ Enviar a GitHub] ")}\x1b[27m`
-      : greenBright(" [✓ Enviar a GitHub] ");
+      ? `\x1b[7m${greenBright(sendLabel)}\x1b[27m`
+      : greenBright(sendLabel);
 
     const btnEdit = this.selectedButtonIndex === 1
-      ? `\x1b[7m${yellowBright(" [✏ Editar Respuesta] ")}\x1b[27m`
-      : yellowBright(" [✏ Editar Respuesta] ");
+      ? `\x1b[7m${yellowBright(editLabel)}\x1b[27m`
+      : yellowBright(editLabel);
 
     const btnReject = this.selectedButtonIndex === 2
-      ? `\x1b[7m${bloodBright(" [✕ Ignorar / Descartar] ")}\x1b[27m`
-      : bloodBright(" [✕ Ignorar / Descartar] ");
+      ? `\x1b[7m${bloodBright(rejectLabel)}\x1b[27m`
+      : bloodBright(rejectLabel);
+
+    let currentX = 2;
+    this.btnRanges.push({ start: currentX, end: currentX + visibleWidth(sendLabel) });
+    currentX += visibleWidth(sendLabel) + 2;
+
+    this.btnRanges.push({ start: currentX, end: currentX + visibleWidth(editLabel) });
+    currentX += visibleWidth(editLabel) + 2;
+
+    this.btnRanges.push({ start: currentX, end: currentX + visibleWidth(rejectLabel) });
 
     lines.push(`  ${btnSend}  ${btnEdit}  ${btnReject}`);
-    lines.push(`  ${dim("Tab: cambiar botón | Enter: seleccionar | Esc: descartar")}`);
+
+    if (this.isEditing) {
+      lines.push(`  ${dim("Teclas: Escribe para agregar texto | Backspace: borrar | Enter: terminar edición")}`);
+    } else {
+      lines.push(`  ${dim("Teclas: Tab / Shift+Tab: cambiar botón | Enter: confirmar botón | Esc: descartar")}`);
+    }
 
     return lines;
   }
@@ -116,6 +148,29 @@ export class DcAgentChatModalPanel implements Component {
   }
 
   handleInput(data: string): boolean | void {
+    if (this.isEditing) {
+      if (matchesKey(data, Key.escape) || matchesKey(data, Key.enter)) {
+        this.isEditing = false;
+        this.selectedButtonIndex = 0; // Al terminar de editar, volver al botón Enviar
+        this.requestRender?.();
+        return true;
+      }
+      if (matchesKey(data, Key.backspace)) {
+        if (this.customReplyText.length > 0) {
+          this.customReplyText = this.customReplyText.slice(0, -1);
+          this.requestRender?.();
+        }
+        return true;
+      }
+      // Caracteres imprimibles
+      if (data.length === 1 && data.charCodeAt(0) >= 32) {
+        this.customReplyText += data;
+        this.requestRender?.();
+        return true;
+      }
+      return undefined;
+    }
+
     if (matchesKey(data, Key.escape)) {
       this.onDone({ action: "reject" });
       return true;
@@ -137,8 +192,8 @@ export class DcAgentChatModalPanel implements Component {
       if (this.selectedButtonIndex === 0) {
         this.onDone({ action: "approve", reply: this.customReplyText });
       } else if (this.selectedButtonIndex === 1) {
-        // En modo edición simple, permitir toggle o usar el texto
-        this.onDone({ action: "approve", reply: this.customReplyText });
+        this.isEditing = true;
+        this.requestRender?.();
       } else {
         this.onDone({ action: "reject" });
       }
@@ -149,9 +204,26 @@ export class DcAgentChatModalPanel implements Component {
   }
 
   handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
-    if (event.type === "click" && event.button === "left") {
-      this.onDone({ action: "approve", reply: this.customReplyText });
-      return { handled: true };
+    if (event.type === "click" && event.button === "left" && event.y !== undefined && event.x !== undefined) {
+      // Verificar si el clic fue en la línea de los botones
+      if (event.y === this.buttonsY) {
+        const x = event.x;
+        for (let i = 0; i < this.btnRanges.length; i++) {
+          const r = this.btnRanges[i]!;
+          if (x >= r.start && x <= r.end) {
+            this.selectedButtonIndex = i;
+            if (i === 0) {
+              this.onDone({ action: "approve", reply: this.customReplyText });
+            } else if (i === 1) {
+              this.isEditing = !this.isEditing;
+              this.requestRender?.();
+            } else if (i === 2) {
+              this.onDone({ action: "reject" });
+            }
+            return { handled: true };
+          }
+        }
+      }
     }
     return undefined;
   }
