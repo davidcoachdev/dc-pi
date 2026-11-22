@@ -67,6 +67,12 @@ export class DcSupervisorIpcServer {
           if (boundSessionId) {
             this.clientSockets.delete(boundSessionId);
             this.registry.markTerminated(boundSessionId, "Socket disconnected");
+            this.broadcast({
+              type: "sessions_changed",
+              action: "disconnected",
+              sessionId: boundSessionId,
+              timestamp: Date.now(),
+            });
           }
         });
 
@@ -158,6 +164,18 @@ export class DcSupervisorIpcServer {
           timestamp: Date.now(),
         };
         socket.write(JSON.stringify(ack) + "\n");
+
+        // Notificar en tiempo real a todas las demás sesiones que un nuevo par se conectó
+        this.broadcast(
+          {
+            type: "sessions_changed",
+            action: "connected",
+            sessionId: msg.sessionId,
+            role: msg.role,
+            timestamp: Date.now(),
+          },
+          msg.sessionId
+        );
         break;
       }
 
@@ -229,6 +247,12 @@ export class DcSupervisorIpcServer {
       case "session_offline": {
         this.registry.markTerminated(msg.sessionId, msg.reason);
         this.clientSockets.delete(msg.sessionId);
+        this.broadcast({
+          type: "sessions_changed",
+          action: "disconnected",
+          sessionId: msg.sessionId,
+          timestamp: Date.now(),
+        });
         break;
       }
     }

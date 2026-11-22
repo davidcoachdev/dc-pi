@@ -198,3 +198,56 @@ test("DcSupervisorIPC - Cliente consulta y recibe sesiones activas conectadas en
   client2.disconnect();
   await server.stop();
 });
+
+test("DcSupervisorIPC - Evento sessions_changed en tiempo real cuando un cliente se conecta y desconecta", async () => {
+  const socketPath = path.join(os.tmpdir(), `test-dc-sup-${Date.now()}-${Math.random().toString(36).slice(2)}.sock`);
+  const registry = new DcSessionRegistry();
+  const server = new DcSupervisorIpcServer({ socketPath, registry });
+
+  await server.start();
+
+  const listenerClient = new DcSupervisorIpcClient({
+    sessionId: "listener-orchestrator",
+    role: "orchestrator",
+    socketPath,
+    cwd: "/home/dc-studio/dc-lab/listener",
+    projectName: "listener",
+  });
+
+  await listenerClient.connect();
+  await new Promise((r) => setTimeout(r, 40));
+
+  const eventsReceived: any[] = [];
+  listenerClient.on("sessions_changed", (msg) => {
+    eventsReceived.push(msg);
+  });
+
+  // Conectar un nuevo cliente dinámicamente
+  const joiningClient = new DcSupervisorIpcClient({
+    sessionId: "dynamic-peer-gamma",
+    role: "worker",
+    socketPath,
+    cwd: "/home/dc-studio/dc-lab/gamma",
+    projectName: "gamma",
+  });
+
+  await joiningClient.connect();
+  await new Promise((r) => setTimeout(r, 50));
+
+  // Verificar que listenerClient recibió la notificación de conexión
+  const connectEvt = eventsReceived.find((e) => e.action === "connected" && e.sessionId === "dynamic-peer-gamma");
+  assert.ok(connectEvt, "Debe recibir evento connected");
+  assert.equal(connectEvt.role, "worker");
+
+  // Desconectar el cliente
+  joiningClient.disconnect();
+  await new Promise((r) => setTimeout(r, 50));
+
+  // Verificar que listenerClient recibió la notificación de desconexión
+  const disconnectEvt = eventsReceived.find((e) => e.action === "disconnected" && e.sessionId === "dynamic-peer-gamma");
+  assert.ok(disconnectEvt, "Debe recibir evento disconnected");
+
+  listenerClient.disconnect();
+  await server.stop();
+});
+

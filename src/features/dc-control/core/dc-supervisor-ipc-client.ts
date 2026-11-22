@@ -203,6 +203,9 @@ export class DcSupervisorIpcClient extends EventEmitter {
       case "sessions_report":
         this.emit("sessions_report", msg);
         break;
+      case "sessions_changed":
+        this.emit("sessions_changed", msg);
+        break;
       case "takeover_decision":
         this.emit("takeover_decision", msg);
         break;
