@@ -489,11 +489,46 @@ export class DcControlDaemonManager {
   }
 
   public getStatus(): DaemonStatus {
+    let running = this.receiver?.isRunning() ?? false;
+    let port = this.receiver?.getPort();
+    let tunnelActive = this.isTunnelRunning;
+    let repo = this.currentRepo;
+
+    // Respaldo de inspección viva ante reinicio de Pi o sesiones concurrentes:
+    // Si la instancia en memoria aún no tiene receiver local o tunnelProcess activo,
+    // pero en el sistema operativo el túnel y el puerto siguen vivos escuchando para ESTE repositorio:
+    if (!tunnelActive || !running) {
+      try {
+        const stdout = execFileSync("pgrep", ["-fa", "gh.*webhook.*forward"], {
+          encoding: "utf8",
+          stdio: ["ignore", "pipe", "ignore"],
+        }).trim();
+
+        if (stdout) {
+          const match = stdout.match(/--repo=([^\s]+).*--url=http:\/\/127\.0\.0\.1:(\d+)\/github-webhook\?capability=([a-f0-9]+)/);
+          if (match) {
+            const detectedRepoNwo = match[1]!;
+            const activeRepo = this.currentRepo ?? resolveCurrentRepoIdentity(process.cwd());
+
+            // Solo adoptar el túnel del sistema operativo si pertenece al repositorio actual
+            if (activeRepo && activeRepo.fullNwo.toLowerCase() === detectedRepoNwo.toLowerCase()) {
+              tunnelActive = true;
+              port = parseInt(match[2]!, 10);
+              repo = activeRepo;
+              running = true;
+            }
+          }
+        }
+      } catch {
+        /* no processes found */
+      }
+    }
+
     return {
-      running: this.receiver?.isRunning() ?? false,
-      port: this.receiver?.getPort(),
-      repo: this.currentRepo,
-      tunnelActive: this.isTunnelRunning,
+      running,
+      port,
+      repo,
+      tunnelActive,
       activeDispatches: dcIssueDispatcher.getActiveDispatches(),
     };
   }
