@@ -149,7 +149,10 @@ export class DcSuperAgentsSidebarCard implements Component {
     rows.push(
       new DcJustifiedRow(
         `  ${dim("Labs supervisados:")}`,
-        `${bloodBright(`${activeLabsCount} vivos`)} `
+        `${bloodBright(`${activeLabsCount} vivos`)} ${bloodBright("[↻]")} `,
+        () => {
+          this.requestRender?.();
+        }
       )
     );
 
@@ -366,7 +369,15 @@ export class DcSuperAgentsSidebarCard implements Component {
           `${greenBright("[Iniciar]")} `,
           () => {
             const ctx = getSidebarContext();
-            if (ctx) void dcControlDaemonManager.start(ctx).then(() => this.requestRender?.());
+            if (ctx) {
+              void dcControlDaemonManager.start(ctx).then(() => {
+                this.requestRender?.();
+                // Notificar en el bus para actualizar cualquier vista de supervisión
+                dcSupervisorBus.emit("session:state_changed", null as any, null as any);
+                // Si pasados unos instantes el worker ya inició proceso, refrescar de nuevo
+                setTimeout(() => this.requestRender?.(), 1000);
+              });
+            }
           }
         )
       );

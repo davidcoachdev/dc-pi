@@ -36,6 +36,14 @@ export class DcControlSupervisorLifecycle {
       });
 
       await this.client.connect();
+
+      // Escuchar eventos en vivo del socket para propagar a la sesión local
+      this.client.on("sessions_changed", (_msg) => {
+        // Redirigir hacia el bus de la sesión local para redibujar la UI al instante
+        import("./core/dc-supervisor-bus.ts").then(({ dcSupervisorBus }) => {
+          dcSupervisorBus.emit("session:state_changed", null as any, null as any);
+        }).catch(() => {});
+      });
     } catch {
       // Respaldo silencioso innegociable: jamás bloquear ni romper el arranque de Pi
     }

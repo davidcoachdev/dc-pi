@@ -92,4 +92,11 @@ export type SupervisorToClientMessage =
         lastActivityAt: number;
       }>;
       timestamp: number;
+    }
+  | {
+      type: "sessions_changed"; // Notificación broadcast en vivo cuando un cliente se conecta/desconecta
+      action: "connected" | "disconnected" | "state_changed";
+      sessionId: string;
+      role?: string;
+      timestamp: number;
     };
