@@ -10,6 +10,7 @@ import { DcJustifiedRow } from "../views/dc-sidebar-body.ts";
 import { renderProgressBar } from "../../../ui/dc-progress-bar.ts";
 import { dcControlDaemonManager } from "../../dc-agents/daemon/dc-control-daemon-manager.ts";
 import { openControlCenterModal } from "../../dc-agents/views/dc-control-center-modal.ts";
+import { openAgentChatMessengerModal } from "../../dc-agents/views/dc-chat-messenger-modal.ts";
 import { checkPendingIssues } from "../../dc-agents/daemon/dc-pending-issues.ts";
 import { getSidebarContext } from "../dc-sidebar.ts";
 import { dcSupervisorBus } from "../../dc-control/core/dc-supervisor-bus.ts";
@@ -324,6 +325,17 @@ export class DcSuperAgentsSidebarCard implements Component {
         () => {
           const ctx = getSidebarContext();
           if (ctx) void openControlCenterModal(ctx);
+        }
+      )
+    );
+
+    rows.push(
+      new DcJustifiedRow(
+        `  ${bloodWhite("💬 Mensajes & Chats")}`,
+        `${bloodBright("[Ver Chats ↗]")} `,
+        () => {
+          const ctx = getSidebarContext();
+          if (ctx) void openAgentChatMessengerModal(ctx);
         }
       )
     );

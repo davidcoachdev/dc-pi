@@ -30,11 +30,31 @@ export class DcIssueConversationalAgent {
   }
 
   /**
-   * Genera una respuesta inteligente según la intención y el rol del usuario (OWNER vs Tercero).
+   * Genera una respuesta inteligente según la intención y el rol del usuario (OWNER vs Tercero),
+   * detectando si el mensaje entrante es ya una réplica/quote para responder con el anidamiento correcto.
    */
   public async generateReply(req: ContextualReplyRequest): Promise<ContextualReplyResult> {
     const cleanComment = req.commentBody.trim();
     const lower = cleanComment.toLowerCase();
+
+    // Detección de Réplica: ¿el usuario ya está citando un mensaje anterior con '>'?
+    const hasExistingQuote = cleanComment.split("\n").some((l) => l.trim().startsWith(">"));
+
+    let quoteBlock = "";
+    if (hasExistingQuote) {
+      // El usuario está replicando a un mensaje previo: extraer solo su respuesta nueva para citarla
+      const userReplyLines = cleanComment
+        .split("\n")
+        .filter((l) => !l.trim().startsWith(">") && l.trim().length > 0);
+      const textToQuote = userReplyLines.join(" ").trim() || cleanComment;
+      quoteBlock = `> En respuesta a tu réplica: "${textToQuote}"`;
+    } else {
+      // Comentario directo: citar en bloque de réplica limpio
+      quoteBlock = cleanComment
+        .split("\n")
+        .map((l) => `> ${l}`)
+        .join("\n");
+    }
 
     // ── 1. Caso: Tercero (No-OWNER) ──
     if (!req.isOwner) {
@@ -53,6 +73,8 @@ export class DcIssueConversationalAgent {
           intent: "malicious_attempt",
           needsHumanApproval: true,
           reply: [
+            quoteBlock,
+            "",
             `🤖 **DC Super-Agent 86**: Hola @${req.authorLogin}, muchas gracias por tu mensaje.`,
             "",
             "Agradezco tu interés, pero por políticas de integridad y seguridad de DC Studio, las directivas que alteran recursos protegidos o estructuras de datos están restringidas al equipo soberano del proyecto.",
@@ -67,6 +89,8 @@ export class DcIssueConversationalAgent {
         intent: "third_party",
         needsHumanApproval: true,
         reply: [
+          quoteBlock,
+          "",
           `🤖 **DC Super-Agent 86**: Hola @${req.authorLogin}, gracias por tu comentario en el Issue #${req.issueNumber}.`,
           "",
           `He registrado tu observación en el log de auditoría del proyecto. Al no formar parte de los mantenedores directos, tus sugerencias quedan en espera de revisión. Para coordinar contribuciones o accesos, por favor comunícate con el responsable del proyecto: **@davidcoachdev**.`,
@@ -114,6 +138,8 @@ export class DcIssueConversationalAgent {
     }
 
     const reply = [
+      quoteBlock,
+      "",
       `🤖 **DC Super-Agent 86**: ${replyIntro}`,
       "",
       `📌 **Estado de la Hoja de Ruta ODD**:`,

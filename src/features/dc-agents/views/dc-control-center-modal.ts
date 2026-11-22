@@ -20,6 +20,10 @@ import {
   dcRemoteQuestionManager,
   type AgentQuestionPacket,
 } from "../daemon/dc-remote-question.ts";
+import {
+  dcSuperAgentChatManager,
+  type ChatMessageEntry,
+} from "../daemon/dc-super-agent-chat-manager.ts";
 
 export type ControlCenterTab = "worktrees" | "collaborators" | "audit";
 
@@ -296,6 +300,37 @@ export class DcControlCenterPanel implements Component {
           },
           comments: (q.options || []).map((opt) => ({ author: "opción", threads: 1, text: opt })),
           questionPacket: q,
+        } as CentralDecisionItem,
+      });
+    }
+
+    // Mensajes pendientes del chat tipo Messenger de terceros
+    const pendingChatMessages = dcSuperAgentChatManager.getPendingMessages();
+    for (const chatMsg of pendingChatMessages) {
+      items.push({
+        kind: "decision",
+        data: {
+          id: chatMsg.id,
+          index: items.length + 1,
+          title: `💬 Issue #${chatMsg.issueNumber} (@${chatMsg.authorLogin})`,
+          timeAgo: "pendiente",
+          statusIcon: chatMsg.isMalicious ? "▲" : "○",
+          statusText: `Comentario entrante: "${chatMsg.incomingText.slice(0, 30)}..."`,
+          detailsLine: `Autor: @${chatMsg.authorLogin} · Borrador generado por IA`,
+          breadcrumb: `Chat Messenger » Issue #${chatMsg.issueNumber}`,
+          subtitle: `Mensaje de @${chatMsg.authorLogin} esperando tu aprobación para responder`,
+          prTitle: `💬 @${chatMsg.authorLogin}: "${chatMsg.incomingText}"`,
+          branchInfo: `Respuesta propuesta: "${chatMsg.proposedReply.slice(0, 50)}..."`,
+          url: "",
+          summaryCard: {
+            peticion: chatMsg.isMalicious ? "⚠️ Intento no autorizado" : "Consulta / Sugerencia",
+            quien: `@${chatMsg.authorLogin}`,
+            sugerido: "Revisar y Enviar respuesta a GitHub",
+          },
+          comments: [
+            { author: chatMsg.authorLogin, threads: 1, text: chatMsg.incomingText },
+            { author: "super-agent-86 (borrador)", threads: 1, text: chatMsg.proposedReply },
+          ],
         } as CentralDecisionItem,
       });
     }
