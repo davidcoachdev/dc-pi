@@ -7,6 +7,8 @@ import { dcIssueNotifier } from "./dc-issue-notifier.ts";
 import { dcWorkerRunner } from "./dc-worker-runner.ts";
 import { dcRemoteQuestionManager } from "./dc-remote-question.ts";
 import { dcControlDaemonManager } from "./dc-control-daemon-manager.ts";
+import { dcIssueConversationalAgent } from "./dc-issue-conversational-agent.ts";
+import { promptAgentChatModal } from "../views/dc-agent-chat-modal.ts";
 import type { GitHubIssueCommentPayload, IssueCommentCommandResult } from "./dc-issue-comment-types.ts";
 import type { DispatchedIssueTask } from "./dc-issue-dispatcher.ts";
 
@@ -42,27 +44,10 @@ export class DcIssueCommentRouter {
     const authorRecord = this.collabDb.getCollaborator(authorLogin);
     const isOwner = authorLogin === "davidcoachdev" || (authorRecord?.status === "ALLOW" && authorRecord?.role === "OWNER");
 
-    if (!isOwner) {
-      this.collabDb.log({
-        level: "SECURITY",
-        category: "SECURITY",
-        actor: authorLogin,
-        message: `Comentario ignorado en Issue #${issueNumber} de @${authorLogin}: no es OWNER`,
-      });
-      return { handled: false, reason: "unauthorized author" };
-    }
-
     // Ignorar si el comentario fue emitido por el propio super-agente
     if (commentBody.includes("🤖 **DC Super-Agent") || commentBody.includes("dc-super-agente")) {
       return { handled: false, reason: "ignoring self comment" };
     }
-
-    this.collabDb.log({
-      level: "INFO",
-      category: "DISPATCH",
-      actor: authorLogin,
-      message: `Comentario recibido del OWNER en Issue #${issueNumber}: "${commentBody.slice(0, 80)}"`,
-    });
 
     let dispatch = dcIssueDispatcher.getDispatch(repoNwo, issueNumber);
     let worktreePath = dispatch?.worktreePath;
@@ -83,6 +68,67 @@ export class DcIssueCommentRouter {
       issueNumber,
     };
 
+    // ── GESTIÓN DE TERCEROS (NO-OWNER): Acuse + Validación Humana en Modal tipo WhatsApp ──
+    if (!isOwner) {
+      this.collabDb.log({
+        level: "SECURITY",
+        category: "SECURITY",
+        actor: authorLogin,
+        message: `Comentario de tercero recibido en Issue #${issueNumber} de @${authorLogin}: "${commentBody.slice(0, 80)}"`,
+      });
+
+      // 1. Acuse inmediato de recibo en GitHub
+      const waitingAck = `🤖 **DC Super-Agent 86**: Hola @${authorLogin}, gracias por tu comentario. Procesando su solicitud, por favor espere un momento...`;
+      await dcIssueNotifier.notifyIssue(target, waitingAck);
+
+      // 2. Generar borrador de respuesta diplomática / protección
+      const analysis = await dcIssueConversationalAgent.generateReply({
+        authorLogin,
+        commentBody,
+        issueNumber,
+        issueTitle: payload.issue.title || `Issue #${issueNumber}`,
+        worktreePath,
+        taskSlug,
+        branchName,
+        isOwner: false,
+      });
+
+      // 3. Notificar al Owner vía ventana flotante interactiva tipo Chat si la UI está disponible
+      const activeCtx = (globalThis as any)[Symbol.for("dc.sidebar.ctx")];
+      let finalReply = analysis.reply;
+
+      if (activeCtx && activeCtx.hasUI && activeCtx.mode === "tui") {
+        try {
+          const decision = await promptAgentChatModal(activeCtx, {
+            id: `chat-${issueNumber}-${Date.now()}`,
+            authorLogin,
+            issueNumber,
+            incomingText: commentBody,
+            proposedReply: analysis.reply,
+            isMalicious: analysis.intent === "malicious_attempt",
+          });
+
+          if (decision.action === "reject") {
+            return { handled: true, response: "Comentario descartado por el usuario" };
+          }
+          finalReply = decision.reply;
+        } catch {
+          /* fallback to analysis.reply */
+        }
+      }
+
+      // 4. Publicar la respuesta aprobada en el hilo del issue de GitHub
+      await dcIssueNotifier.notifyIssue(target, finalReply);
+      return { handled: true, response: finalReply };
+    }
+
+    this.collabDb.log({
+      level: "INFO",
+      category: "DISPATCH",
+      actor: authorLogin,
+      message: `Comentario recibido del OWNER en Issue #${issueNumber}: "${commentBody.slice(0, 80)}"`,
+    });
+
     const cleanMsg = commentBody.toLowerCase();
 
     // ── 2. Respuestas a Preguntas Pendientes del Subagente (dc-ask-human) ──
@@ -100,37 +146,32 @@ export class DcIssueCommentRouter {
       return { handled: true, response: ackMsg };
     }
 
-    // ── 3. Comando de Estado: "¿Cómo vamos?" / "/dc status" / "estado" ──
-    if (cleanMsg.includes("como vamos") || cleanMsg.includes("cómo vamos") || cleanMsg.startsWith("/dc status") || cleanMsg === "estado") {
-      let statusDetails = "No hay un worktree activo para este issue en este momento.";
-      if (worktreePath) {
-        const specFile = path.join(worktreePath, "odd", "tasks", `${taskSlug}.md`);
-        let roadmapProgress = "Inicializando...";
-        if (fs.existsSync(specFile)) {
-          const content = fs.readFileSync(specFile, "utf8");
-          const tasks = content.split("\n").filter((l) => /^[✔▶○✖]\s+T\d+:/.test(l.trim()));
-          if (tasks.length > 0) {
-            roadmapProgress = tasks.map(t => t.trim()).join("\n- ");
-          }
-        }
+    // ── 3. Consultas Conversacionales Inteligentes ("¿ya merito?", "¿qué pasó?", "¿cómo vamos?", etc.) ──
+    const isConversational =
+      cleanMsg.includes("ya merito") ||
+      cleanMsg.includes("ya casi") ||
+      cleanMsg.includes("que paso") ||
+      cleanMsg.includes("qué pasó") ||
+      cleanMsg.includes("como vamos") ||
+      cleanMsg.includes("cómo vamos") ||
+      cleanMsg.includes("en que te quedaste") ||
+      cleanMsg.startsWith("/dc status") ||
+      cleanMsg === "estado";
 
-        const gitStatus = await dcWorkerRunner.runInWorktree(worktreePath, "git", ["status", "--porcelain"], { timeoutMs: 5000 });
-        const modifiedFiles = gitStatus.stdout
-          ? gitStatus.stdout.split("\n").map(l => l.trim()).filter(Boolean)
-          : [];
+    if (isConversational) {
+      const generated = await dcIssueConversationalAgent.generateReply({
+        authorLogin,
+        commentBody,
+        issueNumber,
+        issueTitle: payload.issue.title || `Issue #${issueNumber}`,
+        worktreePath,
+        taskSlug,
+        branchName,
+        isOwner: true,
+      });
 
-        statusDetails = [
-          `**Rama de trabajo**: \`${branchName}\``,
-          `**Progreso de Hoja de Ruta ODD**:`,
-          `- ${roadmapProgress}`,
-          `**Archivos tocados hasta ahora (${modifiedFiles.length})**:`,
-          modifiedFiles.length > 0 ? modifiedFiles.map(f => `- \`${f}\``).join("\n") : "- Ningún archivo modificado todavía.",
-        ].join("\n");
-      }
-
-      const reply = `🤖 **DC Super-Agent 86**: Hola @${authorLogin}. Aquí está el reporte en vivo:\n\n${statusDetails}`;
-      await dcIssueNotifier.notifyIssue(target, reply);
-      return { handled: true, response: reply };
+      await dcIssueNotifier.notifyIssue(target, generated.reply);
+      return { handled: true, response: generated.reply };
     }
 
     // ── 4. Comando de Diff: "¿Qué archivos has tocado?" / "/dc diff" ──
