@@ -8,6 +8,8 @@ import { dcWorkerRunner } from "./dc-worker-runner.ts";
 import { dcRemoteQuestionManager } from "./dc-remote-question.ts";
 import { dcControlDaemonManager } from "./dc-control-daemon-manager.ts";
 import { dcIssueConversationalAgent } from "./dc-issue-conversational-agent.ts";
+import { dcSuperAgentChatManager } from "./dc-super-agent-chat-manager.ts";
+import { dcChatDatabase } from "./dc-chat-sqlite-db.ts";
 import { promptAgentChatModal } from "../views/dc-agent-chat-modal.ts";
 import type { GitHubIssueCommentPayload, IssueCommentCommandResult } from "./dc-issue-comment-types.ts";
 import type { DispatchedIssueTask } from "./dc-issue-dispatcher.ts";
@@ -78,7 +80,8 @@ export class DcIssueCommentRouter {
       });
 
       // 1. Acuse inmediato de recibo en GitHub
-      const waitingAck = `🤖 **DC Super-Agent 86**: Hola @${authorLogin}, gracias por tu comentario. Procesando su solicitud, por favor espere un momento...`;
+      const quoteAck = commentBody.split("\n").map(l => `> ${l}`).join("\n");
+      const waitingAck = `${quoteAck}\n\n🤖 **DC Super-Agent 86**: Hola @${authorLogin}, gracias por tu comentario. Procesando su solicitud, por favor espere un momento...`;
       await dcIssueNotifier.notifyIssue(target, waitingAck);
 
       // 2. Generar borrador de respuesta diplomática / protección
@@ -93,6 +96,42 @@ export class DcIssueCommentRouter {
         isOwner: false,
       });
 
+      // Registrar en el buzón persistente de mensajes para la oficina de control
+      const msgId = `chat-${issueNumber}-${Date.now()}`;
+      dcSuperAgentChatManager.recordMessage({
+        id: msgId,
+        issueNumber,
+        authorLogin,
+        incomingText: commentBody,
+        proposedReply: analysis.reply,
+        isMalicious: analysis.intent === "malicious_attempt",
+      });
+
+      // Registrar en SQLite transaccional persistente (chat.db)
+      const threadId = `issue-${issueNumber}`;
+      dcChatDatabase.upsertThread({
+        id: threadId,
+        title: `Issue #${issueNumber}: ${payload.issue.title || "Comentarios"}`,
+        participant: `@${authorLogin}`,
+        repoNwo,
+        issueNumber,
+        unreadCount: 1,
+        updatedAt: Date.now(),
+      });
+
+      dcChatDatabase.addMessage({
+        id: msgId,
+        threadId,
+        sender: authorLogin,
+        senderRole: "third_party",
+        incomingText: commentBody,
+        quotedText: quoteAck,
+        replyText: analysis.reply,
+        status: "pending_review",
+        isMalicious: analysis.intent === "malicious_attempt",
+        timestamp: Date.now(),
+      });
+
       // 3. Notificar al Owner vía ventana flotante interactiva tipo Chat si la UI está disponible
       const activeCtx = (globalThis as any)[Symbol.for("dc.sidebar.ctx")];
       let finalReply = analysis.reply;
@@ -100,7 +139,7 @@ export class DcIssueCommentRouter {
       if (activeCtx && activeCtx.hasUI && activeCtx.mode === "tui") {
         try {
           const decision = await promptAgentChatModal(activeCtx, {
-            id: `chat-${issueNumber}-${Date.now()}`,
+            id: msgId,
             authorLogin,
             issueNumber,
             incomingText: commentBody,
@@ -109,9 +148,13 @@ export class DcIssueCommentRouter {
           });
 
           if (decision.action === "reject") {
+            dcSuperAgentChatManager.updateStatus(msgId, "rejected");
+            dcChatDatabase.updateMessageStatus(msgId, "rejected");
             return { handled: true, response: "Comentario descartado por el usuario" };
           }
           finalReply = decision.reply;
+          dcSuperAgentChatManager.updateStatus(msgId, "approved", finalReply);
+          dcChatDatabase.updateMessageStatus(msgId, "approved", finalReply);
         } catch {
           /* fallback to analysis.reply */
         }
@@ -119,6 +162,8 @@ export class DcIssueCommentRouter {
 
       // 4. Publicar la respuesta aprobada en el hilo del issue de GitHub
       await dcIssueNotifier.notifyIssue(target, finalReply);
+      dcSuperAgentChatManager.updateStatus(msgId, "sent", finalReply);
+      dcChatDatabase.updateMessageStatus(msgId, "sent", finalReply);
       return { handled: true, response: finalReply };
     }
 

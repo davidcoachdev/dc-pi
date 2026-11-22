@@ -6,6 +6,7 @@ import { openControlCenterModal } from "../views/dc-control-center-modal.ts";
 import { isSessionChangeReason } from "../../dc-exit/dc-exit.ts";
 import { dcRemoteQuestionManager } from "./dc-remote-question.ts";
 import { promptAgentQuestionModal } from "../views/dc-agent-question-modal.ts";
+import { openAgentChatMessengerModal } from "../views/dc-chat-messenger-modal.ts";
 import { checkPendingIssues } from "./dc-pending-issues.ts";
 
 export function registerControlDaemonCommands(pi: ExtensionAPI): void {
@@ -17,6 +18,11 @@ export function registerControlDaemonCommands(pi: ExtensionAPI): void {
 
       if (sub === "" || sub === "open" || sub === "ui") {
         await openControlCenterModal(ctx);
+        return;
+      }
+
+      if (sub === "chat" || sub === "messages" || sub === "messenger") {
+        await openAgentChatMessengerModal(ctx);
         return;
       }
 
@@ -60,7 +66,7 @@ export function registerControlDaemonCommands(pi: ExtensionAPI): void {
         return;
       }
 
-      dcNotifier.notify(ctx, "DC Control", "Uso: /dc-control [open | start | stop | status | check]", "warning");
+      dcNotifier.notify(ctx, "DC Control", "Uso: /dc-control [open | chat | start | stop | status | check]", "warning");
     },
   });
 

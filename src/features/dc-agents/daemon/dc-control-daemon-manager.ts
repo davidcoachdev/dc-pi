@@ -499,28 +499,32 @@ export class DcControlDaemonManager {
     // pero en el sistema operativo el túnel y el puerto siguen vivos escuchando para ESTE repositorio:
     if (!tunnelActive || !running) {
       try {
-        const stdout = execFileSync("pgrep", ["-fa", "gh webhook forward"], {
+        const stdout = execFileSync("pgrep", ["-x", "gh"], {
           encoding: "utf8",
           stdio: ["ignore", "pipe", "ignore"],
         }).trim();
 
         if (stdout) {
-          const lines = stdout.split("\n").filter((l) => !l.includes("pgrep") && !l.includes("node -e"));
-          for (const line of lines) {
-            const match = line.match(/--repo=([^\s]+).*--url=http:\/\/127\.0\.0\.1:(\d+)\/github-webhook\?capability=([a-f0-9]+)/);
-            if (match) {
-              const detectedRepoNwo = match[1]!;
-              const activeRepo = this.currentRepo ?? resolveCurrentRepoIdentity(process.cwd());
+          const pids = stdout.split("\n").map(l => l.trim()).filter(Boolean);
+          for (const pid of pids) {
+            try {
+              const cmdline = fs.readFileSync(`/proc/${pid}/cmdline`, "utf8");
+              if (cmdline.includes("webhook") && cmdline.includes("forward")) {
+                const match = cmdline.match(/--repo=([^\0\s]+).*--url=http:\/\/127\.0\.0\.1:(\d+)\/github-webhook\?capability=([a-f0-9]+)/);
+                if (match) {
+                  const detectedRepoNwo = match[1]!;
+                  const activeRepo = this.currentRepo ?? resolveCurrentRepoIdentity(process.cwd());
 
-              // Solo adoptar el túnel del sistema operativo si pertenece al repositorio actual
-              if (activeRepo && activeRepo.fullNwo.toLowerCase() === detectedRepoNwo.toLowerCase()) {
-                tunnelActive = true;
-                port = parseInt(match[2]!, 10);
-                repo = activeRepo;
-                running = true;
-                break;
+                  if (activeRepo && activeRepo.fullNwo.toLowerCase() === detectedRepoNwo.toLowerCase()) {
+                    tunnelActive = true;
+                    port = parseInt(match[2]!, 10);
+                    repo = activeRepo;
+                    running = true;
+                    break;
+                  }
+                }
               }
-            }
+            } catch {}
           }
         }
       } catch {
