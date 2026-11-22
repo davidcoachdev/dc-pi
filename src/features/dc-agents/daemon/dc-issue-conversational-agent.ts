@@ -129,12 +129,18 @@ export class DcIssueConversationalAgent {
       } catch {}
     }
 
-    // Pregunta estilo "¿ya merito?" / "¿cómo vamos?" / "¿qué pasó?"
+    // Variaciones conversacionales del OWNER (saludos, preguntas directas, estado, etc.)
     let replyIntro = "¡Hola @davidcoachdev! Todo en orden por aquí.";
     if (lower.includes("ya merito") || lower.includes("ya casi") || lower.includes("falta mucho")) {
       replyIntro = "¡Hola @davidcoachdev! Ya falta poco para concluir la entrega.";
     } else if (lower.includes("que paso") || lower.includes("qué pasó") || lower.includes("en que te quedaste")) {
       replyIntro = "¡Hola @davidcoachdev! Te comparto en qué punto nos encontramos exactamente:";
+    } else if (lower.includes("que haces") || lower.includes("qué haces") || lower.includes("que estás haciendo")) {
+      replyIntro = "¡Hola @davidcoachdev! Estoy activo supervisando el repositorio y ejecutando la entrega continua de este issue:";
+    } else if (lower.includes("holis") || lower.includes("hola") || lower.includes("buen dia") || lower.includes("buenas")) {
+      replyIntro = "¡Hola @davidcoachdev! Qué gusto saludarte. Aquí sigo al tanto y activo en el issue:";
+    } else if (lower.includes("reporte") || lower.includes("informe")) {
+      replyIntro = "¡Hola @davidcoachdev! Aquí tienes el reporte detallado de lo que llevamos realizado:";
     }
 
     const reply = [

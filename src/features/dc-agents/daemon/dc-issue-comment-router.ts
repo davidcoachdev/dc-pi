@@ -191,19 +191,20 @@ export class DcIssueCommentRouter {
       return { handled: true, response: ackMsg };
     }
 
-    // ── 3. Consultas Conversacionales Inteligentes ("¿ya merito?", "¿qué pasó?", "¿cómo vamos?", etc.) ──
-    const isConversational =
-      cleanMsg.includes("ya merito") ||
-      cleanMsg.includes("ya casi") ||
-      cleanMsg.includes("que paso") ||
-      cleanMsg.includes("qué pasó") ||
-      cleanMsg.includes("como vamos") ||
-      cleanMsg.includes("cómo vamos") ||
-      cleanMsg.includes("en que te quedaste") ||
-      cleanMsg.startsWith("/dc status") ||
-      cleanMsg === "estado";
+    // ── 3. Consultas y Conversación Libre del OWNER ──
+    // Responde a preguntas de estado, qué haces, qué pasó, holis, y cualquier consulta conversacional del Owner
+    const isDirectDirective =
+      cleanMsg.startsWith("añade") ||
+      cleanMsg.startsWith("anade") ||
+      cleanMsg.startsWith("agrega") ||
+      cleanMsg.startsWith("/dc add");
 
-    if (isConversational) {
+    const isDiffCommand =
+      cleanMsg.includes("que archivos") ||
+      cleanMsg.includes("qué archivos") ||
+      cleanMsg.startsWith("/dc diff");
+
+    if (!isDirectDirective && !isDiffCommand) {
       const generated = await dcIssueConversationalAgent.generateReply({
         authorLogin,
         commentBody,
