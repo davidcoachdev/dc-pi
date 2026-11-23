@@ -196,32 +196,47 @@ export class DcSuperAgentsSidebarCard implements Component {
 
     rows.push(new DcJustifiedRow(sep, ""));
 
-    // ── 3. SUPER-AGENTE #86 (MISIÓN & ODD ROADMAP) ──
+    // ── 3. GATEWAY INGRESS & SUPER-AGENTES REGISTRADOS ──
     const status = dcControlDaemonManager.getStatus();
     const dispatches = status.activeDispatches;
     const isDaemonRunning = status.running;
     const isTunnelRunning = status.tunnelActive;
 
-    const daemonStatusStr = isDaemonRunning ? greenBright("● ACTIVO") : dim("○ DETENIDO");
+    const gatewayStatusStr = isDaemonRunning ? greenBright("● ONLINE") : dim("○ INACTIVO");
     const tunnelStatusStr = isTunnelRunning ? greenBright("✓ GH TÚNEL") : dim("○ SIN TÚNEL");
 
     rows.push(
       new DcJustifiedRow(
-        `  ${bloodSoft(bold("Daemon #86:"))} ${daemonStatusStr}`,
+        `  ${bloodSoft(bold("Gateway Ingress:"))} ${gatewayStatusStr}`,
         `${tunnelStatusStr} `
+      )
+    );
+
+    // Listar Super-Agentes federados
+    const agent86Status = dispatches.length > 0 ? yellowBright("[ocupado]") : dim("[idle]");
+    rows.push(
+      new DcJustifiedRow(
+        `    ${yellowBright("🤖")} ${bloodWhite("Agente #86 (Issues)")}`,
+        `${agent86Status} `
+      )
+    );
+    rows.push(
+      new DcJustifiedRow(
+        `    ${yellowBright("🤖")} ${bloodWhite("Agente #99 (PRs)")}`,
+        `${dim("[idle]")} `
       )
     );
 
     if (dispatches.length === 0) {
       rows.push(
         new DcJustifiedRow(
-          `  ${dim("Misión actual:")}`,
+          `  ${dim("Misión #86:")}`,
           `${dim("en espera")} `
         )
       );
       rows.push(
         new DcJustifiedRow(
-          `  ${dim("↳ Escuchando issues en GitHub...")}`,
+          `  ${dim("↳ Gateway a la escucha de eventos GitHub")}`,
           ""
         )
       );
