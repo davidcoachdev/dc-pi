@@ -18,11 +18,18 @@ export interface PendingChatMessage {
   incomingText: string;
   proposedReply: string;
   isMalicious?: boolean;
+  riskCategory?: string;
+  riskReason?: string;
+  commentId?: number;
+  repoNwo?: string;
+  currentStrikes?: number;
 }
 
 export type ChatApprovalDecision =
   | { action: "approve"; reply: string }
-  | { action: "reject" };
+  | { action: "ignore" }
+  | { action: "delete_and_strike"; reason: string }
+  | { action: "block"; reason: string };
 
 /**
  * Modal flotante tipo "WhatsApp / Messenger" para Super-Agentes:
@@ -92,38 +99,42 @@ export class DcAgentChatModalPanel implements Component {
     this.buttonsY = lines.length;
     this.btnRanges = [];
 
-    const sendLabel = " [✓ Enviar a GitHub] ";
-    const editLabel = this.isEditing ? " [✓ Listo / Guardar] " : " [✏ Editar Respuesta] ";
-    const rejectLabel = " [✕ Ignorar / Descartar] ";
+    const sendLabel = " [1. ✓ Aprobar/Enviar] ";
+    const strikeLabel = ` [2. ⚠️ Borrar + Strike (${(this.message.currentStrikes ?? 0) + 1}/3)] `;
+    const blockLabel = " [3. 🚫 Bloquear Total] ";
+    const ignoreLabel = " [4. ✕ Ignorar] ";
 
     const btnSend = this.selectedButtonIndex === 0
       ? `\x1b[7m${greenBright(sendLabel)}\x1b[27m`
       : greenBright(sendLabel);
 
-    const btnEdit = this.selectedButtonIndex === 1
-      ? `\x1b[7m${yellowBright(editLabel)}\x1b[27m`
-      : yellowBright(editLabel);
+    const btnStrike = this.selectedButtonIndex === 1
+      ? `\x1b[7m${yellowBright(strikeLabel)}\x1b[27m`
+      : yellowBright(strikeLabel);
 
-    const btnReject = this.selectedButtonIndex === 2
-      ? `\x1b[7m${bloodBright(rejectLabel)}\x1b[27m`
-      : bloodBright(rejectLabel);
+    const btnBlock = this.selectedButtonIndex === 2
+      ? `\x1b[7m${bloodBright(blockLabel)}\x1b[27m`
+      : bloodBright(blockLabel);
+
+    const btnIgnore = this.selectedButtonIndex === 3
+      ? `\x1b[7m${dim(ignoreLabel)}\x1b[27m`
+      : dim(ignoreLabel);
 
     let currentX = 2;
     this.btnRanges.push({ start: currentX, end: currentX + visibleWidth(sendLabel) });
-    currentX += visibleWidth(sendLabel) + 2;
+    currentX += visibleWidth(sendLabel) + 1;
 
-    this.btnRanges.push({ start: currentX, end: currentX + visibleWidth(editLabel) });
-    currentX += visibleWidth(editLabel) + 2;
+    this.btnRanges.push({ start: currentX, end: currentX + visibleWidth(strikeLabel) });
+    currentX += visibleWidth(strikeLabel) + 1;
 
-    this.btnRanges.push({ start: currentX, end: currentX + visibleWidth(rejectLabel) });
+    this.btnRanges.push({ start: currentX, end: currentX + visibleWidth(blockLabel) });
+    currentX += visibleWidth(blockLabel) + 1;
 
-    lines.push(`  ${btnSend}  ${btnEdit}  ${btnReject}`);
+    this.btnRanges.push({ start: currentX, end: currentX + visibleWidth(ignoreLabel) });
 
-    if (this.isEditing) {
-      lines.push(`  ${dim("Teclas: Escribe para agregar texto | Backspace: borrar | Enter: terminar edición")}`);
-    } else {
-      lines.push(`  ${dim("Teclas: Tab / Shift+Tab: cambiar botón | Enter: confirmar botón | Esc: descartar")}`);
-    }
+    lines.push(`  ${btnSend} ${btnStrike} ${btnBlock} ${btnIgnore}`);
+
+    lines.push(`  ${dim("Teclas: [1] Aprobar  [2] Borrar+Strike  [3] Bloquear  [4/Esc] Ignorar  [Tab/←/→] Mover")}`);
 
     return lines;
   }
@@ -171,19 +182,34 @@ export class DcAgentChatModalPanel implements Component {
       return undefined;
     }
 
-    if (matchesKey(data, Key.escape)) {
-      this.onDone({ action: "reject" });
+    if (matchesKey(data, Key.escape) || data === "4") {
+      this.onDone({ action: "ignore" });
       return true;
     }
 
-    if (matchesKey(data, Key.tab)) {
-      this.selectedButtonIndex = (this.selectedButtonIndex + 1) % 3;
+    if (data === "1") {
+      this.onDone({ action: "approve", reply: this.customReplyText });
+      return true;
+    }
+
+    if (data === "2") {
+      this.onDone({ action: "delete_and_strike", reason: this.message.riskReason || "Violación de normas de comunidad" });
+      return true;
+    }
+
+    if (data === "3") {
+      this.onDone({ action: "block", reason: this.message.riskReason || "Bloqueo por seguridad o agresión directa" });
+      return true;
+    }
+
+    if (matchesKey(data, Key.tab) || matchesKey(data, Key.right)) {
+      this.selectedButtonIndex = (this.selectedButtonIndex + 1) % 4;
       this.requestRender?.();
       return true;
     }
 
-    if (matchesKey(data, Key.shift("tab") as any)) {
-      this.selectedButtonIndex = (this.selectedButtonIndex + 2) % 3;
+    if (matchesKey(data, Key.shift("tab") as any) || matchesKey(data, Key.left)) {
+      this.selectedButtonIndex = (this.selectedButtonIndex + 3) % 4;
       this.requestRender?.();
       return true;
     }
@@ -192,10 +218,11 @@ export class DcAgentChatModalPanel implements Component {
       if (this.selectedButtonIndex === 0) {
         this.onDone({ action: "approve", reply: this.customReplyText });
       } else if (this.selectedButtonIndex === 1) {
-        this.isEditing = true;
-        this.requestRender?.();
+        this.onDone({ action: "delete_and_strike", reason: this.message.riskReason || "Violación de normas de comunidad" });
+      } else if (this.selectedButtonIndex === 2) {
+        this.onDone({ action: "block", reason: this.message.riskReason || "Bloqueo directo" });
       } else {
-        this.onDone({ action: "reject" });
+        this.onDone({ action: "ignore" });
       }
       return true;
     }
@@ -215,10 +242,11 @@ export class DcAgentChatModalPanel implements Component {
             if (i === 0) {
               this.onDone({ action: "approve", reply: this.customReplyText });
             } else if (i === 1) {
-              this.isEditing = !this.isEditing;
-              this.requestRender?.();
+              this.onDone({ action: "delete_and_strike", reason: this.message.riskReason || "Violación de normas de comunidad" });
             } else if (i === 2) {
-              this.onDone({ action: "reject" });
+              this.onDone({ action: "block", reason: this.message.riskReason || "Bloqueo directo" });
+            } else {
+              this.onDone({ action: "ignore" });
             }
             return { handled: true };
           }
@@ -252,5 +280,5 @@ export async function promptAgentChatModal(
     },
   });
 
-  return result || { action: "reject" };
+  return result || { action: "ignore" };
 }
