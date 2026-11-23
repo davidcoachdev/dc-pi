@@ -172,11 +172,22 @@ Comandos y consultas soportadas en este hilo:
       return {
         respondent: "super_agent_99",
         reply: `### 🕵️‍♀️ Super-Agente #99 (PR Inspector & Quality Gate)
-Estoy a cargo de la auditoría y control de calidad de Pull Requests.
+Estoy a cargo de la auditoría, control de calidad y resolución de conflictos en Pull Requests.
 Puedes preguntarme:
 - **"¿qué has revisado?"**: Ver el historial de PRs inspeccionados.
 - **"inspecciona pr #<numero>"**: Solicitar auditoría forzada de un PR.
+- **"resuelve conflictos en pr #<numero>"**: Monta un worktree aislado y lanza Pi en background para resolver el rebase.
 - **"blast radius"**: Ver estadísticas de impacto y límites de líneas.`,
+      };
+    }
+
+    if (q.includes("conflicto") || q.includes("rebase") || q.includes("arregla")) {
+      return {
+        respondent: "super_agent_99",
+        reply: `### 🕵️‍♀️ Super-Agente #99 • Resolución de Conflictos
+Para resolver conflictos en un PR de forma autónoma:
+1. Comenta directamente en el PR de GitHub: *"@dc resuelve conflictos"* o *"arregla el pr"*.
+2. Yo aislaré la rama en un Git worktree temporal, lanzaré una sesión de Pi en segundo plano para desarmar los marcadores de conflicto, verificaré que los tests pasen (exit code 0) y actualizaré la rama con \`--force-with-lease\`.`,
       };
     }
 
