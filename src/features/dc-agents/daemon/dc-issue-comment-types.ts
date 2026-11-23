@@ -2,7 +2,14 @@ import type { GitHubIssuePayload } from "./dc-issue-dispatcher.ts";
 
 export interface GitHubIssueCommentPayload {
   action: "created" | "edited" | "deleted";
-  issue: GitHubIssuePayload["issue"];
+  issue: GitHubIssuePayload["issue"] & {
+    pull_request?: {
+      url: string;
+      html_url: string;
+      diff_url: string;
+      patch_url: string;
+    };
+  };
   comment: {
     id: number;
     body: string;

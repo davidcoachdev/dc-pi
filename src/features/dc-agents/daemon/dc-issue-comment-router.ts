@@ -11,6 +11,7 @@ import { dcIssueConversationalAgent } from "./dc-issue-conversational-agent.ts";
 import { dcSuperAgentChatManager } from "./dc-super-agent-chat-manager.ts";
 import { dcChatDatabase } from "./dc-chat-sqlite-db.ts";
 import { promptAgentChatModal } from "../views/dc-agent-chat-modal.ts";
+import { dcPrInspectorAgent } from "./dc-pr-inspector-agent.ts";
 import type { GitHubIssueCommentPayload, IssueCommentCommandResult } from "./dc-issue-comment-types.ts";
 import type { DispatchedIssueTask } from "./dc-issue-dispatcher.ts";
 
@@ -41,13 +42,20 @@ export class DcIssueCommentRouter {
     const issueNumber = payload.issue.number;
     const repoNwo = payload.repository.full_name;
     const commentBody = (payload.comment.body || "").trim();
+    const isPullRequest = Boolean(payload.issue.pull_request);
+    const agentTag = isPullRequest ? "🕵️‍♀️ **DC Super-Agent 99**" : "🤖 **DC Super-Agent 86**";
+    const agentId = isPullRequest ? "super_agent_99" : "super_agent_86";
 
     // ── 1. Filtro Soberano: Solo OWNER autorizado ──
     const authorRecord = this.collabDb.getCollaborator(authorLogin);
     const isOwner = authorLogin === "davidcoachdev" || (authorRecord?.status === "ALLOW" && authorRecord?.role === "OWNER");
 
     // Ignorar si el comentario fue emitido por el propio super-agente
-    if (commentBody.includes("🤖 **DC Super-Agent") || commentBody.includes("dc-super-agente")) {
+    if (
+      commentBody.includes("🤖 **DC Super-Agent") ||
+      commentBody.includes("🕵️‍♀️ **DC Super-Agent") ||
+      commentBody.includes("dc-super-agente")
+    ) {
       return { handled: false, reason: "ignoring self comment" };
     }
 
@@ -81,7 +89,8 @@ export class DcIssueCommentRouter {
 
       // 1. Acuse inmediato de recibo en GitHub
       const quoteAck = commentBody.split("\n").map(l => `> ${l}`).join("\n");
-      const waitingAck = `${quoteAck}\n\n🤖 **DC Super-Agent 86**: Hola @${authorLogin}, gracias por tu comentario. Procesando su solicitud, por favor espere un momento...`;
+      const targetEntity = isPullRequest ? `Pull Request #${issueNumber}` : `Issue #${issueNumber}`;
+      const waitingAck = `${quoteAck}\n\n${agentTag}: Hola @${authorLogin}, gracias por tu comentario en ${targetEntity}. Procesando tu solicitud de revisión...`;
       await dcIssueNotifier.notifyIssue(target, waitingAck);
 
       // 2. Generar borrador de respuesta diplomática / protección
@@ -108,10 +117,10 @@ export class DcIssueCommentRouter {
       });
 
       // Registrar en SQLite transaccional persistente (chat.db)
-      const threadId = `issue-${issueNumber}`;
+      const threadId = isPullRequest ? `pr-${issueNumber}` : `issue-${issueNumber}`;
       dcChatDatabase.upsertThread({
         id: threadId,
-        title: `Issue #${issueNumber}: ${payload.issue.title || "Comentarios"}`,
+        title: `${isPullRequest ? "PR" : "Issue"} #${issueNumber}: ${payload.issue.title || "Comentarios"}`,
         participant: `@${authorLogin}`,
         repoNwo,
         issueNumber,
@@ -175,6 +184,31 @@ export class DcIssueCommentRouter {
     });
 
     const cleanMsg = commentBody.toLowerCase();
+
+    // ── Si es un Pull Request y comenta el OWNER ──
+    if (isPullRequest) {
+      // 1. Consulta o solicitud de revisión del PR
+      if (cleanMsg.includes("revisa") || cleanMsg.includes("inspecciona") || cleanMsg.includes("estado") || cleanMsg.includes("status")) {
+        const inspection = await dcPrInspectorAgent.inspectPullRequest({
+          prNumber: issueNumber,
+          repoNwo,
+          headBranch: branchName,
+          baseBranch: "master",
+          authorLogin,
+          title: payload.issue.title || `PR #${issueNumber}`,
+          worktreePath,
+        });
+
+        const reply = `${agentTag}: He auditado este Pull Request:\n\n${inspection.summary}`;
+        await dcIssueNotifier.notifyIssue(target, reply);
+        return { handled: true, response: reply };
+      }
+
+      // Respuesta conversacional estándar en PR por la #99
+      const reply = `${agentTag}: ¡Hola @${authorLogin}! Estoy supervisando este Pull Request como Quality Gate. Si deseas que corra una inspección completa de pruebas y blast radius, solo escribe *"inspecciona"* o *"revisa"*`;
+      await dcIssueNotifier.notifyIssue(target, reply);
+      return { handled: true, response: reply };
+    }
 
     // ── 2. Respuestas a Preguntas Pendientes del Subagente (dc-ask-human) ──
     const pendingQuestions = dcRemoteQuestionManager.getPendingQuestions().filter(q => q.issueNumber === issueNumber);

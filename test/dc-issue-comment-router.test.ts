@@ -76,4 +76,41 @@ test("DcIssueCommentRouter: rechaza autores que no son OWNER y procesa comandos 
   const resOwnerStatus = await router.handleComment(buildPayload("davidcoachdev", "¿Cómo vamos?"));
   assert.equal(resOwnerStatus.handled, true);
   assert.ok(resOwnerStatus.response?.includes("reporte en vivo") || resOwnerStatus.response?.includes("DC Super-Agent"));
+
+  // 4. Comentario en Pull Request: Debe responder la Super-Agente #99
+  const buildPrPayload = (author: string, text: string): GitHubIssueCommentPayload => ({
+    action: "created",
+    issue: {
+      number: 99,
+      title: "Feature branch PR",
+      html_url: "https://github.com/davidcoachdev/dc-pi/pull/99",
+      user: { login: "davidcoachdev" },
+      pull_request: {
+        url: "https://api.github.com/repos/davidcoachdev/dc-pi/pulls/99",
+        html_url: "https://github.com/davidcoachdev/dc-pi/pull/99",
+        diff_url: "https://github.com/davidcoachdev/dc-pi/pull/99.diff",
+        patch_url: "https://github.com/davidcoachdev/dc-pi/pull/99.patch",
+      },
+    },
+    comment: {
+      id: 54321,
+      body: text,
+      user: { login: author },
+      html_url: "https://github.com/davidcoachdev/dc-pi/pull/99#comment-54321",
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    },
+    repository: {
+      name: "dc-pi",
+      full_name: "davidcoachdev/dc-pi",
+      owner: { login: "davidcoachdev" },
+      html_url: "https://github.com/davidcoachdev/dc-pi",
+    },
+    sender: { login: author },
+  });
+
+  const resPrComment = await router.handleComment(buildPrPayload("davidcoachdev", "hola cómo va el pr"));
+  assert.equal(resPrComment.handled, true);
+  assert.ok(resPrComment.response?.includes("DC Super-Agent 99"), "Debe responder la agente 99");
+  assert.ok(!resPrComment.response?.includes("DC Super-Agent 86"), "No debe responder el agente 86 en un PR");
 });
