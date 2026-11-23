@@ -12,6 +12,7 @@ import { dcSuperAgentChatManager } from "./dc-super-agent-chat-manager.ts";
 import { dcChatDatabase } from "./dc-chat-sqlite-db.ts";
 import { promptAgentChatModal } from "../views/dc-agent-chat-modal.ts";
 import { dcPrInspectorAgent } from "./dc-pr-inspector-agent.ts";
+import { dcPrConflictResolver } from "./dc-pr-conflict-resolver.ts";
 import type { GitHubIssueCommentPayload, IssueCommentCommandResult } from "./dc-issue-comment-types.ts";
 import type { DispatchedIssueTask } from "./dc-issue-dispatcher.ts";
 
@@ -188,7 +189,28 @@ export class DcIssueCommentRouter {
 
     // ── Si es un Pull Request y comenta el OWNER ──
     if (isPullRequest) {
-      // 1. Consulta o solicitud de revisión del PR
+      // 1. Comando de Resolución Autónoma de Conflictos
+      if (
+        cleanMsg.includes("conflicto") ||
+        cleanMsg.includes("rebase") ||
+        cleanMsg.includes("arregla el pr") ||
+        cleanMsg.includes("resuelve")
+      ) {
+        const waitingReply = `${agentTag}: 🛠 Iniciando resolución autónoma de conflictos para el PR #${issueNumber}. Montando quirófano en worktree aislado y lanzando sesión de Pi en background...`;
+        await dcIssueNotifier.notifyIssue(target, waitingReply);
+
+        void dcPrConflictResolver.resolve({
+          prNumber: issueNumber,
+          repoNwo,
+          headBranch: branchName,
+          baseBranch: "master",
+          authorLogin,
+        });
+
+        return { handled: true, response: waitingReply };
+      }
+
+      // 2. Consulta o solicitud de revisión del PR
       if (cleanMsg.includes("revisa") || cleanMsg.includes("inspecciona") || cleanMsg.includes("estado") || cleanMsg.includes("status")) {
         const inspection = await dcPrInspectorAgent.inspectPullRequest({
           prNumber: issueNumber,
