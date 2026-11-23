@@ -105,9 +105,11 @@ test("DcKeysPanel autoscrolls down and up when navigating beyond viewport", () =
   assert.equal(panel.getSelectedRowIndex(), 13);
   assert.equal(panel.getScrollOffset(), 6);
 
-  // Render when scrolled: should contain row 13
+  // Render when scrolled: should contain row 13 (Alt+6) with selection marker and scroll row 0 out of view
+  assert.equal(panel.getActiveCategory().rows[13]?.key, "Alt+6");
   const lines = panel.render(70);
-  assert.ok(lines.some((l) => l.includes("●") && l.includes("Alt+6..9")));
+  assert.ok(lines.some((l) => l.includes("●") && l.includes("Alt+6")));
+  assert.ok(!lines.some((l) => l.includes("Alt+Shift+G")));
 
   // Move up to row 4 -> scrollOffset should autoscroll up to 4
   for (let i = 0; i < 9; i++) {
@@ -115,6 +117,9 @@ test("DcKeysPanel autoscrolls down and up when navigating beyond viewport", () =
   }
   assert.equal(panel.getSelectedRowIndex(), 4);
   assert.equal(panel.getScrollOffset(), 4);
+  const scrolledUpLines = panel.render(70);
+  assert.ok(scrolledUpLines.some((l) => l.includes("●") && l.includes("Alt+Shift+F")));
+  assert.ok(!scrolledUpLines.some((l) => l.includes("Alt+6")));
 
   // End key jumps to the end of the category
   panel.handleInput("\x1b[F"); // End or Key.end

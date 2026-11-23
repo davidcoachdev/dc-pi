@@ -8,12 +8,12 @@
 - S5: "agregar a la ventana de control para ver usuarios bloqueados y poderlos desbloquear y cuando se bloquea guardar en base de datos el motivo y las evidencias de cada oportunidad"
 
 ## Tasks
-- [ ] T1: (Fase 1 - Formateador Estandarizado) Crear `DcAgentResponseFormatter` con firmas institucionales canónicas para #86, #99, DC-Control y Shield | route: inline
-- [ ] T2: (Fase 2 - Analizador de Comentarios) Implementar `DcCommentAnalyzer` para clasificar riesgo (`BENIGN`, `OFFENSIVE`, `PROMPT_INJECTION`, `DESTRUCTIVE_COMMAND`) | route: inline
-- [ ] T3: (Fase 3 - Esquema de Strikes & Moderación) Crear tabla `moderation_records` y gestor `DcModerationManager` (3-Strikes, borrado en GitHub, bloqueo/desbloqueo de cuentas) | route: inline
-- [ ] T4: (Fase 4 - Router & Modal Interactivo) Integrar en `dc-issue-comment-router.ts` y en el modal de intervención las opciones [1. Ignorar], [2. Borrar + Strike], [3. Bloquear] y auto-purga de bloqueados | route: inline
-- [ ] T5: (Fase 5 - Vista de Moderación en DC-Control) Añadir sección interactiva en la Oficina Central `/dc-control` con tabla de bloqueados, visualizador de expedientes y botón de desbloqueo | route: inline
-- [ ] T6: (Fase 6 - Verificación Determinista) Pruebas automatizadas de moderación, análisis, strikes y compilación `tsc` exit 0 | route: inline
+- [x] T1: (Fase 1 - Formateador Estandarizado) Crear `DcAgentResponseFormatter` con firmas institucionales canónicas para #86, #99, DC-Control y Shield | route: inline | commit: `07c54eb`
+- [x] T2: (Fase 2 - Analizador de Comentarios) Implementar `DcCommentAnalyzer` para clasificar riesgo (`BENIGN`, `OFFENSIVE`, `PROMPT_INJECTION`, `DESTRUCTIVE_COMMAND`) | route: inline | commit: `07c54eb`
+- [x] T3: (Fase 3 - Esquema de Strikes & Moderación) Crear tabla `moderation_records` y gestor `DcModerationManager` (3-Strikes, borrado en GitHub, bloqueo/desbloqueo de cuentas) | route: inline | commit: `07c54eb`
+- [x] T4: (Fase 4 - Router & Modal Interactivo) Integrar en `dc-issue-comment-router.ts` y en el modal de intervención las opciones [1. Ignorar], [2. Borrar + Strike], [3. Bloquear] y auto-purga de bloqueados | route: inline | commit: `07c54eb`
+- [x] T5: (Fase 5 - Vista de Moderación en DC-Control) Añadir sección interactiva en la Oficina Central `/dc-control` con tabla de bloqueados, visualizador de expedientes y botón de desbloqueo | route: inline | commit: `07c54eb`
+- [x] T6: (Fase 6 - Verificación Determinista) Pruebas automatizadas de moderación, análisis, strikes y compilación `tsc` exit 0 | route: inline
 
 ## Log
 - L1: Solicitud inicial: Estandarización de respuestas, analizador semántico de comentarios, sistema de 3 strikes con borrado de comentarios en GitHub y visualizador/desbloqueador en la ventana de DC-Control.

@@ -114,7 +114,7 @@ test("DcIssueDispatcher: Doble Validación Soberana bloquea autores no permitido
   await dispatcher.cleanupDispatch("davidcoachdev/dc-pi", randomIssueNum);
 });
 
-test("DcControlCenterPanel: renderizado de 3 pestañas y navegación interactiva", () => {
+test("DcControlCenterPanel: renderizado de 4 pestañas y navegación interactiva", () => {
   let doneCalled = false;
   let renderRequested = false;
 
@@ -126,24 +126,45 @@ test("DcControlCenterPanel: renderizado de 3 pestañas y navegación interactiva
 
   assert.equal(panel.getActiveTab(), "worktrees");
 
-  // Render inicial (Pestaña 1: Worktrees)
-  const lines1 = panel.render(80);
-  assert.ok(lines1.some((l) => l.includes("Worktrees & ODD")));
+  // Render inicial (Pestaña 1: Central / Worktrees) con las 4 pestañas visibles
+  const lines1 = panel.render(100);
+  const text1 = lines1.join("\n");
+  assert.ok(text1.includes("[1] Central"));
+  assert.ok(text1.includes("[2] Colaboradores"));
+  assert.ok(text1.includes("[3] Audit Log"));
+  assert.ok(text1.includes("[4] 🛡️ Moderación & Bloqueados"));
 
   // Cambiar a Pestaña 2: Colaboradores (tecla '2')
   panel.handleInput("2");
   assert.equal(panel.getActiveTab(), "collaborators");
-  const lines2 = panel.render(80);
-  assert.ok(lines2.some((l) => l.includes("Colaboradores (Seguridad)")));
+  const lines2 = panel.render(100);
+  assert.ok(lines2.some((l) => l.includes("[2] Colaboradores")));
+  assert.ok(lines2.some((l) => l.includes("Permisos de Despacho Autónomo")));
   assert.ok(lines2.some((l) => l.includes("davidcoachdev")));
 
   // Cambiar a Pestaña 3: Audit Log (tecla '3')
   panel.handleInput("3");
   assert.equal(panel.getActiveTab(), "audit");
-  const lines3 = panel.render(80);
-  assert.ok(lines3.some((l) => l.includes("Audit Log") || l.includes("Forense")));
+  const lines3 = panel.render(100);
+  assert.ok(lines3.some((l) => l.includes("[3] Audit Log")));
+  assert.ok(lines3.some((l) => l.includes("Forense")));
 
-  // Conmutación con Tab
+  // Cambiar a Pestaña 4: Moderación & Bloqueados (tecla '4')
+  panel.handleInput("4");
+  assert.equal(panel.getActiveTab(), "moderation");
+  const lines4 = panel.render(100);
+  assert.ok(lines4.some((l) => l.includes("[4] 🛡️ Moderación & Bloqueados")));
+  assert.ok(lines4.some((l) => l.includes("Expediente de Usuarios Bloqueados")));
+
+  // Conmutación completa con Tab (wrap-around: moderation -> worktrees -> collaborators -> audit -> moderation -> worktrees)
+  panel.handleInput("\t");
+  assert.equal(panel.getActiveTab(), "worktrees");
+  panel.handleInput("\t");
+  assert.equal(panel.getActiveTab(), "collaborators");
+  panel.handleInput("\t");
+  assert.equal(panel.getActiveTab(), "audit");
+  panel.handleInput("\t");
+  assert.equal(panel.getActiveTab(), "moderation");
   panel.handleInput("\t");
   assert.equal(panel.getActiveTab(), "worktrees");
 
@@ -162,18 +183,30 @@ test("DcControlCenterPanel: renderizado de 3 pestañas y navegación interactiva
   const toggled = db.toggleCollaboratorStatus("test-user-toggle");
   assert.equal(toggled, "BLOCK");
 
-  // Navegación con flechas izquierda y derecha (← y →)
+  // Navegación con flechas izquierda y derecha (← y →) incluyendo tab 4 y wrap-around
   panel.handleInput("1");
   assert.equal(panel.getActiveTab(), "worktrees");
   panel.handleInput("\x1b[C"); // flecha derecha -> collaborators
   assert.equal(panel.getActiveTab(), "collaborators");
   panel.handleInput("\x1b[C"); // flecha derecha -> audit
   assert.equal(panel.getActiveTab(), "audit");
+  panel.handleInput("\x1b[C"); // flecha derecha -> moderation
+  assert.equal(panel.getActiveTab(), "moderation");
+  panel.handleInput("\x1b[C"); // flecha derecha -> worktrees (wrap-around)
+  assert.equal(panel.getActiveTab(), "worktrees");
+  panel.handleInput("\x1b[D"); // flecha izquierda -> moderation (wrap-around)
+  assert.equal(panel.getActiveTab(), "moderation");
+  panel.handleInput("\x1b[D"); // flecha izquierda -> audit
+  assert.equal(panel.getActiveTab(), "audit");
   panel.handleInput("\x1b[D"); // flecha izquierda -> collaborators
   assert.equal(panel.getActiveTab(), "collaborators");
 
   // Ctrl+Flechas (secuencias ANSI xterm \x1b[1;5C y \x1b[1;5D)
   panel.handleInput("\x1b[1;5C"); // Ctrl+Right -> audit
+  assert.equal(panel.getActiveTab(), "audit");
+  panel.handleInput("\x1b[1;5C"); // Ctrl+Right -> moderation
+  assert.equal(panel.getActiveTab(), "moderation");
+  panel.handleInput("\x1b[1;5D"); // Ctrl+Left -> audit
   assert.equal(panel.getActiveTab(), "audit");
   panel.handleInput("\x1b[1;5D"); // Ctrl+Left -> collaborators
   assert.equal(panel.getActiveTab(), "collaborators");

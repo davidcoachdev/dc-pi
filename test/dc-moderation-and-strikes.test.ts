@@ -4,21 +4,54 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 
+const originalHome = process.env.HOME;
+const originalXdgConfigHome = process.env.XDG_CONFIG_HOME;
+const originalPiAgentDir = process.env.PI_CODING_AGENT_DIR;
+const originalPath = process.env.PATH;
+
 const testHome = fs.mkdtempSync(path.join(os.tmpdir(), "dc-mod-test-"));
+const fakeBin = path.join(testHome, "bin");
+const ghLogFile = path.join(testHome, "gh-calls.log");
+fs.mkdirSync(fakeBin, { recursive: true });
+fs.writeFileSync(
+  path.join(fakeBin, "gh"),
+  `#!/bin/sh\nprintf '%s\\n' "$*" >> "${ghLogFile}"\nexit 0\n`,
+  { mode: 0o755 },
+);
+
 process.env.HOME = testHome;
 process.env.XDG_CONFIG_HOME = path.join(testHome, "xdg");
 process.env.PI_CODING_AGENT_DIR = path.join(testHome, "pi");
+process.env.PATH = originalPath ? `${fakeBin}${path.delimiter}${originalPath}` : fakeBin;
 
-import { dcCommentAnalyzer } from "../src/features/dc-agents/daemon/dc-comment-analyzer.ts";
-import { DcAgentResponseFormatter } from "../src/features/dc-agents/daemon/dc-agent-response-formatter.ts";
-import { dcModerationManager } from "../src/features/dc-agents/daemon/dc-moderation-manager.ts";
-import { getCollaboratorsDatabase } from "../src/features/dc-agents/daemon/dc-collaborators-db.ts";
+const { dcCommentAnalyzer } = await import("../src/features/dc-agents/daemon/dc-comment-analyzer.ts");
+const { DcAgentResponseFormatter } = await import("../src/features/dc-agents/daemon/dc-agent-response-formatter.ts");
+const { dcModerationManager } = await import("../src/features/dc-agents/daemon/dc-moderation-manager.ts");
+const { getCollaboratorsDatabase } = await import("../src/features/dc-agents/daemon/dc-collaborators-db.ts");
+
+function restoreEnv(name: string, value: string | undefined): void {
+  if (value === undefined) {
+    delete process.env[name];
+  } else {
+    process.env[name] = value;
+  }
+}
 
 test.after(() => {
   try {
     getCollaboratorsDatabase().close();
+  } catch {
+    /* best-effort */
+  }
+  restoreEnv("HOME", originalHome);
+  restoreEnv("XDG_CONFIG_HOME", originalXdgConfigHome);
+  restoreEnv("PI_CODING_AGENT_DIR", originalPiAgentDir);
+  restoreEnv("PATH", originalPath);
+  try {
     fs.rmSync(testHome, { recursive: true, force: true });
-  } catch {}
+  } catch {
+    /* best-effort */
+  }
 });
 
 test("DcCommentAnalyzer - Clasificación precisa de amenazas y comentarios", () => {
@@ -64,6 +97,9 @@ test("DcAgentResponseFormatter - Formateo canónico institucional", () => {
 });
 
 test("DcModerationManager - Sistema de 3 Strikes, registro y desbloqueo", async () => {
+  const dbPath = getCollaboratorsDatabase().getDbPath();
+  assert.ok(dbPath.startsWith(testHome), `DB debe aislarse en tempHome (${testHome}), recibida: ${dbPath}`);
+
   const troll = "troll_user_test";
 
   // Strike 1
@@ -108,4 +144,12 @@ test("DcModerationManager - Sistema de 3 Strikes, registro y desbloqueo", async 
 
   const blockedListAfter = dcModerationManager.getBlockedUsers();
   assert.ok(!blockedListAfter.some(b => b.username === troll));
+
+  // Verificar que las llamadas a gh fueron interceptadas por el stub local y no golpearon GitHub real
+  assert.equal(fs.existsSync(ghLogFile), true);
+  const ghCalls = fs.readFileSync(ghLogFile, "utf8").trim().split("\n");
+  assert.deepEqual(ghCalls, [
+    `api -X PUT /user/blocks/${troll}`,
+    `api -X DELETE /user/blocks/${troll}`,
+  ]);
 });
