@@ -66,11 +66,11 @@ El supervisor monitorea, audita y coordina **todas las sesiones activas de Pi / 
 ---
 
 ## 4. Plan de Implementación (Fase 1: Core hacia afuera)
-- [ ] **T1: Contratos de Tipos y Bus de Eventos (`dc-supervisor-bus.ts`)**
+- [x] **T1: Contratos de Tipos y Bus de Eventos (`dc-supervisor-bus.ts`)** (`commit: 1ed5fb9`)
   Definir las interfaces `SupervisorSessionInfo`, `SessionState`, `SessionHeartbeat` y el emitter de eventos inmutable.
-- [ ] **T2: Registro y Descubrimiento de Sesiones (`dc-session-registry.ts`)**
+- [x] **T2: Registro y Descubrimiento de Sesiones (`dc-session-registry.ts`)** (`commit: 1ed5fb9`)
   Implementar el scanner seguro de sesiones sin bloquear I/O ni seguir symlinks peligrosos.
-- [ ] **T3: Watchdog Anti-Cuelgues y Monitoreo de Estado (`dc-supervisor-watchdog.ts`)**
+- [x] **T3: Watchdog Anti-Cuelgues y Monitoreo de Estado (`dc-supervisor-watchdog.ts`)** (`commit: 1ed5fb9`)
   Implementar el evaluador de salud por PID/sesión con umbrales configurables (ej. advertencia tras 120s sin actividad).
-- [ ] **T4: Pruebas Automatizadas Deterministas (`test/dc-supervisor-core.test.ts`)**
+- [x] **T4: Pruebas Automatizadas Deterministas (`test/dc-supervisor-core.test.ts`)** (`commit: 1ed5fb9`, verificado PASS exit 0)
   Crear suite con fixtures temporales en `os.tmpdir()` validando detección, transiciones de estado, eventos y limpieza de recursos.

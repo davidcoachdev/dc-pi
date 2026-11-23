@@ -9,10 +9,10 @@
 
 ## Tasks
 - [ ] T1: Renombrar y purgar todo rastro de `dc-webhook` a `dc-control` en comandos, archivos, scripts y tests | route: inline
-- [ ] T2: Insertar la 3ª pestaña `CTRL` en `dc-sidebar` desplazando `TREE`, `MEM`, `SYS` y reasignando atajos `alt+1` a `alt+6` | route: inline
+- [x] T2: Insertar la 3ª pestaña `CTRL` en `dc-sidebar` desplazando `TREE`, `MEM`, `SYS` y reasignando atajos `alt+1` a `alt+6` | route: inline | commit: `307777f` (evolucionado luego a 8 pestañas con `CTRL` en `[4]`)
 - [ ] T3: Implementar la vista del sidebar para Super-Agentes con sub-tabs (`[#86]` y `[⚙ CONFIG]`), monitoreo en tiempo real, estado de binarios y botones de acción | route: inline
-- [ ] T4: Refactorizar la ventana modal `/dc-control` para que funcione como la Oficina Central multi-agente | route: inline
-- [ ] T5: Verificación determinista (typecheck y tests de dc-control y sidebar con exit code 0) | route: inline
+- [x] T4: Refactorizar la ventana modal `/dc-control` para que funcione como la Oficina Central multi-agente | route: inline | commit: `307777f`
+- [x] T5: Verificación determinista (typecheck y tests de dc-control y sidebar con exit code 0) | route: inline
 
 ## Log
 - L1: Solicitud del usuario: Reemplazo total de dc-webhook por dc-control, creación de la 3ª pestaña en sidebar con sub-tabs por agente y configuración con botones, y refactorización de la ventana modal como oficina central.

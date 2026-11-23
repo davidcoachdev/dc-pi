@@ -225,7 +225,7 @@ export class DcModerationManager {
                issue_or_pr_number as issueOrPrNumber, repo_nwo as repoNwo, timestamp
         FROM moderation_records
         WHERE username = ?
-        ORDER BY timestamp DESC
+        ORDER BY timestamp DESC, strike_number DESC, rowid DESC
       `);
       const records = stmt.all(collab.login) as unknown as ModerationRecord[];
 

@@ -8,8 +8,8 @@
 
 ## Tasks
 - [ ] T1: (Fase 1 - Desacoplamiento & Ingress Gateway) Renombrar conceptual y técnicamente la antena de webhooks a `dc-github-gateway` (o Ingress Gateway neutral), separando el servidor Express y el túnel `gh` de la identidad del Agente #86 | route: inline
-- [ ] T2: (Fase 2 - Contrato Canónico de Super-Agentes) Crear la interfaz canónica `DcSuperAgentDefinition` y el registro central `DcSuperAgentRegistry` con tipado extensible | route: inline
-- [ ] T3: (Fase 3 - Adaptación del Agente #86 & Scaffold del Agente #99) Registrar al Agente #86 como `issue_resolver` y declarar el scaffold del Agente #99 como `pr_inspector` sobre el nuevo Registry | route: inline
+- [x] T2: (Fase 2 - Contrato Canónico de Super-Agentes) Crear la interfaz canónica `DcSuperAgentDefinition` y el registro central `DcSuperAgentRegistry` con tipado extensible | route: inline | commit: `98c9f1b`
+- [x] T3: (Fase 3 - Adaptación del Agente #86 & Scaffold del Agente #99) Registrar al Agente #86 como `issue_resolver` y declarar el scaffold del Agente #99 como `pr_inspector` sobre el nuevo Registry | route: inline | commit: `98c9f1b`
 - [ ] T4: (Fase 4 - Despachador de Eventos de Gateway) Adaptar el Gateway Ingress para enrutar eventos `issues`/`issue_comment` hacia el #86 y eventos `pull_request` hacia el #99 según sus triggers registrados | route: inline
 - [ ] T5: (Fase 5 - Creador de Super-Agentes CLI/API) Implementar la fábrica y comando de creación rápida de nuevos Super-Agentes autónomos (`createSuperAgent`) | route: inline
 - [ ] T6: (Fase 6 - Actualización de Sidebar y Chat Global) Reflejar en la pestaña CTRL del sidebar y en el Chat Global la nueva arquitectura: Ingress Gateway neutral + lista federada de Super-Agentes | route: inline

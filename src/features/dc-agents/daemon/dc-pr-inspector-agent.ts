@@ -5,6 +5,24 @@ import * as fs from "node:fs";
 
 const execFileAsync = promisify(execFile);
 
+export type PrInspectorExecCommand = (
+  file: string,
+  args: string[],
+  options: { cwd: string; timeout?: number },
+) => Promise<{ stdout: string; stderr: string }>;
+
+export interface PrInspectorOptions {
+  execCommand?: PrInspectorExecCommand;
+}
+
+const defaultExecCommand: PrInspectorExecCommand = async (file, args, options) => {
+  const { stdout, stderr } = await execFileAsync(file, args, options);
+  return {
+    stdout: String(stdout ?? ""),
+    stderr: String(stderr ?? ""),
+  };
+};
+
 export interface PrInspectionTarget {
   prNumber: number;
   repoNwo: string;
@@ -49,6 +67,11 @@ export interface PrInspectionResult {
 export class DcPrInspectorAgent {
   private static instance?: DcPrInspectorAgent;
   private activeInspections = new Map<number, PrInspectionResult>();
+  private readonly execCommand: PrInspectorExecCommand;
+
+  constructor(options?: PrInspectorOptions) {
+    this.execCommand = options?.execCommand ?? defaultExecCommand;
+  }
 
   public static getInstance(): DcPrInspectorAgent {
     if (!DcPrInspectorAgent.instance) {
@@ -68,17 +91,21 @@ export class DcPrInspectorAgent {
   /**
    * Ejecuta la inspección completa de un Pull Request en un directorio/worktree dado.
    */
-  public async inspectPullRequest(target: PrInspectionTarget): Promise<PrInspectionResult> {
+  public async inspectPullRequest(
+    target: PrInspectionTarget,
+    options?: PrInspectorOptions,
+  ): Promise<PrInspectionResult> {
     const cwd = target.worktreePath || process.cwd();
+    const execCommand = options?.execCommand ?? this.execCommand;
 
     // 1. Auditar Blast Radius con git diff --stat
-    const blast = await this.auditBlastRadius(cwd, target.baseBranch);
+    const blast = await this.auditBlastRadius(cwd, target.baseBranch, execCommand);
 
     // 2. Ejecutar Typecheck / Build
-    const buildCheck = await this.runBuildCheck(cwd);
+    const buildCheck = await this.runBuildCheck(cwd, execCommand);
 
     // 3. Ejecutar Tests si existen
-    const testCheck = await this.runTestCheck(cwd);
+    const testCheck = await this.runTestCheck(cwd, execCommand);
 
     // 4. Determinar veredicto objetivo
     let verdict: "APPROVE" | "REQUEST_CHANGES" | "NEEDS_DISCUSSION" = "APPROVE";
@@ -132,14 +159,18 @@ export class DcPrInspectorAgent {
     return result;
   }
 
-  private async auditBlastRadius(cwd: string, baseBranch = "master"): Promise<{
+  private async auditBlastRadius(
+    cwd: string,
+    baseBranch = "master",
+    execCommand: PrInspectorExecCommand = this.execCommand,
+  ): Promise<{
     filesChanged: number;
     insertions: number;
     deletions: number;
     isOversized: boolean;
   }> {
     try {
-      const { stdout } = await execFileAsync("git", ["diff", "--shortstat", `origin/${baseBranch}...HEAD`], { cwd });
+      const { stdout } = await execCommand("git", ["diff", "--shortstat", `origin/${baseBranch}...HEAD`], { cwd });
       const filesMatch = stdout.match(/(\d+)\s+file/);
       const insMatch = stdout.match(/(\d+)\s+insertion/);
       const delMatch = stdout.match(/(\d+)\s+deletion/);
@@ -160,7 +191,10 @@ export class DcPrInspectorAgent {
     }
   }
 
-  private async runBuildCheck(cwd: string): Promise<{ passed: boolean; output: string }> {
+  private async runBuildCheck(
+    cwd: string,
+    execCommand: PrInspectorExecCommand = this.execCommand,
+  ): Promise<{ passed: boolean; output: string }> {
     try {
       const pkgPath = path.join(cwd, "package.json");
       if (!fs.existsSync(pkgPath)) {
@@ -171,14 +205,17 @@ export class DcPrInspectorAgent {
         return { passed: true, output: "No hay script de build definido." };
       }
 
-      const { stdout, stderr } = await execFileAsync("npm", ["run", "build"], { cwd, timeout: 60_000 });
+      const { stdout, stderr } = await execCommand("npm", ["run", "build"], { cwd, timeout: 60_000 });
       return { passed: true, output: stdout + "\n" + stderr };
     } catch (err: any) {
       return { passed: false, output: err?.stdout || err?.message || "Error en build" };
     }
   }
 
-  private async runTestCheck(cwd: string): Promise<{ passed: boolean; output: string }> {
+  private async runTestCheck(
+    cwd: string,
+    execCommand: PrInspectorExecCommand = this.execCommand,
+  ): Promise<{ passed: boolean; output: string }> {
     try {
       const pkgPath = path.join(cwd, "package.json");
       if (!fs.existsSync(pkgPath)) {
@@ -189,7 +226,7 @@ export class DcPrInspectorAgent {
         return { passed: true, output: "No hay script de test definido." };
       }
 
-      const { stdout, stderr } = await execFileAsync("npm", ["test"], { cwd, timeout: 60_000 });
+      const { stdout, stderr } = await execCommand("npm", ["test"], { cwd, timeout: 60_000 });
       return { passed: true, output: stdout + "\n" + stderr };
     } catch (err: any) {
       return { passed: false, output: err?.stdout || err?.message || "Error en tests" };
