@@ -240,7 +240,12 @@ export class DcChatMessengerPanel implements Component {
           if (isOwner) {
             senderTag = `${bloodBright(`👤 @${msg.sender} (Tú)`)} ${dim(`[${dateStr}]`)}`;
           } else if (isAgent) {
-            senderTag = `${greenBright(`🤖 Super-Agent 86`)} ${dim(`[${dateStr}]`)}`;
+            const agentName = msg.sender === "dc_control"
+              ? "🎮 DC-Control"
+              : msg.sender === "super_agent_99"
+                ? "🕵️‍♀️ Super-Agente #99 (PRs)"
+                : "🤖 Super-Agent 86 (Issues)";
+            senderTag = `${greenBright(agentName)} ${dim(`[${dateStr}]`)}`;
           }
 
           allRightLines.push(senderTag);
@@ -515,8 +520,10 @@ export class DcChatMessengerPanel implements Component {
   }
 
   handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
-    // Rueda del mouse sobre el área del chat para hacer scroll
-    if (event.type === "wheel" && typeof event.wheelDelta === "number") {
+    const { x, y, type, button } = event;
+
+    // Rueda del mouse sobre cualquier parte del cuerpo para hacer scroll del feed de chat
+    if (type === "wheel" && typeof event.wheelDelta === "number") {
       if (event.wheelDelta > 0) {
         this.chatScrollOffset = Math.min(this.maxChatScroll, this.chatScrollOffset + 2);
         if (this.chatScrollOffset >= this.maxChatScroll) {
@@ -525,19 +532,49 @@ export class DcChatMessengerPanel implements Component {
           this.autoScrollToBottom = false;
         }
         this.requestRender?.();
-        return { handled: true };
+        return { handled: true, render: true };
       } else if (event.wheelDelta < 0) {
         this.autoScrollToBottom = false;
         this.chatScrollOffset = Math.max(0, this.chatScrollOffset - 2);
         this.requestRender?.();
-        return { handled: true };
+        return { handled: true, render: true };
       }
     }
 
-    if (event.type === "click" && event.button === "left") {
-      this.requestRender?.();
-      return { handled: true };
+    // Clic con el mouse: Selección de hilos en la columna izquierda o foco en input/chat
+    if (button === "left" && (type === "click" || type === "press")) {
+      // 1. Detectar clic en la columna izquierda (Lista de hilos)
+      // Cada hilo ocupa 2 renglones + 1 espacio (3 renglones por hilo a partir de la fila 2)
+      if (x !== undefined && y !== undefined) {
+        // Asumiendo ancho de columna izquierda (hasta el separador vertical)
+        const leftColMaxX = 36;
+        if (x < leftColMaxX && y >= 2) {
+          const threadRow = y - 2; // Descontar encabezado y separador
+          const threadIndex = Math.floor(threadRow / 3);
+          if (threadIndex >= 0 && threadIndex < this.threads.length) {
+            if (this.selectedThreadIndex !== threadIndex) {
+              this.selectedThreadIndex = threadIndex;
+              const currentThread = this.threads[this.selectedThreadIndex];
+              if (currentThread) {
+                this.messages = dcChatDatabase.getMessagesForThread(currentThread.id);
+                dcChatDatabase.markThreadRead(currentThread.id);
+              }
+              this.autoScrollToBottom = true;
+              this.chatScrollOffset = 0;
+            }
+            this.activePanel = "threads";
+            this.requestRender?.();
+            return { handled: true, render: true };
+          }
+        } else {
+          // Clic en la columna derecha o en la barra de input inferior
+          this.activePanel = "chat";
+          this.requestRender?.();
+          return { handled: true, render: true };
+        }
+      }
     }
+
     return undefined;
   }
 }
