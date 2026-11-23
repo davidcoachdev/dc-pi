@@ -91,6 +91,7 @@ export class DcChatMessengerPanel implements Component {
     this.threads = dcChatDatabase.listThreads();
     const hasControl = this.threads.some((t) => t.id === "dc-control");
     const hasAgent86 = this.threads.some((t) => t.id === "general-86");
+    const hasAgent99 = this.threads.some((t) => t.id === "general-99");
 
     if (!hasControl) {
       dcChatDatabase.upsertThread({
@@ -98,7 +99,7 @@ export class DcChatMessengerPanel implements Component {
         title: "DC-Control • Centro de Mando",
         participant: "dc_control",
         unreadCount: 0,
-        updatedAt: Date.now() + 1000,
+        updatedAt: Date.now() + 2000,
       });
       dcChatDatabase.addMessage({
         id: `welcome-control-${Date.now()}`,
@@ -115,10 +116,10 @@ export class DcChatMessengerPanel implements Component {
     if (!hasAgent86) {
       dcChatDatabase.upsertThread({
         id: "general-86",
-        title: "Super-Agente #86 • General",
+        title: "Super-Agente #86 • Issues",
         participant: "super_agent_86",
         unreadCount: 0,
-        updatedAt: Date.now(),
+        updatedAt: Date.now() + 1000,
       });
       dcChatDatabase.addMessage({
         id: `welcome-86-${Date.now()}`,
@@ -127,6 +128,26 @@ export class DcChatMessengerPanel implements Component {
         senderRole: "agent",
         incomingText: "Buzón de mensajería autónomo inicializado en SQLite.",
         replyText: "Listo para supervisar y registrar réplicas de comentarios de GitHub. Puedes escribirme abajo.",
+        status: "sent",
+        timestamp: Date.now(),
+      });
+    }
+
+    if (!hasAgent99) {
+      dcChatDatabase.upsertThread({
+        id: "general-99",
+        title: "Super-Agente #99 • PRs",
+        participant: "super_agent_99",
+        unreadCount: 0,
+        updatedAt: Date.now(),
+      });
+      dcChatDatabase.addMessage({
+        id: `welcome-99-${Date.now()}`,
+        threadId: "general-99",
+        sender: "super_agent_99",
+        senderRole: "agent",
+        incomingText: "Inspectora de Pull Requests en línea.",
+        replyText: "### 🕵️‍♀️ Super-Agente #99 (Quality Gate)\nAudito Blast Radius, suites de pruebas y cumplimiento KISS en PRs de GitHub.",
         status: "sent",
         timestamp: Date.now(),
       });
@@ -296,8 +317,10 @@ export class DcChatMessengerPanel implements Component {
     const activeParticipant = activeThread?.participant === "dc_control"
       ? "DC-Control"
       : activeThread?.participant === "super_agent_86"
-        ? "Agente #86"
-        : activeThread?.title || "Destino";
+        ? "Agente #86 (Issues)"
+        : activeThread?.participant === "super_agent_99"
+          ? "Agente #99 (PRs)"
+          : activeThread?.title || "Destino";
 
     const promptPrefix = isChatFocused
       ? `  ${bloodBright(`💬 Tú ➔ ${activeParticipant}:`)} `

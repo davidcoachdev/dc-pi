@@ -3,6 +3,7 @@ import { dcControlDaemonManager } from "./dc-control-daemon-manager.ts";
 import { scanRunningPiProcesses } from "../../dc-control/core/dc-process-scanner.ts";
 import { dcIssueDispatcher } from "./dc-issue-dispatcher.ts";
 import { dcIssueConversationalAgent } from "./dc-issue-conversational-agent.ts";
+import { dcPrInspectorAgent } from "./dc-pr-inspector-agent.ts";
 import * as fs from "node:fs";
 import * as path from "node:path";
 
@@ -47,7 +48,12 @@ export class DcChatDispatcher {
       return this.handleSuperAgent86Query(query);
     }
 
-    // 3. Caso: Issue específico de GitHub
+    // 3. Caso: Hilo de Super-Agente #99 (PRs & Quality Gate)
+    if (threadId === "general-99" || threadId.includes("99")) {
+      return this.handleSuperAgent99Query(query);
+    }
+
+    // 4. Caso: Issue específico de GitHub
     return this.handleIssueQuery(query);
   }
 
@@ -155,6 +161,43 @@ Comandos y consultas soportadas en este hilo:
     return {
       respondent: "super_agent_86",
       reply: replyResult.reply,
+    };
+  }
+
+  private async handleSuperAgent99Query(query: ChatDispatchQuery): Promise<ChatDispatchResponse> {
+    const inspections = dcPrInspectorAgent.getActiveInspections();
+    const q = query.text.toLowerCase().trim();
+
+    if (q.includes("ayuda") || q === "?") {
+      return {
+        respondent: "super_agent_99",
+        reply: `### 🕵️‍♀️ Super-Agente #99 (PR Inspector & Quality Gate)
+Estoy a cargo de la auditoría y control de calidad de Pull Requests.
+Puedes preguntarme:
+- **"¿qué has revisado?"**: Ver el historial de PRs inspeccionados.
+- **"inspecciona pr #<numero>"**: Solicitar auditoría forzada de un PR.
+- **"blast radius"**: Ver estadísticas de impacto y límites de líneas.`,
+      };
+    }
+
+    if (inspections.length === 0) {
+      return {
+        respondent: "super_agent_99",
+        reply: `### 🕵️‍♀️ Super-Agente #99 Online
+Actualmente **no hay Pull Requests pendientes de revisión** en este ciclo.
+Estoy a la escucha en el Gateway Ingress para auditar cualquier PR que sea abierto o actualizado.`,
+      };
+    }
+
+    const latest = inspections[inspections.length - 1]!;
+    return {
+      respondent: "super_agent_99",
+      reply: `### 🕵️‍♀️ Última Inspección: PR #${latest.prNumber}\n` +
+             `- **Veredicto**: **${latest.verdict}**\n` +
+             `- **Blast Radius**: ${latest.blastRadius.filesChanged} archivos (+${latest.blastRadius.insertions}, -${latest.blastRadius.deletions})\n` +
+             `- **Build**: ${latest.checks.buildPassed ? "✔ Exitoso" : "❌ Falló"}\n` +
+             `- **Tests**: ${latest.checks.testsPassed ? "✔ Pasaron" : "❌ Fallaron"}\n\n` +
+             `*Total PRs auditados en sesión: ${inspections.length}*`,
     };
   }
 

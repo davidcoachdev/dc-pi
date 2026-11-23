@@ -10,6 +10,8 @@ export interface ControlReceiverOptions {
   expectedRepoNwo?: string; // ej: "davidcoachdev/dc-pi"
   onIssueOpened?: (payload: GitHubIssuePayload) => void | Promise<void>;
   onIssueCommentCreated?: (payload: GitHubIssueCommentPayload) => void | Promise<void>;
+  onPullRequest?: (payload: any) => void | Promise<void>;
+  onPullRequestReview?: (payload: any) => void | Promise<void>;
   onError?: (err: Error) => void;
   onLog?: (msg: string) => void;
 }
@@ -182,6 +184,31 @@ export class DcControlReceiver {
               status: "accepted",
               issue: payload.issue?.number,
               title: payload.issue?.title,
+            }));
+            return;
+          }
+        }
+
+        // Evento de Pull Requests (Canalizado a la Agente #99)
+        if (eventType === "pull_request" && payload.pull_request) {
+          const action = payload.action;
+          if (["opened", "synchronize", "reopened", "ready_for_review"].includes(action)) {
+            try {
+              const resCallback = this.options.onPullRequest?.(payload);
+              if (resCallback && typeof (resCallback as any).catch === "function") {
+                (resCallback as Promise<void>).catch((cbErr) => {
+                  this.options.onError?.(cbErr);
+                });
+              }
+            } catch (syncErr: any) {
+              this.options.onError?.(syncErr);
+            }
+
+            res.writeHead(202, { "Content-Type": "application/json" });
+            res.end(JSON.stringify({
+              status: "accepted_pr",
+              prNumber: payload.pull_request?.number,
+              action,
             }));
             return;
           }
