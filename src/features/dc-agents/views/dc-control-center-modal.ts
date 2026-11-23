@@ -24,8 +24,9 @@ import {
   dcSuperAgentChatManager,
   type ChatMessageEntry,
 } from "../daemon/dc-super-agent-chat-manager.ts";
+import { dcModerationManager } from "../daemon/dc-moderation-manager.ts";
 
-export type ControlCenterTab = "worktrees" | "collaborators" | "audit";
+export type ControlCenterTab = "worktrees" | "collaborators" | "audit" | "moderation";
 
 export interface CentralDecisionItem {
   id: string;
@@ -528,7 +529,7 @@ export class DcControlCenterPanel implements Component {
       return true;
     }
 
-    // Navegación de pestañas 1, 2, 3
+    // Navegación de pestañas 1, 2, 3, 4
     if (data === "1") {
       this.activeTab = "worktrees";
       this.selectedIndex = 0;
@@ -550,15 +551,50 @@ export class DcControlCenterPanel implements Component {
       this.requestRender?.();
       return true;
     }
+    if (data === "4") {
+      this.activeTab = "moderation";
+      this.selectedIndex = 0;
+      this.scrollOffset = 0;
+      this.requestRender?.();
+      return true;
+    }
+
+    // Acciones específicas en Pestaña 4 (Moderación / Desbloqueo)
+    if (this.activeTab === "moderation") {
+      const blockedList = dcModerationManager.getBlockedUsers();
+      if (blockedList.length > 0) {
+        if (matchesKey(data, Key.up)) {
+          this.selectedIndex = Math.max(0, this.selectedIndex - 1);
+          this.requestRender?.();
+          return true;
+        }
+        if (matchesKey(data, Key.down)) {
+          this.selectedIndex = Math.min(blockedList.length - 1, this.selectedIndex + 1);
+          this.requestRender?.();
+          return true;
+        }
+        // [u] o [Espacio]: Desbloquear usuario
+        if (data === "u" || data === "U" || data === " ") {
+          const selectedUser = blockedList[this.selectedIndex];
+          if (selectedUser) {
+            void dcModerationManager.unblockUser(selectedUser.username);
+            this.lastActionMessage = `✔ Usuario @${selectedUser.username} desbloqueado exitosamente`;
+            this.requestRender?.();
+            return true;
+          }
+        }
+      }
+    }
 
     // Navegación de pestañas: Ctrl+← / Ctrl+→ o ← / →
     const isCtrlLeft = data === "\x1b[1;5D" || data === "\x1b[5D";
     const isCtrlRight = data === "\x1b[1;5C" || data === "\x1b[5C";
 
     if (matchesKey(data, Key.left) || isCtrlLeft) {
-      if (this.activeTab === "worktrees") this.activeTab = "audit";
+      if (this.activeTab === "worktrees") this.activeTab = "moderation";
       else if (this.activeTab === "collaborators") this.activeTab = "worktrees";
-      else this.activeTab = "collaborators";
+      else if (this.activeTab === "audit") this.activeTab = "collaborators";
+      else this.activeTab = "audit";
       this.selectedIndex = 0;
       this.scrollOffset = 0;
       this.requestRender?.();
@@ -567,6 +603,7 @@ export class DcControlCenterPanel implements Component {
     if (matchesKey(data, Key.right) || isCtrlRight) {
       if (this.activeTab === "worktrees") this.activeTab = "collaborators";
       else if (this.activeTab === "collaborators") this.activeTab = "audit";
+      else if (this.activeTab === "audit") this.activeTab = "moderation";
       else this.activeTab = "worktrees";
       this.selectedIndex = 0;
       this.scrollOffset = 0;
@@ -577,6 +614,7 @@ export class DcControlCenterPanel implements Component {
     if (matchesKey(data, Key.tab)) {
       if (this.activeTab === "worktrees") this.activeTab = "collaborators";
       else if (this.activeTab === "collaborators") this.activeTab = "audit";
+      else if (this.activeTab === "audit") this.activeTab = "moderation";
       else this.activeTab = "worktrees";
       this.selectedIndex = 0;
       this.scrollOffset = 0;
@@ -776,16 +814,19 @@ export class DcControlCenterPanel implements Component {
 
     // ── 2. Pestañas de navegación ──
     const tab1 = this.activeTab === "worktrees"
-      ? t.bg("selectedBg", t.bold(t.fg("accent", " [1] Central (Worktrees & ODD) ")))
-      : t.fg("dim", " [1] Central (Worktrees & ODD) ");
+      ? t.bg("selectedBg", t.bold(t.fg("accent", " [1] Central ")))
+      : t.fg("dim", " [1] Central ");
     const tab2 = this.activeTab === "collaborators"
-      ? t.bg("selectedBg", t.bold(t.fg("accent", " [2] Colaboradores (Seguridad) ")))
-      : t.fg("dim", " [2] Colaboradores (Seguridad) ");
+      ? t.bg("selectedBg", t.bold(t.fg("accent", " [2] Colaboradores ")))
+      : t.fg("dim", " [2] Colaboradores ");
     const tab3 = this.activeTab === "audit"
-      ? t.bg("selectedBg", t.bold(t.fg("accent", " [3] Audit Log Forense ")))
-      : t.fg("dim", " [3] Audit Log Forense ");
+      ? t.bg("selectedBg", t.bold(t.fg("accent", " [3] Audit Log ")))
+      : t.fg("dim", " [3] Audit Log ");
+    const tab4 = this.activeTab === "moderation"
+      ? t.bg("selectedBg", t.bold(t.fg("error", " [4] 🛡️ Moderación & Bloqueados ")))
+      : t.fg("dim", " [4] 🛡️ Moderación & Bloqueados ");
 
-    lines.push(`${tab1} │ ${tab2} │ ${tab3}`);
+    lines.push(`${tab1} │ ${tab2} │ ${tab3} │ ${tab4}`);
     lines.push(t.fg("border", "─".repeat(innerW)));
 
     // ── 3. Contenido según pestaña activa ──
@@ -793,8 +834,10 @@ export class DcControlCenterPanel implements Component {
       this.renderCentralTab(lines, innerW);
     } else if (this.activeTab === "collaborators") {
       this.renderCollaboratorsTab(lines, innerW);
-    } else {
+    } else if (this.activeTab === "audit") {
       this.renderAuditLogTab(lines, innerW);
+    } else {
+      this.renderModerationTab(lines, innerW);
     }
 
     // ── 4. Si la ayuda de teclas está activa, sobreponer modal visual ──
@@ -1047,6 +1090,46 @@ export class DcControlCenterPanel implements Component {
 
       lines.push(`  ${t.fg("dim", timeStr)} ${lvl} ${t.bold(log.category)}: ${log.message}`);
     }
+  }
+
+  private renderModerationTab(lines: string[], width: number): void {
+    const t = this.theme;
+    const blocked = dcModerationManager.getBlockedUsers();
+
+    lines.push(`  ${t.bold(t.fg("error", "🛡️ Expediente de Usuarios Bloqueados & Faltas Acumuladas:"))}`);
+    lines.push(`  ${t.fg("dim", "Visualiza el motivo exacto, fecha y comentarios de infracción. Pulsa [u] o [Espacio] para desbloquear.")}`);
+    lines.push("");
+
+    if (blocked.length === 0) {
+      lines.push(`  ${t.fg("dim", "✓ Lista limpia. No hay usuarios bloqueados actualmente en la base de datos.")}`);
+      return;
+    }
+
+    blocked.forEach((user, idx) => {
+      const isSelected = idx === this.selectedIndex;
+      const pointer = isSelected ? t.bold(t.fg("accent", "▶ ")) : "  ";
+      const blockDate = new Date(user.blockedAt).toLocaleDateString([], { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" });
+
+      const header = `${pointer}${t.bold(t.fg("error", `@${user.username}`))} ${t.fg("dim", `[Bloqueado: ${blockDate}]`)} ${t.bold(t.fg("accent", "[ Pulsa 'u' para Desbloquear 🔓 ]"))}`;
+      lines.push(isSelected ? t.bg("selectedBg", header) : header);
+
+      if (user.notes) {
+        lines.push(`    ${t.fg("dim", "Nota:")} ${t.fg("warning", user.notes)}`);
+      }
+
+      if (user.records.length > 0) {
+        lines.push(`    ${t.fg("dim", "Historial de Infracciones:")}`);
+        user.records.slice(0, 3).forEach((rec) => {
+          const recTime = new Date(rec.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+          const strikeTag = rec.strikeNumber ? `[Strike ${rec.strikeNumber}/3]` : `[${rec.action}]`;
+          lines.push(`      • ${t.fg("dim", recTime)} ${t.bold(t.fg("warning", strikeTag))} ${rec.reason}`);
+          if (rec.evidenceComment) {
+            lines.push(`        ${t.fg("dim", `Evidencia: "${rec.evidenceComment.slice(0, 60)}..."`)}`);
+          }
+        });
+      }
+      lines.push("");
+    });
   }
 
   private overlayHelpCard(lines: string[], width: number): void {

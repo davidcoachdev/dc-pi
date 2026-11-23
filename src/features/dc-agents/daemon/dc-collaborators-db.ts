@@ -15,7 +15,7 @@ export interface CollaboratorRecord {
   notes?: string;
 }
 
-export type AuditLogCategory = "WEBHOOK" | "WORKTREE" | "DISPATCH" | "SECURITY" | "TESTS" | "CONFLICT" | "EVALUATOR" | "DELIVERY";
+export type AuditLogCategory = "WEBHOOK" | "WORKTREE" | "DISPATCH" | "SECURITY" | "TESTS" | "CONFLICT" | "EVALUATOR" | "DELIVERY" | "MODERATION";
 
 export interface AuditLogRecord {
   id?: number;
@@ -53,6 +53,10 @@ export class CollaboratorsDatabase {
     return this.dbPath;
   }
 
+  public getRawDb(): DatabaseSync {
+    return this.db;
+  }
+
   public close(): void {
     try {
       this.db.close();
@@ -88,6 +92,21 @@ export class CollaboratorsDatabase {
 
       CREATE INDEX IF NOT EXISTS idx_audit_timestamp ON audit_logs (timestamp DESC);
       CREATE INDEX IF NOT EXISTS idx_collab_status ON collaborators (status);
+
+      CREATE TABLE IF NOT EXISTS moderation_records (
+        id TEXT PRIMARY KEY,
+        username TEXT NOT NULL,
+        action TEXT NOT NULL, -- STRIKE, BLOCK, UNBLOCK, IGNORE
+        strike_number INTEGER, -- 1, 2, 3
+        reason TEXT NOT NULL,
+        evidence_comment TEXT,
+        comment_id INTEGER,
+        issue_or_pr_number INTEGER,
+        repo_nwo TEXT,
+        timestamp INTEGER NOT NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_moderation_user ON moderation_records (username, timestamp DESC);
     `);
   }
 

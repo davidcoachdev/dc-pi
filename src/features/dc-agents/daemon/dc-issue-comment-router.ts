@@ -13,6 +13,8 @@ import { dcChatDatabase } from "./dc-chat-sqlite-db.ts";
 import { promptAgentChatModal } from "../views/dc-agent-chat-modal.ts";
 import { dcPrInspectorAgent } from "./dc-pr-inspector-agent.ts";
 import { dcPrConflictResolver } from "./dc-pr-conflict-resolver.ts";
+import { dcCommentAnalyzer } from "./dc-comment-analyzer.ts";
+import { dcModerationManager } from "./dc-moderation-manager.ts";
 import type { GitHubIssueCommentPayload, IssueCommentCommandResult } from "./dc-issue-comment-types.ts";
 import type { DispatchedIssueTask } from "./dc-issue-dispatcher.ts";
 
@@ -47,8 +49,22 @@ export class DcIssueCommentRouter {
     const agentTag = isPullRequest ? "🕵️‍♀️ **DC Super-Agent 99**" : "🤖 **DC Super-Agent 86**";
     const agentId = isPullRequest ? "super_agent_99" : "super_agent_86";
 
-    // ── 1. Filtro Soberano: Solo OWNER autorizado ──
+    // ── 0. Filtro Implacable de Usuarios Bloqueados (Auto-Purga y Silencio) ──
     const authorRecord = this.collabDb.getCollaborator(authorLogin);
+    if (authorRecord?.status === "BLOCK") {
+      this.collabDb.log({
+        level: "SECURITY",
+        category: "SECURITY",
+        actor: authorLogin,
+        message: `Comentario de usuario BLOQUEADO @${authorLogin} en ${repoNwo} #${issueNumber} detectado. Purgando comentario silenciosamente...`,
+      });
+      if (payload.comment?.id) {
+        await dcModerationManager.deleteCommentOnGithub(repoNwo, payload.comment.id);
+      }
+      return { handled: true, reason: "blocked user comment silently deleted" };
+    }
+
+    // ── 1. Filtro Soberano: Solo OWNER autorizado ──
     const isOwner = authorLogin === "davidcoachdev" || (authorRecord?.status === "ALLOW" && authorRecord?.role === "OWNER");
 
     // Ignorar si el comentario fue emitido por el propio super-agente
@@ -79,20 +95,26 @@ export class DcIssueCommentRouter {
       issueNumber,
     };
 
-    // ── GESTIÓN DE TERCEROS (NO-OWNER): Acuse + Validación Humana en Modal tipo WhatsApp ──
+    // ── GESTIÓN DE TERCEROS (NO-OWNER): Análisis de Seguridad + Validación Humana en Modal ──
     if (!isOwner) {
+      // Analizar riesgo del comentario con DcCommentAnalyzer
+      const analysisRisk = dcCommentAnalyzer.analyze(commentBody);
+      const currentStrikes = dcModerationManager.getUserStrikes(authorLogin);
+
       this.collabDb.log({
-        level: "SECURITY",
-        category: "SECURITY",
+        level: analysisRisk.riskLevel === "HIGH" ? "SECURITY" : "INFO",
+        category: "MODERATION",
         actor: authorLogin,
-        message: `Comentario de tercero recibido en Issue #${issueNumber} de @${authorLogin}: "${commentBody.slice(0, 80)}"`,
+        message: `Comentario de tercero recibido en #${issueNumber} de @${authorLogin} [Riesgo: ${analysisRisk.category}]: "${commentBody.slice(0, 80)}"`,
       });
 
-      // 1. Acuse inmediato de recibo en GitHub
+      // 1. Acuse inmediato de recibo en GitHub si el riesgo no es HIGH
       const quoteAck = commentBody.split("\n").map(l => `> ${l}`).join("\n");
       const targetEntity = isPullRequest ? `Pull Request #${issueNumber}` : `Issue #${issueNumber}`;
-      const waitingAck = `${quoteAck}\n\n${agentTag}: Hola @${authorLogin}, gracias por tu comentario en ${targetEntity}. Procesando tu solicitud de revisión...`;
-      await dcIssueNotifier.notifyIssue(target, waitingAck);
+      if (analysisRisk.riskLevel !== "HIGH") {
+        const waitingAck = `${quoteAck}\n\n${agentTag}: Hola @${authorLogin}, gracias por tu comentario en ${targetEntity}. Procesando tu solicitud de revisión...`;
+        await dcIssueNotifier.notifyIssue(target, waitingAck);
+      }
 
       // 2. Generar borrador de respuesta diplomática / protección
       const analysis = await dcIssueConversationalAgent.generateReply({
@@ -115,7 +137,7 @@ export class DcIssueCommentRouter {
         authorLogin,
         incomingText: commentBody,
         proposedReply: analysis.reply,
-        isMalicious: analysis.intent === "malicious_attempt",
+        isMalicious: analysisRisk.category === "DESTRUCTIVE_COMMAND" || analysisRisk.category === "PROMPT_INJECTION",
       });
 
       // Registrar en SQLite transaccional persistente (chat.db)
@@ -139,7 +161,7 @@ export class DcIssueCommentRouter {
         quotedText: quoteAck,
         replyText: analysis.reply,
         status: "pending_review",
-        isMalicious: analysis.intent === "malicious_attempt",
+        isMalicious: analysisRisk.riskLevel === "HIGH",
         timestamp: Date.now(),
       });
 
@@ -155,14 +177,48 @@ export class DcIssueCommentRouter {
             issueNumber,
             incomingText: commentBody,
             proposedReply: analysis.reply,
-            isMalicious: analysis.intent === "malicious_attempt",
+            isMalicious: analysisRisk.riskLevel === "HIGH",
+            riskCategory: analysisRisk.category,
+            riskReason: analysisRisk.reason,
+            commentId: payload.comment.id,
+            repoNwo,
+            currentStrikes,
           });
 
-          if (decision.action === "reject") {
+          if (decision.action === "ignore") {
             dcSuperAgentChatManager.updateStatus(msgId, "rejected");
             dcChatDatabase.updateMessageStatus(msgId, "rejected");
-            return { handled: true, response: "Comentario descartado por el usuario" };
+            return { handled: true, response: "Comentario ignorado por el usuario" };
           }
+
+          if (decision.action === "delete_and_strike") {
+            const strikeRes = await dcModerationManager.applyStrike({
+              username: authorLogin,
+              reason: decision.reason,
+              evidenceComment: commentBody,
+              commentId: payload.comment.id,
+              issueOrPrNumber: issueNumber,
+              repoNwo,
+            });
+            dcSuperAgentChatManager.updateStatus(msgId, "rejected");
+            dcChatDatabase.updateMessageStatus(msgId, "rejected");
+            return { handled: true, response: `Strike aplicado (${strikeRes.currentStrikes}/3)` };
+          }
+
+          if (decision.action === "block") {
+            await dcModerationManager.blockUserImmediately({
+              username: authorLogin,
+              reason: decision.reason,
+              evidenceComment: commentBody,
+              commentId: payload.comment.id,
+              issueOrPrNumber: issueNumber,
+              repoNwo,
+            });
+            dcSuperAgentChatManager.updateStatus(msgId, "rejected");
+            dcChatDatabase.updateMessageStatus(msgId, "rejected");
+            return { handled: true, response: `Usuario bloqueado directamente: ${decision.reason}` };
+          }
+
           finalReply = decision.reply;
           dcSuperAgentChatManager.updateStatus(msgId, "approved", finalReply);
           dcChatDatabase.updateMessageStatus(msgId, "approved", finalReply);
