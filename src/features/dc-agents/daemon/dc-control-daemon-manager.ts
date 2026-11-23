@@ -5,7 +5,7 @@ import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { dcNotifier } from "../../../integrations/dc-notify/dc-notifier.ts";
 import { resolveCurrentRepoIdentity, type RepoIdentity } from "./dc-repo-resolver.ts";
-import { DcControlReceiver } from "./dc-control-receiver.ts";
+import { DcGitHubGateway } from "./dc-github-gateway.ts";
 import { dcIssueDispatcher, type GitHubIssuePayload, type DispatchedIssueTask } from "./dc-issue-dispatcher.ts";
 import { promptApprovalModal } from "../../dc-approval/views/dc-approval-modal.ts";
 import { dcPrDelivery } from "./dc-pr-delivery.ts";
@@ -34,7 +34,7 @@ const VALID_HOOK_ID_RE = /^\d+$/;
 
 export class DcControlDaemonManager {
   private static instance?: DcControlDaemonManager;
-  private receiver?: DcControlReceiver;
+  private receiver?: DcGitHubGateway;
   private tunnelProcess?: ChildProcess;
   private tunnelPid?: number;
   private currentRepo?: RepoIdentity;
@@ -63,8 +63,8 @@ export class DcControlDaemonManager {
     await this.stop();
 
     const capability = randomBytes(32).toString("hex");
-    // 2. Iniciar el receptor HTTP local
-      this.receiver = new DcControlReceiver({
+    // 2. Iniciar el receptor HTTP local (Gateway Ingress Neutral)
+      this.receiver = new DcGitHubGateway({
         port: 4545,
         capability,
         expectedRepoNwo: repo.fullNwo,

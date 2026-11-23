@@ -94,25 +94,25 @@ Comandos y consultas soportadas en este hilo:
       };
     }
 
-    // Consulta del Super-Agente #86
-    if (q.includes("86") || q.includes("daemon") || q.includes("agente")) {
-      const daemonState = daemonStatus.running ? "● **ONLINE**" : "○ **DETENIDO**";
+    // Consulta del Gateway y Super-Agentes
+    if (q.includes("gateway") || q.includes("86") || q.includes("99") || q.includes("daemon") || q.includes("agente")) {
+      const gatewayState = daemonStatus.running ? "● **ONLINE**" : "○ **INACTIVO**";
       const tunnelState = daemonStatus.tunnelActive ? "✓ Activo" : "○ Inactivo";
       const taskCount = dispatches.length;
 
-      let reply = `### 🤖 Estado del Super-Agente #86\n`;
-      reply += `- **Receptor GitHub**: ${daemonState} (Puerto ${daemonStatus.port})\n`;
-      reply += `- **Túnel de Webhook**: ${tunnelState}\n`;
-      reply += `- **Repositorio supervisado**: \`${daemonStatus.repo?.fullNwo || "No detectado"}\`\n`;
-      reply += `- **Misiones en curso**: ${taskCount}\n`;
+      let reply = `### 📡 Gateway Ingress & Super-Agentes\n`;
+      reply += `- **Gateway GitHub**: ${gatewayState} (Puerto ${daemonStatus.port})\n`;
+      reply += `- **Túnel Webhook**: ${tunnelState}\n`;
+      reply += `- **Repositorio**: \`${daemonStatus.repo?.fullNwo || "No detectado"}\`\n\n`;
+      reply += `**Super-Agentes Registrados:**\n`;
+      reply += `- 🤖 **#86 (Issue Resolver)**: ${taskCount > 0 ? `[Ocupado: ${taskCount} misiones]` : "[En espera / Idle]"}\n`;
+      reply += `- 🤖 **#99 (PR Inspector)**: [En espera / Idle]\n`;
 
       if (taskCount > 0) {
-        reply += `\n**Misiones activas:**\n`;
+        reply += `\n**Misiones en curso:**\n`;
         for (const d of dispatches) {
           reply += `- **Issue #${d.issueNumber}**: Rama \`${d.branchName}\` | Worktree: \`${d.worktreePath}\`\n`;
         }
-      } else {
-        reply += `\n*El agente está en modo reposo (idle), esperando nuevos issues o directivas.*`;
       }
 
       return {
