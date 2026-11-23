@@ -11,6 +11,7 @@ export interface ContextualReplyRequest {
   taskSlug?: string;
   branchName?: string;
   isOwner: boolean;
+  agentSignature?: string; // ej: "🕵️‍♀️ **DC Super-Agent 99**" o "🤖 **DC Super-Agent 86**"
 }
 
 export interface ContextualReplyResult {
@@ -36,6 +37,7 @@ export class DcIssueConversationalAgent {
   public async generateReply(req: ContextualReplyRequest): Promise<ContextualReplyResult> {
     const cleanComment = req.commentBody.trim();
     const lower = cleanComment.toLowerCase();
+    const signature = req.agentSignature || "🤖 **DC Super-Agent 86**";
 
     // Detección de Réplica: ¿el usuario ya está citando un mensaje anterior con '>'?
     const hasExistingQuote = cleanComment.split("\n").some((l) => l.trim().startsWith(">"));
@@ -75,7 +77,7 @@ export class DcIssueConversationalAgent {
           reply: [
             quoteBlock,
             "",
-            `🤖 **DC Super-Agent 86**: Hola @${req.authorLogin}, muchas gracias por tu mensaje.`,
+            `${signature}: Hola @${req.authorLogin}, muchas gracias por tu mensaje.`,
             "",
             "Agradezco tu interés, pero por políticas de integridad y seguridad de DC Studio, las directivas que alteran recursos protegidos o estructuras de datos están restringidas al equipo soberano del proyecto.",
             "",
@@ -91,7 +93,7 @@ export class DcIssueConversationalAgent {
         reply: [
           quoteBlock,
           "",
-          `🤖 **DC Super-Agent 86**: Hola @${req.authorLogin}, gracias por tu comentario en el Issue #${req.issueNumber}.`,
+          `${signature}: Hola @${req.authorLogin}, gracias por tu comentario en el ${req.issueTitle.includes("PR") ? "Pull Request" : "Issue"} #${req.issueNumber}.`,
           "",
           `He registrado tu observación en el log de auditoría del proyecto. Al no formar parte de los mantenedores directos, tus sugerencias quedan en espera de revisión. Para coordinar contribuciones o accesos, por favor comunícate con el responsable del proyecto: **@davidcoachdev**.`,
         ].join("\n"),
@@ -146,7 +148,7 @@ export class DcIssueConversationalAgent {
     const reply = [
       quoteBlock,
       "",
-      `🤖 **DC Super-Agent 86**: ${replyIntro}`,
+      `${signature}: ${replyIntro}`,
       "",
       `📌 **Estado de la Hoja de Ruta ODD**:`,
       `- ${roadmapSummary}`,

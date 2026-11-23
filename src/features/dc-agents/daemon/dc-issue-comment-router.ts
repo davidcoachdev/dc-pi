@@ -98,11 +98,12 @@ export class DcIssueCommentRouter {
         authorLogin,
         commentBody,
         issueNumber,
-        issueTitle: payload.issue.title || `Issue #${issueNumber}`,
+        issueTitle: payload.issue.title || `${isPullRequest ? "PR" : "Issue"} #${issueNumber}`,
         worktreePath,
         taskSlug,
         branchName,
         isOwner: false,
+        agentSignature: agentTag,
       });
 
       // Registrar en el buzón persistente de mensajes para la oficina de control
@@ -248,6 +249,7 @@ export class DcIssueCommentRouter {
         taskSlug,
         branchName,
         isOwner: true,
+        agentSignature: agentTag,
       });
 
       await dcIssueNotifier.notifyIssue(target, generated.reply);
