@@ -88,18 +88,19 @@ export function discoverCpamAccounts(
   );
 }
 
-/** Cuentas VIP reservadas exclusivamente para el orquestador bajo selección manual (cc1..cc4, uc01...) */
+/** Cuentas VIP reservadas exclusivamente para el orquestador bajo selección manual (cc1..cc4, uc01, asiento...) */
 export const DEFAULT_VIP_ACCOUNTS: readonly string[] = [
   "cc1",
   "cc2",
   "cc3",
   "cc4",
   "uc01",
+  "asiento",
 ];
 
 export const VIP_ACCOUNTS: readonly string[] = DEFAULT_VIP_ACCOUNTS;
 
-const VIP_ACCOUNT_PATTERN = /^(?:cc[-_]?\d+|uc[-_]?\d+)$/i;
+const VIP_ACCOUNT_PATTERN = /^(?:cc[-_]?\d+|uc[-_]?\d+|asiento.*)$/i;
 
 export function isVipAccount(account?: string): boolean {
   if (!account) return false;
@@ -121,6 +122,14 @@ export function discoverVipAccounts(
     try {
       const raw = fs.readFileSync(modelsJsonPath, "utf8");
       const data = JSON.parse(raw);
+      if (data?.providers) {
+        for (const provKey of Object.keys(data.providers)) {
+          const lowerKey = provKey.toLowerCase();
+          if (isVipAccount(lowerKey)) {
+            vips.add(lowerKey);
+          }
+        }
+      }
       const cpamModels = data?.providers?.cpam?.models;
       if (Array.isArray(cpamModels)) {
         for (const m of cpamModels) {

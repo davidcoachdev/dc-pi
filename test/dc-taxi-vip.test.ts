@@ -26,6 +26,8 @@ test("dc-taxi-vip: isVipAccount reconoce correctamente cc1..cc5, cuentas uc* y r
   assert.equal(isVipAccount("UC01"), true);
   assert.equal(isVipAccount("uc-01"), true);
   assert.equal(isVipAccount("uc_02"), true);
+  assert.equal(isVipAccount("asiento"), true);
+  assert.equal(isVipAccount("asiento-code"), true);
   assert.equal(isVipAccount("nan-01"), false);
   assert.equal(isVipAccount("nan_02"), false);
   assert.equal(isVipAccount("nan"), false);
@@ -36,6 +38,7 @@ test("dc-taxi-vip: isVipAccount reconoce correctamente cc1..cc5, cuentas uc* y r
   assert.equal(isVipAccount(undefined), false);
 
   assert.ok(discoverVipAccounts().includes("uc01"));
+  assert.ok(discoverVipAccounts().includes("asiento"));
 
   // Verificar unificación entre discoverVipAccounts(models.json) e isVipAccount()
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "dc-vip-models-"));
