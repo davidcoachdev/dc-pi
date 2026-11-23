@@ -7,6 +7,7 @@ import { dcNotifier } from "../../../integrations/dc-notify/dc-notifier.ts";
 import { resolveCurrentRepoIdentity, type RepoIdentity } from "./dc-repo-resolver.ts";
 import { DcGitHubGateway } from "./dc-github-gateway.ts";
 import { dcIssueDispatcher, type GitHubIssuePayload, type DispatchedIssueTask } from "./dc-issue-dispatcher.ts";
+import { dcPrInspectorAgent } from "./dc-pr-inspector-agent.ts";
 import { promptApprovalModal } from "../../dc-approval/views/dc-approval-modal.ts";
 import { dcPrDelivery } from "./dc-pr-delivery.ts";
 import { dcWorkerRunner, updateWorktreeOddRoadmap } from "./dc-worker-runner.ts";
@@ -71,6 +72,33 @@ export class DcControlDaemonManager {
         onIssueOpened: (payload) => this.executeIssue(payload, repo, ctx),
         onIssueCommentCreated: async (payload) => {
           await dcIssueCommentRouter.handleComment(payload);
+        },
+        onPullRequest: async (payload) => {
+          const pr = payload.pull_request;
+          if (!pr) return;
+          if (ctx) {
+            dcNotifier.notify(
+              ctx,
+              "DC Super-Agente #99",
+              `🔍 Inspeccionando PR #${pr.number}: ${pr.title} (@${pr.user?.login || "anónimo"})`,
+              "info",
+            );
+          }
+          try {
+            await dcPrInspectorAgent.inspectPullRequest({
+              prNumber: pr.number,
+              repoNwo: repo.fullNwo,
+              headBranch: pr.head?.ref || "head",
+              baseBranch: pr.base?.ref || "master",
+              authorLogin: pr.user?.login || "anónimo",
+              title: pr.title || `PR #${pr.number}`,
+              worktreePath: cwd,
+            });
+          } catch (inspectErr: any) {
+            if (ctx) {
+              dcNotifier.notify(ctx, "DC Super-Agente #99", `Error inspeccionando PR #${pr.number}: ${inspectErr.message}`, "error");
+            }
+          }
         },
         onError: (err) => {
           if (ctx) {

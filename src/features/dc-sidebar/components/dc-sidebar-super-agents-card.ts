@@ -17,6 +17,7 @@ import { dcSupervisorBus } from "../../dc-control/core/dc-supervisor-bus.ts";
 import { DcSupervisorLauncher } from "../../dc-control/core/dc-supervisor-launcher.ts";
 import { getCanonicalDcSupervisorPaths } from "../../dc-control/core/dc-supervisor-paths.ts";
 import { scanRunningPiProcesses } from "../../dc-control/core/dc-process-scanner.ts";
+import { dcPrInspectorAgent } from "../../dc-agents/daemon/dc-pr-inspector-agent.ts";
 
 const execFileAsync = promisify(execFile);
 
@@ -214,6 +215,9 @@ export class DcSuperAgentsSidebarCard implements Component {
 
     // Listar Super-Agentes federados
     const agent86Status = dispatches.length > 0 ? yellowBright("[ocupado]") : dim("[idle]");
+    const inspections = dcPrInspectorAgent.getActiveInspections();
+    const agent99Status = inspections.length > 0 ? greenBright(`[${inspections.length} PRs]`) : dim("[idle]");
+
     rows.push(
       new DcJustifiedRow(
         `    ${yellowBright("🤖")} ${bloodWhite("Agente #86 (Issues)")}`,
@@ -223,7 +227,7 @@ export class DcSuperAgentsSidebarCard implements Component {
     rows.push(
       new DcJustifiedRow(
         `    ${yellowBright("🤖")} ${bloodWhite("Agente #99 (PRs)")}`,
-        `${dim("[idle]")} `
+        `${agent99Status} `
       )
     );
 
