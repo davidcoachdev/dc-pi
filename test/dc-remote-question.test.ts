@@ -20,7 +20,8 @@ after(() => {
   }
   fs.rmSync(home, { recursive: true, force: true });
 });
-const { DcRemoteQuestionManager, dcRemoteQuestionManager } = await import("../src/features/dc-agents/daemon/dc-remote-question.ts");
+const { DcRemoteQuestionManager, dcRemoteQuestionManager, assertValidQuestionId } = await import("../src/features/dc-agents/daemon/dc-remote-question.ts");
+const { DcSuperAgentChatManager, assertValidChatMessageId } = await import("../src/features/dc-agents/daemon/dc-super-agent-chat-manager.ts");
 const { DcAgentQuestionPanel } = await import("../src/features/dc-agents/views/dc-agent-question-modal.ts");
 const { registerControlDaemonCommands } = await import("../src/features/dc-agents/daemon/dc-control-commands.ts");
 const { dcControlDaemonManager } = await import("../src/features/dc-agents/daemon/dc-control-daemon-manager.ts");
@@ -228,6 +229,144 @@ test("DcAgentQuestionPanel: escritura de texto personalizado interactivo", () =>
     assert.ok(doneResult);
     assert.equal(doneResult.source, "custom_text");
     assert.equal(doneResult.customText, "Hola humano");
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test("S7: DcRemoteQuestionManager blocks path traversal, illegal IDs and symlink escapes", async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "dc-rq-sec-"));
+  const mailboxDir = path.join(tmpDir, "mailbox");
+  const outsideFile = path.join(tmpDir, "outside.json");
+  fs.writeFileSync(outsideFile, JSON.stringify({ id: "outside", expiresAt: Date.now() + 60000 }), "utf8");
+
+  try {
+    const manager = new DcRemoteQuestionManager(mailboxDir);
+    const maliciousIds = [
+      "../outside",
+      "../../etc/passwd",
+      "foo/bar",
+      "foo\\bar",
+      "..",
+      ".",
+      "",
+      "id\0evil",
+      "a..b",
+      "bad id",
+    ];
+
+    for (const badId of maliciousIds) {
+      assert.throws(() => assertValidQuestionId(badId), /ID de pregunta inválido/i);
+      assert.throws(
+        () =>
+          manager.postQuestion({
+            id: badId,
+            issueNumber: 1,
+            issueTitle: "Test",
+            contextSummary: "Ctx",
+            question: "Q?",
+          }),
+        /ID de pregunta inválido/i,
+      );
+      assert.throws(
+        () =>
+          manager.postAnswer({
+            questionId: badId,
+            answeredAt: Date.now(),
+            source: "dismissed",
+          }),
+        /ID de pregunta inválido/i,
+      );
+      await assert.rejects(() => manager.waitForAnswer(badId, 50), /ID de pregunta inválido/i);
+    }
+
+    // Symlink inside questionsDir pointing outside must be rejected on write and ignored on list
+    const symlinkTarget = path.join(mailboxDir, "questions", "sym-q.json");
+    fs.symlinkSync(outsideFile, symlinkTarget);
+    assert.throws(
+      () =>
+        manager.postQuestion({
+          id: "sym-q",
+          issueNumber: 2,
+          issueTitle: "Test",
+          contextSummary: "Ctx",
+          question: "Q?",
+        }),
+      /Acceso denegado|symlinks/i,
+    );
+    assert.equal(manager.getPendingQuestions().length, 0);
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test("S7: DcSuperAgentChatManager blocks path traversal, illegal IDs and symlink escapes", () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "dc-chat-sec-"));
+  const storeDir = path.join(tmpDir, "store");
+  const outsideFile = path.join(tmpDir, "outside.json");
+  fs.writeFileSync(outsideFile, JSON.stringify({ id: "outside", status: "pending_review", receivedAt: Date.now() }), "utf8");
+
+  try {
+    const manager = new DcSuperAgentChatManager(storeDir);
+
+    // Valid round-trip
+    const saved = manager.recordMessage({
+      id: "chat-42-1700000000",
+      issueNumber: 42,
+      authorLogin: "alice",
+      incomingText: "hello",
+      proposedReply: "hi",
+    });
+    assert.equal(saved.id, "chat-42-1700000000");
+    assert.equal(manager.getPendingMessages().length, 1);
+    manager.updateStatus("chat-42-1700000000", "approved", "approved reply");
+    assert.equal(manager.getPendingMessages().length, 0);
+
+    const maliciousIds = [
+      "../outside",
+      "../../etc/passwd",
+      "foo/bar",
+      "foo\\bar",
+      "..",
+      ".",
+      "",
+      "id\0evil",
+      "a..b",
+      "bad id",
+    ];
+
+    for (const badId of maliciousIds) {
+      assert.throws(() => assertValidChatMessageId(badId), /ID de mensaje inválido/i);
+      assert.throws(
+        () =>
+          manager.recordMessage({
+            id: badId,
+            issueNumber: 42,
+            authorLogin: "mallory",
+            incomingText: "x",
+            proposedReply: "y",
+          }),
+        /ID de mensaje inválido/i,
+      );
+      assert.throws(() => manager.updateStatus(badId, "rejected"), /ID de mensaje inválido/i);
+    }
+
+    // Symlink inside chat_messages pointing outside must be rejected
+    const symlinkFile = path.join(storeDir, "chat_messages", "sym-msg.json");
+    fs.symlinkSync(outsideFile, symlinkFile);
+    assert.throws(
+      () =>
+        manager.recordMessage({
+          id: "sym-msg",
+          issueNumber: 42,
+          authorLogin: "mallory",
+          incomingText: "x",
+          proposedReply: "y",
+        }),
+      /Acceso denegado|symlinks/i,
+    );
+    assert.throws(() => manager.updateStatus("sym-msg", "rejected"), /Acceso denegado|symlinks/i);
+    assert.ok(manager.listMessages().every((m) => m.id !== "outside"));
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }

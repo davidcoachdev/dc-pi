@@ -12,22 +12,68 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { DcProgressBar } from "../../ui/dc-progress-bar.ts";
 
-export function openUrl(url: string): void {
+const URL_CONTROL_CHARS_RE = /[\u0000-\u001f\u007f]/;
+const CMD_SHELL_METACHARS_RE = /[&|;<>^%!"'`$]/;
+
+/**
+ * Valida estrictamente una URL antes de abrirla en navegador o pasarla a `cmd.exe /c start` en WSL.
+ * Solo permite esquemas `https:` y `http:` y rechaza caracteres de control, espacios y metacaracteres de shell.
+ */
+export function validateSafeBrowserUrl(rawUrl: string): string {
+  if (typeof rawUrl !== "string" || rawUrl.trim().length === 0) {
+    throw new Error("URL inválida: vacía.");
+  }
+  if (URL_CONTROL_CHARS_RE.test(rawUrl)) {
+    throw new Error("URL rechazada: contiene caracteres de control no permitidos.");
+  }
+  if (/\s/.test(rawUrl)) {
+    throw new Error("URL rechazada: contiene espacios en blanco no permitidos.");
+  }
+  if (CMD_SHELL_METACHARS_RE.test(rawUrl)) {
+    throw new Error("URL rechazada: contiene metacaracteres de shell no permitidos.");
+  }
+
+  let parsed: URL;
+  try {
+    parsed = new URL(rawUrl);
+  } catch {
+    throw new Error(`URL inválida: ${rawUrl}`);
+  }
+
+  if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
+    throw new Error(`Esquema de URL no permitido: ${parsed.protocol}`);
+  }
+
+  const normalized = parsed.toString();
+  if (
+    URL_CONTROL_CHARS_RE.test(normalized) ||
+    /\s/.test(normalized) ||
+    CMD_SHELL_METACHARS_RE.test(normalized)
+  ) {
+    throw new Error("URL rechazada tras normalización: contiene caracteres no permitidos.");
+  }
+
+  return normalized;
+}
+
+export function openUrl(url: string, spawnImpl: typeof spawn = spawn): void {
+  const safeUrl = validateSafeBrowserUrl(url);
+
   try {
     if (process.env.WSL_DISTRO_NAME || fs.existsSync("/mnt/c/Windows/System32/cmd.exe")) {
-      spawn("/mnt/c/Windows/System32/cmd.exe", ["/c", "start", "", url], { cwd: "/tmp", stdio: "ignore", detached: true }).on("error", () => {}).unref();
+      spawnImpl("/mnt/c/Windows/System32/cmd.exe", ["/c", "start", "", safeUrl], { cwd: "/tmp", stdio: "ignore", detached: true }).on("error", () => {}).unref();
       return;
     }
   } catch {}
 
   const [cmd, args] = process.platform === "darwin"
-    ? ["open", [url]]
+    ? ["open", [safeUrl]]
     : process.platform === "win32"
-      ? ["rundll32", ["url.dll,FileProtocolHandler", url]]
-      : ["xdg-open", [url]];
+      ? ["rundll32", ["url.dll,FileProtocolHandler", safeUrl]]
+      : ["xdg-open", [safeUrl]];
 
   try {
-    spawn(cmd, args, { stdio: "ignore", detached: true }).on("error", () => {}).unref();
+    spawnImpl(cmd, args, { stdio: "ignore", detached: true }).on("error", () => {}).unref();
   } catch {}
 }
 
@@ -89,12 +135,20 @@ export class EngramEnrollPanel implements Component {
     this.animTimer.unref?.();
   }
 
-  public destroy(): void {
-    this.progressBar.destroy();
+  private stopAnim(): void {
     if (this.animTimer) {
       clearInterval(this.animTimer);
       this.animTimer = undefined;
     }
+  }
+
+  public destroy(): void {
+    this.progressBar.destroy();
+    this.stopAnim();
+  }
+
+  public dispose(): void {
+    this.destroy();
   }
 
   public invalidate(): void {
@@ -112,8 +166,12 @@ export class EngramEnrollPanel implements Component {
   }
 
   public openDashboard(): void {
-    openProjectDashboard(this.projectName);
-    this.addLog(`🌐 Abriendo dashboard en navegador: https://engram.davidcoach.dev/dashboard/projects/${encodeURIComponent(this.projectName)}`);
+    try {
+      openProjectDashboard(this.projectName);
+      this.addLog(`🌐 Abriendo dashboard en navegador: https://engram.davidcoach.dev/dashboard/projects/${encodeURIComponent(this.projectName)}`);
+    } catch (err: any) {
+      this.addLog(`✗ No se pudo abrir el dashboard (URL inválida): ${err?.message || String(err)}`);
+    }
     this.requestRender();
   }
 
@@ -139,6 +197,7 @@ export class EngramEnrollPanel implements Component {
         this.status = "error";
         this.progress = 100;
         this.progressBar.setProgress(100);
+        this.stopAnim();
         this.requestRender();
         return;
       }
@@ -160,6 +219,7 @@ export class EngramEnrollPanel implements Component {
           if (syncErrOut && syncErrOut.trim()) this.addLog(`    ${syncErrOut.trim()}`);
           this.status = "error";
           this.progress = 100;
+          this.stopAnim();
           this.requestRender();
           return;
         }
@@ -175,6 +235,7 @@ export class EngramEnrollPanel implements Component {
         this.status = "success";
         this.progress = 100;
         this.progressBar.setProgress(100);
+        this.stopAnim();
         this.requestRender();
       });
     });

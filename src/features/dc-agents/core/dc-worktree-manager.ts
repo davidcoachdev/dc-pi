@@ -27,6 +27,44 @@ export interface CreateWorktreeOptions {
   reuseExisting?: boolean;
 }
 
+const GIT_REF_FORBIDDEN_RE = /[\u0000-\u001f\u007f\s~^:?*[\\]|@\{|\.\.|\/\//;
+const CONTROL_CHARS_RE = /[\u0000-\u001f\u007f]/;
+
+/**
+ * Valida estrictamente un nombre de rama o ref de Git para evitar inyección de opciones
+ * (prefijo `-`), operadores force-refspec (prefijo `+`) y secuencias inválidas según `git-check-ref-format`.
+ */
+export function assertValidGitRef(ref: string, label = "git ref"): string {
+  if (typeof ref !== "string" || ref.length === 0) {
+    throw new Error(`${label} inválido: vacío.`);
+  }
+  if (ref.startsWith("-") || ref.startsWith("+")) {
+    throw new Error(`${label} inválido (posible inyección de opción o refspec): "${ref}"`);
+  }
+  if (
+    ref === "@" ||
+    ref.startsWith("/") ||
+    ref.startsWith(".") ||
+    ref.endsWith("/") ||
+    ref.endsWith(".") ||
+    ref.endsWith(".lock") ||
+    GIT_REF_FORBIDDEN_RE.test(ref)
+  ) {
+    throw new Error(`${label} inválido: "${ref}"`);
+  }
+  for (const segment of ref.split("/")) {
+    if (
+      segment.length === 0 ||
+      segment.startsWith(".") ||
+      segment.endsWith(".") ||
+      segment.endsWith(".lock")
+    ) {
+      throw new Error(`${label} inválido: "${ref}"`);
+    }
+  }
+  return ref;
+}
+
 /**
  * Sanitiza un string para que sea seguro como nombre de rama y directorio de Git.
  */
@@ -71,6 +109,21 @@ export class DcWorktreeManager {
       customWorktreeDir,
     } = options;
 
+    // 0. Validar estrictamente refs/slugs antes de invocar git
+    if (baseBranch !== undefined) {
+      assertValidGitRef(baseBranch, "baseBranch");
+    }
+    if (
+      typeof taskSlug === "string" &&
+      (CONTROL_CHARS_RE.test(taskSlug) || taskSlug.trim().startsWith("-"))
+    ) {
+      throw new Error(`taskSlug inválido (posible inyección de opción o caracteres de control): "${taskSlug}"`);
+    }
+
+    const safeSlug = sanitizeBranchSlug(taskSlug);
+    const shortId = taskId.replace(/[^a-zA-Z0-9]/g, "").slice(0, 8) || "run";
+    const branchName = assertValidGitRef(`${prefixBranch}${safeSlug}-${shortId}`, "branchName");
+
     // 1. Validar que repoRoot es un repositorio Git válido
     const canonicalRoot = await this.runGit(repoRoot, ["rev-parse", "--show-toplevel"]);
     const repoName = path.basename(canonicalRoot);
@@ -83,12 +136,9 @@ export class DcWorktreeManager {
         targetBaseBranch = "HEAD";
       }
     }
+    targetBaseBranch = assertValidGitRef(targetBaseBranch, "baseBranch");
 
-    // 3. Generar nombres semánticos de rama y ruta de worktree
-    const safeSlug = sanitizeBranchSlug(taskSlug);
-    const shortId = taskId.replace(/[^a-zA-Z0-9]/g, "").slice(0, 8) || "run";
-    const branchName = `${prefixBranch}${safeSlug}-${shortId}`;
-
+    // 3. Generar ruta de worktree
     const worktreePath =
       customWorktreeDir ||
       path.join(getDcAgentsPaths().worktreesDir, repoName, `${safeSlug}-${shortId}`);
@@ -116,7 +166,7 @@ export class DcWorktreeManager {
         }
         retained = true;
       } else {
-        const branchExists = await this.runGit(canonicalRoot, ["branch", "--list", branchName]);
+        const branchExists = await this.runGit(canonicalRoot, ["branch", "--list", "--", branchName]);
         if (fs.existsSync(worktreePath) || branchExists) {
           throw new Error("Worktree occupancy mismatch; retained data was not changed");
         }
@@ -132,6 +182,7 @@ export class DcWorktreeManager {
       "add",
       "-b",
       branchName,
+      "--",
       worktreePath,
       targetBaseBranch,
     ]);
@@ -189,7 +240,7 @@ export class DcWorktreeManager {
 
     // 2. Remover worktree con Git
     try {
-      await this.runGit(repoRoot, ["worktree", "remove", "--force", worktreePath]);
+      await this.runGit(repoRoot, ["worktree", "remove", "--force", "--", worktreePath]);
     } catch {
       // Fallback si la carpeta fue borrada manualmente
       await fs.promises.rm(worktreePath, { recursive: true, force: true }).catch(() => {});

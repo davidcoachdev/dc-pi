@@ -1,6 +1,25 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { getDcAgentsPaths } from "../../../core/dc-paths.ts";
+import { assertPathWithinRoots } from "../../../core/dc-path-confinement.ts";
+
+const SAFE_QUESTION_ID_RE = /^[A-Za-z0-9._-]+$/;
+
+export function assertValidQuestionId(id: string): string {
+  if (
+    typeof id !== "string" ||
+    id.length === 0 ||
+    !SAFE_QUESTION_ID_RE.test(id) ||
+    id === "." ||
+    id === ".." ||
+    id.includes("..")
+  ) {
+    throw new Error(
+      `ID de pregunta inválido: "${String(id)}". Solo se permiten [A-Za-z0-9._-] sin ".." ni separadores de ruta.`,
+    );
+  }
+  return id;
+}
 
 export interface AgentQuestionPacket {
   id: string; // uuid único de la pregunta
@@ -59,12 +78,19 @@ export class DcRemoteQuestionManager {
     }
   }
 
+  private resolveMailboxFile(dir: string, id: string, label: string): string {
+    const safeId = assertValidQuestionId(id);
+    const candidate = path.join(dir, `${safeId}.json`);
+    return assertPathWithinRoots(candidate, [dir], label);
+  }
+
   /**
    * Un worker en background emite una pregunta y queda a la espera de respuesta (bloqueante sincrónico o promesa).
    */
   public postQuestion(packet: Omit<AgentQuestionPacket, "id" | "createdAt" | "expiresAt"> & { id?: string; timeoutMs?: number }): AgentQuestionPacket {
     this.ensureDirs();
-    const id = packet.id || `q-${packet.issueNumber}-${Date.now()}`;
+    const rawId = packet.id !== undefined ? packet.id : `q-${packet.issueNumber}-${Date.now()}`;
+    const id = assertValidQuestionId(rawId);
     const timeout = packet.timeoutMs || 10 * 60 * 1000; // 10 minutos por defecto
     const now = Date.now();
 
@@ -80,7 +106,7 @@ export class DcRemoteQuestionManager {
       expiresAt: now + timeout,
     };
 
-    const filePath = path.join(this.questionsDir, `${id}.json`);
+    const filePath = this.resolveMailboxFile(this.questionsDir, id, "archivo de pregunta remota");
     fs.writeFileSync(filePath, JSON.stringify(fullPacket, null, 2), "utf8");
     return fullPacket;
   }
@@ -90,11 +116,11 @@ export class DcRemoteQuestionManager {
    */
   public postAnswer(answer: AgentAnswerPacket): void {
     this.ensureDirs();
-    const filePath = path.join(this.answersDir, `${answer.questionId}.json`);
+    const filePath = this.resolveMailboxFile(this.answersDir, answer.questionId, "archivo de respuesta remota");
     fs.writeFileSync(filePath, JSON.stringify(answer, null, 2), "utf8");
 
     // Limpiar archivo de pregunta una vez respondida
-    const qPath = path.join(this.questionsDir, `${answer.questionId}.json`);
+    const qPath = this.resolveMailboxFile(this.questionsDir, answer.questionId, "archivo de pregunta remota");
     if (fs.existsSync(qPath)) {
       try { fs.unlinkSync(qPath); } catch { /* best effort */ }
     }
@@ -104,7 +130,8 @@ export class DcRemoteQuestionManager {
    * Espera sincrónica/asincrónica a que la respuesta esté disponible en disco.
    */
   public async waitForAnswer(questionId: string, timeoutMs: number = 600000): Promise<AgentAnswerPacket> {
-    const answerPath = path.join(this.answersDir, `${questionId}.json`);
+    const safeId = assertValidQuestionId(questionId);
+    const answerPath = this.resolveMailboxFile(this.answersDir, safeId, "archivo de respuesta remota");
     const deadline = Date.now() + timeoutMs;
 
     while (Date.now() < deadline) {
@@ -123,7 +150,7 @@ export class DcRemoteQuestionManager {
     }
 
     return {
-      questionId,
+      questionId: safeId,
       answeredAt: Date.now(),
       source: "dismissed",
       customText: "Timeout: No se recibió respuesta humana a tiempo.",
@@ -142,13 +169,18 @@ export class DcRemoteQuestionManager {
 
       for (const f of files) {
         try {
-          const raw = fs.readFileSync(path.join(this.questionsDir, f), "utf8");
+          const filePath = assertPathWithinRoots(
+            path.join(this.questionsDir, f),
+            [this.questionsDir],
+            "archivo de pregunta remota",
+          );
+          const raw = fs.readFileSync(filePath, "utf8");
           const p = JSON.parse(raw) as AgentQuestionPacket;
           if (p.expiresAt > now) {
             packets.push(p);
           } else {
             // Limpiar expirados
-            try { fs.unlinkSync(path.join(this.questionsDir, f)); } catch { /* noop */ }
+            try { fs.unlinkSync(filePath); } catch { /* noop */ }
           }
         } catch {
           /* ignore */
