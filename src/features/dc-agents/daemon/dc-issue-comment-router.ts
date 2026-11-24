@@ -12,7 +12,6 @@ import { dcSuperAgentChatManager } from "./dc-super-agent-chat-manager.ts";
 import { dcChatDatabase } from "./dc-chat-sqlite-db.ts";
 import { promptAgentChatModal } from "../views/dc-agent-chat-modal.ts";
 import { dcPrInspectorAgent } from "./dc-pr-inspector-agent.ts";
-import { dcPrConflictResolver } from "./dc-pr-conflict-resolver.ts";
 import { dcCommentAnalyzer } from "./dc-comment-analyzer.ts";
 import { dcModerationManager } from "./dc-moderation-manager.ts";
 import type { GitHubIssueCommentPayload, IssueCommentCommandResult } from "./dc-issue-comment-types.ts";
@@ -255,13 +254,17 @@ export class DcIssueCommentRouter {
         const waitingReply = `${agentTag}: 🛠 Iniciando resolución autónoma de conflictos para el PR #${issueNumber}. Montando quirófano en worktree aislado y lanzando sesión de Pi en background...`;
         await dcIssueNotifier.notifyIssue(target, waitingReply);
 
-        void dcPrConflictResolver.resolve({
-          prNumber: issueNumber,
-          repoNwo,
-          headBranch: branchName,
-          baseBranch: "master",
-          authorLogin,
-        });
+        void dcPrInspectorAgent
+          .resolveConflicts({
+            prNumber: issueNumber,
+            repoNwo,
+            headBranch: branchName,
+            baseBranch: "master",
+            authorLogin,
+          })
+          .catch(() => {
+            /* errores gestionados internamente por el resolver */
+          });
 
         return { handled: true, response: waitingReply };
       }

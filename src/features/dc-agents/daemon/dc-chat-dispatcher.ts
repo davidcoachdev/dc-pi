@@ -3,7 +3,7 @@ import { dcControlDaemonManager } from "./dc-control-daemon-manager.ts";
 import { scanRunningPiProcesses } from "../../dc-control/core/dc-process-scanner.ts";
 import { dcIssueDispatcher } from "./dc-issue-dispatcher.ts";
 import { dcIssueConversationalAgent } from "./dc-issue-conversational-agent.ts";
-import { dcPrInspectorAgent } from "./dc-pr-inspector-agent.ts";
+import { dcPrInspectorAgent, type DcPrInspectorAgent } from "./dc-pr-inspector-agent.ts";
 import * as fs from "node:fs";
 import * as path from "node:path";
 
@@ -20,6 +20,17 @@ export interface ChatDispatchResponse {
   respondent: string;
 }
 
+export interface DcChatDispatcherOptions {
+  prInspector?: Pick<DcPrInspectorAgent, "getActiveInspections" | "resolveConflicts">;
+}
+
+function extractPrNumber(text: string): number | null {
+  const match = text.match(/(?:\bpr\s*#?|\B#)(\d+)\b/i);
+  if (!match || !match[1]) return null;
+  const parsed = parseInt(match[1], 10);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
+}
+
 /**
  * Enrutador de mensajes central para el Chat Global de DC-Control.
  * Discrimina entre consultas a la Torre de Control (DC-Control)
@@ -27,6 +38,11 @@ export interface ChatDispatchResponse {
  */
 export class DcChatDispatcher {
   private static instance?: DcChatDispatcher;
+  private readonly prInspector: Pick<DcPrInspectorAgent, "getActiveInspections" | "resolveConflicts">;
+
+  constructor(options?: DcChatDispatcherOptions) {
+    this.prInspector = options?.prInspector ?? dcPrInspectorAgent;
+  }
 
   public static getInstance(): DcChatDispatcher {
     if (!DcChatDispatcher.instance) {
@@ -165,8 +181,9 @@ Comandos y consultas soportadas en este hilo:
   }
 
   private async handleSuperAgent99Query(query: ChatDispatchQuery): Promise<ChatDispatchResponse> {
-    const inspections = dcPrInspectorAgent.getActiveInspections();
+    const inspections = this.prInspector.getActiveInspections();
     const q = query.text.toLowerCase().trim();
+    const prNumber = extractPrNumber(query.text);
 
     if (q.includes("ayuda") || q === "?") {
       return {
@@ -181,13 +198,52 @@ Puedes preguntarme:
       };
     }
 
-    if (q.includes("conflicto") || q.includes("rebase") || q.includes("arregla")) {
+    if (
+      q.includes("conflicto") ||
+      q.includes("rebase") ||
+      q.includes("arregla") ||
+      (q.includes("resuelve") && prNumber !== null)
+    ) {
+      if (prNumber !== null) {
+        const daemonStatus = dcControlDaemonManager.getStatus();
+        const activeDispatch = dcIssueDispatcher
+          .getActiveDispatches()
+          .find((d) => d.issueNumber === prNumber);
+        const repoNwo = daemonStatus.repo?.fullNwo || "davidcoachdev/dc-pi";
+        const headBranch = activeDispatch?.branchName || `pr-${prNumber}`;
+        const baseBranch = activeDispatch?.baseBranch || "master";
+        const authorLogin = query.sender || "davidcoachdev";
+
+        void this.prInspector
+          .resolveConflicts({
+            prNumber,
+            repoNwo,
+            headBranch,
+            baseBranch,
+            authorLogin,
+          })
+          .catch(() => {
+            /* errores gestionados internamente por el resolver */
+          });
+
+        return {
+          respondent: "super_agent_99",
+          reply:
+            `### 🕵️‍♀️ Super-Agente #99 • Resolución de Conflictos Iniciada\n` +
+            `- **PR**: #${prNumber}\n` +
+            `- **Rama**: \`${headBranch}\` → \`${baseBranch}\`\n` +
+            `- **Estado**: En curso en segundo plano (worktree aislado + Pi con Taxi de la Flota)\n\n` +
+            `Verificaré build y tests (exit code 0) antes de aplicar \`git rebase --continue\` y \`git push --force-with-lease\`.`,
+        };
+      }
+
       return {
         respondent: "super_agent_99",
         reply: `### 🕵️‍♀️ Super-Agente #99 • Resolución de Conflictos
 Para resolver conflictos en un PR de forma autónoma:
-1. Comenta directamente en el PR de GitHub: *"@dc resuelve conflictos"* o *"arregla el pr"*.
-2. Yo aislaré la rama en un Git worktree temporal, lanzaré una sesión de Pi en segundo plano para desarmar los marcadores de conflicto, verificaré que los tests pasen (exit code 0) y actualizaré la rama con \`--force-with-lease\`.`,
+1. Escribe aquí el número de PR: *"resuelve conflictos del PR #42"* o *"rebase pr 42"*.
+2. O comenta directamente en el PR de GitHub: *"@dc resuelve conflictos"* o *"arregla el pr"*.
+3. Yo aislaré la rama en un Git worktree temporal, arrendaré un Taxi estándar de la Flota, lanzaré una sesión de Pi en segundo plano para desarmar los marcadores de conflicto, verificaré build y tests (exit code 0) y actualizaré la rama con \`--force-with-lease\`.`,
       };
     }
 
