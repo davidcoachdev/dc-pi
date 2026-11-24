@@ -16,8 +16,8 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
-import * as os from "node:os";
 import { randomUUID } from "node:crypto";
+import { getDcTaxisPaths, getPiCodingAgentDir } from "../../../core/dc-paths.ts";
 import type {
   TaxiHandoverPacket,
   TaxiHandoverReason,
@@ -43,8 +43,9 @@ import type { EphemeralAgentLaunchPlan } from "./dc-ephemeral-manager.ts";
 export const DEFAULT_TOKEN_HANDOVER_THRESHOLD = 120_000;
 export const DEFAULT_QUOTA_HANDOVER_THRESHOLD_PCT = 10;
 
-const DEFAULT_FLEET_STATE_PATH = path.join(os.homedir(), ".pi", "agent", "dc-studio", "dc-taxis.json");
-const DEFAULT_TASKS_DIR = path.join(os.homedir(), ".pi", "agent", "gentle-agents", "tasks");
+function getDefaultTasksDir(): string {
+  return path.join(getPiCodingAgentDir(), "gentle-agents", "tasks");
+}
 
 export interface TaxiHandoverEvaluationParams {
   account: string;
@@ -75,7 +76,7 @@ export function evaluateTaxiHandoverRequired(
   params: TaxiHandoverEvaluationParams,
 ): TaxiHandoverEvaluationResult {
   let rawTokens = typeof params.tokens === "number" ? params.tokens : 0;
-  const tasksDir = params.tasksDir || DEFAULT_TASKS_DIR;
+  const tasksDir = params.tasksDir || getDefaultTasksDir();
 
   // Si no se pasaron tokens explícitamente pero hay un taskId, intentar extraerlos del archivo de la tarea
   if (params.tokens === undefined && params.taskId && fs.existsSync(tasksDir)) {
@@ -247,8 +248,8 @@ function extractHandoffSummary(
 export function executeTaxiHandover(
   params: ExecuteTaxiHandoverParams,
 ): ExecuteTaxiHandoverResult {
-  const fleetPath = params.fleetPath || DEFAULT_FLEET_STATE_PATH;
-  const tasksDir = params.tasksDir || DEFAULT_TASKS_DIR;
+  const fleetPath = params.fleetPath || getDcTaxisPaths().fleetState;
+  const tasksDir = params.tasksDir || getDefaultTasksDir();
   const quotaGetter = params.quotaGetter || getCachedTaxiQuota;
   const leaseTtlMs = params.leaseTtlMs || DEFAULT_DC_AGENTS_CONFIG.accountPool.leaseTtlMs;
 

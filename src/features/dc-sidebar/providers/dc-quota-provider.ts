@@ -1,6 +1,6 @@
 import fs from "node:fs";
-import os from "node:os";
 import * as path from "node:path";
+import { resolveSettingsFilePath } from "../../../core/dc-paths.ts";
 import { fetchAccountQuotaRows, fetchBridgeQuota, fetchZenQuota, readPiAuthKey } from "../../dc-quota/dc-quota.ts";
 import { humanizeReset } from "../../dc-quota/dc-quota-types.ts";
 import { getSidebarContext } from "../dc-sidebar.ts";
@@ -45,9 +45,7 @@ function resolveQuotaSettingsPath(options?: DiscoverAccountPrefixesOptions | str
     if (options.settingsPath?.trim()) return options.settingsPath.trim();
     if (options.agentDir?.trim()) return path.join(options.agentDir.trim(), "settings.json");
   }
-  const envAgentDir = process.env.PI_CODING_AGENT_DIR?.trim();
-  const baseDir = envAgentDir || path.join(os.homedir(), ".pi", "agent");
-  return path.join(baseDir, "settings.json");
+  return resolveSettingsFilePath();
 }
 
 /**

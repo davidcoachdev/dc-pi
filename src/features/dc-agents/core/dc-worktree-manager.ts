@@ -2,7 +2,7 @@ import { execFile } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { promisify } from "node:util";
-import { getDcStudioDir } from "../../../core/dc-paths.ts";
+import { getDcAgentsPaths } from "../../../core/dc-paths.ts";
 
 const execFileAsync = promisify(execFile);
 
@@ -91,7 +91,7 @@ export class DcWorktreeManager {
 
     const worktreePath =
       customWorktreeDir ||
-      path.join(getDcStudioDir(), "worktrees", repoName, `${safeSlug}-${shortId}`);
+      path.join(getDcAgentsPaths().worktreesDir, repoName, `${safeSlug}-${shortId}`);
 
     let retained = false;
     if (options.reuseExisting) {

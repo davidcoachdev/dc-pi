@@ -1,6 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import * as os from "node:os";
+import { resolveExistingAgentWorktreePath } from "../../../core/dc-paths.ts";
 import { getCollaboratorsDatabase } from "./dc-collaborators-db.ts";
 import { dcIssueDispatcher } from "./dc-issue-dispatcher.ts";
 import { dcIssueNotifier } from "./dc-issue-notifier.ts";
@@ -82,10 +82,7 @@ export class DcIssueCommentRouter {
 
     // Si el mapa en memoria se reinició o no lo encuentra, buscar en disco en la ruta canónica de worktrees
     if (!worktreePath) {
-      const candidatePath = path.join(os.homedir(), ".pi", "agent", "dc-studio", "worktrees", "dc-pi", `issue-${issueNumber}-ghissue1`);
-      if (fs.existsSync(candidatePath)) {
-        worktreePath = candidatePath;
-      }
+      worktreePath = resolveExistingAgentWorktreePath("dc-pi", `issue-${issueNumber}-ghissue1`);
     }
 
     const target = {

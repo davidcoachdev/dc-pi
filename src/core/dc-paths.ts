@@ -16,6 +16,32 @@ export function getPiCodingAgentDir(): string {
 }
 
 /**
+ * Resuelve dinámicamente la ruta al archivo settings.json de Pi
+ * (`<PI_CODING_AGENT_DIR>/settings.json`, por defecto `~/.pi/agent/settings.json`).
+ */
+export function resolveSettingsFilePath(): string {
+  return path.join(getPiCodingAgentDir(), "settings.json");
+}
+
+/**
+ * Garantiza que exista el directorio indicado (o su directorio padre cuando `isFilePath` es true).
+ */
+export function ensureDirectory(filePathOrDir: string, isFilePath: boolean = true): string {
+  const dir = isFilePath ? path.dirname(filePathOrDir) : filePathOrDir;
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true });
+  }
+  return dir;
+}
+
+/**
+ * Garantiza que exista el directorio padre de `filePath`.
+ */
+export function ensureParentDirectory(filePath: string): string {
+  return ensureDirectory(filePath, true);
+}
+
+/**
  * Escritura atómica mediante archivo temporal en el mismo directorio + renameSync,
  * limpiando el archivo temporal si ocurre cualquier fallo.
  */
@@ -103,12 +129,21 @@ export function getDcTaxisPaths(): DcTaxisPaths {
     }
   } catch { /* best-effort */ }
 
+  const log = path.join(dir, "taxis.log");
+  const legacyLog = path.join(getDcStudioDir(), "dc-taxis.log");
+  try {
+    if (!fs.existsSync(log) && fs.existsSync(legacyLog)) {
+      const content = fs.readFileSync(legacyLog, "utf8");
+      writeFileAtomicSync(log, content);
+    }
+  } catch { /* best-effort */ }
+
   return {
     dir,
     fleetState,
     ledgerDb: path.join(dir, "ledger.db"),
     legacyHistory: path.join(getDcStudioDir(), "dc-taxis-history.json"),
-    log: path.join(dir, "taxis.log"),
+    log,
     workshopLog: path.join(dir, "workshop.log"),
   };
 }
@@ -185,8 +220,25 @@ export interface DcAgentsPaths {
   answersDir: string;
 }
 
+function migrateLegacyJsonFiles(legacyDir: string, targetDir: string): void {
+  try {
+    if (!fs.existsSync(legacyDir) || !fs.statSync(legacyDir).isDirectory()) return;
+    for (const entry of fs.readdirSync(legacyDir)) {
+      if (!entry.endsWith(".json")) continue;
+      const src = path.join(legacyDir, entry);
+      const dst = path.join(targetDir, entry);
+      if (!fs.existsSync(dst) && fs.statSync(src).isFile()) {
+        writeFileAtomicSync(dst, fs.readFileSync(src, "utf8"));
+      }
+    }
+  } catch {
+    /* best-effort */
+  }
+}
+
 export function getDcAgentsPaths(): DcAgentsPaths {
-  const dir = path.join(getDcStudioDir(), "agents");
+  const dcStudioDir = getDcStudioDir();
+  const dir = path.join(dcStudioDir, "agents");
   const worktreesDir = path.join(dir, "worktrees");
   const receiptsDir = path.join(dir, "receipts");
   const questionsDir = path.join(dir, "questions");
@@ -199,13 +251,16 @@ export function getDcAgentsPaths(): DcAgentsPaths {
   } catch { /* best-effort */ }
 
   const config = path.join(dir, "config.json");
-  const legacyConfig = path.join(getDcStudioDir(), "dc-agents.json");
+  const legacyConfig = path.join(dcStudioDir, "dc-agents.json");
   try {
     if (!fs.existsSync(config) && fs.existsSync(legacyConfig)) {
       const content = fs.readFileSync(legacyConfig, "utf8");
       writeFileAtomicSync(config, content);
     }
   } catch { /* best-effort */ }
+
+  migrateLegacyJsonFiles(path.join(dcStudioDir, "questions"), questionsDir);
+  migrateLegacyJsonFiles(path.join(dcStudioDir, "answers"), answersDir);
 
   return {
     dir,
@@ -215,6 +270,22 @@ export function getDcAgentsPaths(): DcAgentsPaths {
     questionsDir,
     answersDir,
   };
+}
+
+/**
+ * Resuelve un worktree existente en la ruta canónica `dc-studio/agents/worktrees/...`,
+ * con fallback de solo lectura a la ruta legada `dc-studio/worktrees/...` si aún existe en disco.
+ */
+export function resolveExistingAgentWorktreePath(...segments: string[]): string | undefined {
+  const canonical = path.join(getDcAgentsPaths().worktreesDir, ...segments);
+  if (fs.existsSync(canonical)) {
+    return canonical;
+  }
+  const legacy = path.join(getDcStudioDir(), "worktrees", ...segments);
+  if (fs.existsSync(legacy)) {
+    return legacy;
+  }
+  return undefined;
 }
 
 export interface DcTtsPaths {
@@ -242,6 +313,7 @@ export interface DcControlPaths {
   dir: string;
   socket: string;
   pid: string;
+  daemonEntry: string;
 }
 
 /**
@@ -256,11 +328,13 @@ export function getDcControlPaths(): DcControlPaths {
 
   const socket = process.env.DC_SUPERVISOR_SOCKET || path.join(dir, "supervisor.sock");
   const pid = process.env.DC_SUPERVISOR_PID || path.join(dir, "supervisor.pid");
+  const daemonEntry = path.join(dir, "daemon-entry.js");
 
   return {
     dir,
     socket,
     pid,
+    daemonEntry,
   };
 }
 

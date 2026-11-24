@@ -9,8 +9,7 @@
  * Cumple con Directiva 1 (cero dependencias de Pi) y Directiva 2 (aislamiento).
  */
 
-import * as path from "node:path";
-import * as os from "node:os";
+import { getDcTaxisPaths } from "../../../core/dc-paths.ts";
 import {
   loadFleetState,
   repairTaxiFromWorkshop,
@@ -23,14 +22,6 @@ import {
   type TaxiQuotaFetcher,
 } from "./dc-taxi-quota.ts";
 import { fetchJson } from "../../../integrations/dc-http/dc-fetch.ts";
-
-const DEFAULT_FLEET_STATE_PATH = path.join(
-  os.homedir(),
-  ".pi",
-  "agent",
-  "dc-studio",
-  "dc-taxis.json",
-);
 
 export type TaxiQuotaProbeFn = (
   account: string,
@@ -100,7 +91,7 @@ export class TaxiWorkshopCoordinator {
       return result;
     }
 
-    const fleetPath = overrideFleetPath || this.options.fleetPath || DEFAULT_FLEET_STATE_PATH;
+    const fleetPath = overrideFleetPath || this.options.fleetPath || getDcTaxisPaths().fleetState;
     const allowedAccounts = this.options.allowedAccounts;
     const cooldownMs = this.options.cooldownMs ?? 10_000;
     const nowFn = this.options.now ?? Date.now;

@@ -1,7 +1,7 @@
 import * as fs from "node:fs/promises";
-import * as fsSync from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { assertPathWithinRoots } from "../../../core/dc-path-confinement.ts";
 import { validatePublicUrlResolved } from "../../dc-websearch/core/dc-websearch-security.ts";
 import type {
   BrowserCdpStatus,
@@ -92,24 +92,6 @@ export async function listPageTargets(rawCdpUrl?: string): Promise<BrowserPageTa
     }));
 }
 
-function isPathWithinRoot(targetPath: string, rootPath: string): boolean {
-  const rel = path.relative(rootPath, targetPath);
-  return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
-}
-
-function resolveExistingAncestorRealpath(targetPath: string): string {
-  let current = path.resolve(targetPath);
-  const tail: string[] = [];
-  while (!fsSync.existsSync(current)) {
-    const parent = path.dirname(current);
-    if (parent === current) break;
-    tail.unshift(path.basename(current));
-    current = parent;
-  }
-  const realBase = fsSync.existsSync(current) ? fsSync.realpathSync(current) : current;
-  return tail.length > 0 ? path.join(realBase, ...tail) : realBase;
-}
-
 function validateConfinedOutputPath(outputPath: string, cwd: string): string {
   const resolvedCwd = path.resolve(cwd);
   const resolvedTmp = path.resolve(os.tmpdir());
@@ -117,22 +99,11 @@ function validateConfinedOutputPath(outputPath: string, cwd: string): string {
     ? path.resolve(outputPath)
     : path.resolve(resolvedCwd, outputPath);
 
-  if (!isPathWithinRoot(resolvedOut, resolvedCwd) && !isPathWithinRoot(resolvedOut, resolvedTmp)) {
-    throw new Error(
-      `Ruta de captura fuera de los directorios permitidos (cwd o tmpdir): ${resolvedOut}`,
-    );
-  }
-
-  const realOut = resolveExistingAncestorRealpath(resolvedOut);
-  const realCwd = resolveExistingAncestorRealpath(resolvedCwd);
-  const realTmp = resolveExistingAncestorRealpath(resolvedTmp);
-  if (!isPathWithinRoot(realOut, realCwd) && !isPathWithinRoot(realOut, realTmp)) {
-    throw new Error(
-      `Ruta de captura fuera de los directorios permitidos tras resolver symlinks (cwd o tmpdir): ${resolvedOut}`,
-    );
-  }
-
-  return resolvedOut;
+  return assertPathWithinRoots(
+    resolvedOut,
+    [resolvedCwd, resolvedTmp],
+    "ruta de captura (cwd o tmpdir)",
+  );
 }
 
 async function validateNavigationUrl(

@@ -1,10 +1,7 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import * as fs from "node:fs";
-import * as os from "node:os";
-import * as path from "node:path";
+import { resolveSettingsFilePath } from "../../core/dc-paths.ts";
 import { dcNotifier } from "../dc-notify/dc-notifier.ts";
-
-const SETTINGS = path.join(os.homedir(), ".pi/agent/settings.json");
 
 function enforce(): string[] {
   const changed: string[] = [];
@@ -19,7 +16,8 @@ function enforce(): string[] {
     /* noop */
   }
   try {
-    const raw = fs.readFileSync(SETTINGS, "utf8");
+    const settingsPath = resolveSettingsFilePath();
+    const raw = fs.readFileSync(settingsPath, "utf8");
     const settings = JSON.parse(raw) as Record<string, unknown>;
     if (settings.enableInstallTelemetry !== false) {
       settings.enableInstallTelemetry = false;
@@ -34,7 +32,7 @@ function enforce(): string[] {
       changed.push("sin enableAnalytics");
     }
     if (changed.length) {
-      fs.writeFileSync(SETTINGS, JSON.stringify(settings, null, 2));
+      fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
     }
   } catch {
     /* jamás tumbar pi por esto */

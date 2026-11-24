@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import * as os from "node:os";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { resolveExistingAgentWorktreePath } from "../../../core/dc-paths.ts";
 import { dcNotifier } from "../../../integrations/dc-notify/dc-notifier.ts";
 import { resolveCurrentRepoIdentity, type RepoIdentity } from "./dc-repo-resolver.ts";
 import { dcControlDaemonManager } from "./dc-control-daemon-manager.ts";
@@ -123,10 +123,7 @@ export async function checkPendingIssues(pi: ExtensionAPI, ctx: ExtensionContext
     const dispatch = dcIssueDispatcher.getDispatch(repo.fullNwo, number);
     let worktreePath = dispatch?.worktreePath;
     if (!worktreePath) {
-      const candidatePath = path.join(os.homedir(), ".pi", "agent", "dc-studio", "worktrees", "dc-pi", `issue-${number}-ghissue1`);
-      if (fs.existsSync(candidatePath)) {
-        worktreePath = candidatePath;
-      }
+      worktreePath = resolveExistingAgentWorktreePath("dc-pi", `issue-${number}-ghissue1`);
     }
 
     let pendingDirectives: string[] = [];

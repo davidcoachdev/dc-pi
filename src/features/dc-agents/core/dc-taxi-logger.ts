@@ -6,18 +6,9 @@
  */
 
 import * as fs from "node:fs";
-import * as path from "node:path";
-import * as os from "node:os";
+import { ensureDirectory, getDcTaxisPaths } from "../../../core/dc-paths.ts";
 
-const LOG_FILE_PATH = path.join(os.homedir(), ".pi", "agent", "dc-studio", "dc-taxis.log");
 const MAX_LOG_SIZE_BYTES = 2 * 1024 * 1024; // 2 MB
-
-function ensureLogDirectory(): void {
-  const dir = path.dirname(LOG_FILE_PATH);
-  if (!fs.existsSync(dir)) {
-    fs.mkdirSync(dir, { recursive: true });
-  }
-}
 
 /**
  * Agrega una entrada estructurada al log de auditoría de taxis.
@@ -26,10 +17,10 @@ export function appendTaxiLog(
   level: "INFO" | "WARN" | "ERROR",
   event: string,
   details?: Record<string, unknown>,
-  logPath: string = LOG_FILE_PATH,
+  logPath: string = getDcTaxisPaths().log,
 ): void {
   try {
-    ensureLogDirectory();
+    ensureDirectory(logPath);
 
     // Rotar / truncar defensivamente y de forma atómica si excede 2MB
     if (fs.existsSync(logPath)) {
@@ -62,7 +53,7 @@ export function appendTaxiLog(
 /**
  * Lee las líneas más recientes del log de taxis para visualización en TUI.
  */
-export function readRecentTaxiLogs(limit: number = 80, logPath: string = LOG_FILE_PATH): string[] {
+export function readRecentTaxiLogs(limit: number = 80, logPath: string = getDcTaxisPaths().log): string[] {
   if (!fs.existsSync(logPath)) {
     return [];
   }

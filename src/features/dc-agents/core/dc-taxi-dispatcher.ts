@@ -10,7 +10,6 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
-import * as os from "node:os";
 import { randomUUID } from "node:crypto";
 import type {
   DcTaxiFleetState,
@@ -27,9 +26,8 @@ import {
   type DcTaxiQuotaInfo,
 } from "./dc-taxi-quota.ts";
 import { getTaxiLedgerDb } from "./dc-taxi-ledger-db.ts";
-import { getDcTaxisPaths } from "../../../core/dc-paths.ts";
+import { ensureDirectory, getDcTaxisPaths, getPiCodingAgentDir } from "../../../core/dc-paths.ts";
 
-const FLEET_STATE_PATH = getDcTaxisPaths().fleetState;
 const LOCK_STALE_MS = 10_000;
 const LOCK_MAX_WAIT_MS = 15_000;
 
@@ -164,13 +162,6 @@ export function withFleetLock<T>(fleetPath: string, fn: () => T): T {
   }
 }
 
-function ensureDirectory(targetPath: string): void {
-  const dir = path.dirname(targetPath);
-  if (!fs.existsSync(dir)) {
-    fs.mkdirSync(dir, { recursive: true });
-  }
-}
-
 /**
  * Comprueba si un proceso sigue vivo en el sistema operativo sin enviarle una señal destructiva.
  * En Linux inspecciona /proc/<pid>/stat para descartar procesos en estado Zombie ('Z') o Dead ('X').
@@ -270,7 +261,7 @@ export function discoverActivePiProcesses(): ActivePiProcessInfo[] {
 
         // Leer la sesión más reciente para ese CWD
         const safeName = "--" + cwd.replace(/^\//, "").replace(/\/$/, "").replace(/\//g, "-") + "--";
-        const sessionDir = path.join(os.homedir(), ".pi", "agent", "sessions", safeName);
+        const sessionDir = path.join(getPiCodingAgentDir(), "sessions", safeName);
 
         let modelId: string | undefined;
         let sessionId: string | undefined;
@@ -371,7 +362,7 @@ export function createInitialFleetState(accounts?: string[]): DcTaxiFleetState {
  * Carga el estado actual de la flota desde disco sincronizando cuentas dinámicamente.
  */
 export function loadFleetState(
-  fleetPath: string = FLEET_STATE_PATH,
+  fleetPath: string = getDcTaxisPaths().fleetState,
   defaultAccounts?: string[],
 ): DcTaxiFleetState {
   if (!fs.existsSync(fleetPath)) {
@@ -425,7 +416,7 @@ export function loadFleetState(
 /**
  * Guarda el estado de la flota de forma segura con escritura atómica.
  */
-export function saveFleetState(state: DcTaxiFleetState, fleetPath: string = FLEET_STATE_PATH): void {
+export function saveFleetState(state: DcTaxiFleetState, fleetPath: string = getDcTaxisPaths().fleetState): void {
   let tempPath: string | undefined;
   try {
     ensureDirectory(fleetPath);
@@ -539,7 +530,7 @@ export function updateTaxiRechargingState(
 export function syncOrchestratorTaxi(
   sessionId: string,
   modelId?: string,
-  fleetPath: string = FLEET_STATE_PATH,
+  fleetPath: string = getDcTaxisPaths().fleetState,
   pid: number = process.pid,
   explicitOptions?: boolean | { isExplicitSelection?: boolean },
 ): { account: string; modelId: string; changed: boolean } | null {
@@ -627,7 +618,7 @@ export function selectNextCycleTaxi(
 export function acquireOrchestratorTaxi(
   sessionId: string,
   modelId?: string,
-  fleetPath: string = FLEET_STATE_PATH,
+  fleetPath: string = getDcTaxisPaths().fleetState,
   pid: number = process.pid,
   allowedAccounts?: string[],
   fallbackBaseModel: string = "gemini-3.8-flash-high",
@@ -875,7 +866,7 @@ let isExplicitOrchestratorReleaseActive = false;
 export function releaseOrchestratorTaxi(
   sessionId?: string,
   pid: number = process.pid,
-  fleetPath: string = FLEET_STATE_PATH,
+  fleetPath: string = getDcTaxisPaths().fleetState,
   allowedAccounts?: string[],
 ): void {
   const prevReleaseActive = isExplicitOrchestratorReleaseActive;
@@ -919,7 +910,7 @@ export function releaseOrchestratorTaxi(
 export function leaseTaxi(
   passengerData: Omit<DcTaxiPassenger, "startedAt" | "heartbeatAt">,
   preferredAccount?: string,
-  fleetPath: string = FLEET_STATE_PATH,
+  fleetPath: string = getDcTaxisPaths().fleetState,
   leaseTtlMs: number = DEFAULT_DC_AGENTS_CONFIG.accountPool.leaseTtlMs,
   allowedAccounts?: string[],
   quotaGetter: (account: string) => DcTaxiQuotaInfo | undefined = getCachedTaxiQuota,
@@ -1025,7 +1016,7 @@ export interface ReleaseTaxiOptions {
 export function releaseTaxi(
   account: string,
   sessionId?: string,
-  fleetPath: string = FLEET_STATE_PATH,
+  fleetPath: string = getDcTaxisPaths().fleetState,
   allowedAccounts?: string[],
   quotaGetter: (account: string) => DcTaxiQuotaInfo | undefined = getCachedTaxiQuota,
   options?: ReleaseTaxiOptions,
@@ -1137,7 +1128,7 @@ export function findDirectChildPid(parentPid: number = process.pid): number | un
 export function updateTaxiPassengerPid(
   account: string,
   realPid: number,
-  fleetPath: string = FLEET_STATE_PATH,
+  fleetPath: string = getDcTaxisPaths().fleetState,
 ): boolean {
   if (!realPid || realPid <= 0) return false;
   return withFleetLock(fleetPath, () => {
@@ -1164,7 +1155,7 @@ export interface TaxiIdentityOptions {
  */
 export function heartbeatTaxi(
   account: string,
-  fleetPath: string = FLEET_STATE_PATH,
+  fleetPath: string = getDcTaxisPaths().fleetState,
   identity?: TaxiIdentityOptions,
 ): boolean {
   return withFleetLock(fleetPath, () => {
@@ -1211,7 +1202,7 @@ export function updateTaxiPassengerUsage(
   account: string,
   tokens: number,
   cost?: number,
-  fleetPath: string = FLEET_STATE_PATH,
+  fleetPath: string = getDcTaxisPaths().fleetState,
   identity?: TaxiIdentityOptions,
 ): boolean {
   return withFleetLock(fleetPath, () => {
@@ -1265,7 +1256,7 @@ export type DcTaxiPassengerInput = Omit<DcTaxiPassenger, "startedAt" | "heartbea
 export function leaseAvailableTaxis(
   count: number,
   passengerFactory: (idx: number) => DcTaxiPassengerInput,
-  fleetPath: string = FLEET_STATE_PATH,
+  fleetPath: string = getDcTaxisPaths().fleetState,
   leaseTtlMs: number = DEFAULT_DC_AGENTS_CONFIG.accountPool.leaseTtlMs,
   allowedAccounts?: string[],
   quotaGetter: (account: string) => DcTaxiQuotaInfo | undefined = getCachedTaxiQuota,
@@ -1340,7 +1331,7 @@ let lastWorkshopSince = 0;
 export function sendTaxiToWorkshop(
   account: string,
   reason: string,
-  fleetPath: string = FLEET_STATE_PATH,
+  fleetPath: string = getDcTaxisPaths().fleetState,
   allowedAccounts?: string[],
 ): boolean {
   return withFleetLock(fleetPath, () => {
@@ -1398,7 +1389,7 @@ export interface RepairTaxiOptions {
  */
 export function repairTaxiFromWorkshop(
   account: string,
-  fleetPath: string = FLEET_STATE_PATH,
+  fleetPath: string = getDcTaxisPaths().fleetState,
   allowedAccounts?: string[],
   quotaGetter: (account: string) => DcTaxiQuotaInfo | undefined = getCachedTaxiQuota,
   options?: RepairTaxiOptions,
@@ -1463,7 +1454,7 @@ export function repairTaxiFromWorkshop(
  * Si se detectan procesos zombis o transiciones de cuota, persiste atómicamente el estado limpio.
  */
 export function getFleetStatusSummary(
-  fleetPath: string = FLEET_STATE_PATH,
+  fleetPath: string = getDcTaxisPaths().fleetState,
   allowedAccounts?: string[],
 ): {
   total: number;

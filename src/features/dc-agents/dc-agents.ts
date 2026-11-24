@@ -1,7 +1,6 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import fs from "node:fs";
-import * as os from "node:os";
-import * as path from "node:path";
+import { getDcTaxisPaths } from "../../core/dc-paths.ts";
 import { openDcModal } from "../../ui/dc-modal.ts";
 import { dcNotifier } from "../../integrations/dc-notify/dc-notifier.ts";
 import { syncDcAgents, syncDcSkills, type DcAgentsSyncResult } from "./core/dc-agents-sync.ts";
@@ -522,7 +521,7 @@ export async function handleTurnEndFailover(
 
   const entryGen = extensionLifecycleGeneration;
 
-  const resolvedFleetPath = fleetPath || (ctx as any)?.fleetPath || path.join(os.homedir(), ".pi", "agent", "dc-studio", "dc-taxis.json");
+  const resolvedFleetPath = fleetPath || (ctx as any)?.fleetPath || getDcTaxisPaths().fleetState;
   const sessionId = ctx.sessionManager?.getSessionId?.() || `ambient-${Date.now()}`;
   const previousModel = ctx.model;
   const currentModelId = ctx.model ? `${ctx.model.provider || "cpam"}/${ctx.model.id}` : undefined;
@@ -788,7 +787,7 @@ async function doHandleOrchestratorQuotaHandover(
   sessionId?: string,
 ): Promise<{ performed: boolean; previousAccount?: string; newAccount?: string; compensationFailed?: boolean }> {
   const entryGen = extensionLifecycleGeneration;
-  const resolvedFleetPath = fleetPath || path.join(os.homedir(), ".pi", "agent", "dc-studio", "dc-taxis.json");
+  const resolvedFleetPath = fleetPath || getDcTaxisPaths().fleetState;
   const previousModel = ctx.model;
 
   // Identificar la cuenta activa del orquestador
@@ -1486,7 +1485,7 @@ export default function dcAgentsExtension(
   // Reconciliación de taller, relevo transaccional ante avería y sincronización continua.
   pi.on("turn_end", async (event: any, ctx: ExtensionContext) => {
     try {
-      const resolvedFleetPath = (ctx as any)?.fleetPath || options?.fleetPath || path.join(os.homedir(), ".pi", "agent", "dc-studio", "dc-taxis.json");
+      const resolvedFleetPath = (ctx as any)?.fleetPath || options?.fleetPath || getDcTaxisPaths().fleetState;
       activeWorkshopCoordinator?.reconcileWorkshopUnits(resolvedFleetPath).catch(() => {});
 
       // 1. Auditoría de taller por fallos fatales de auth
