@@ -2,6 +2,13 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import * as path from "node:path";
 import * as fs from "node:fs";
+import {
+  dcPrConflictResolver,
+  type ConflictResolutionRequest,
+  type ConflictResolutionResult,
+  type ConflictResolverOptions,
+  type DcPrConflictResolver,
+} from "./dc-pr-conflict-resolver.ts";
 
 const execFileAsync = promisify(execFile);
 
@@ -13,7 +20,10 @@ export type PrInspectorExecCommand = (
 
 export interface PrInspectorOptions {
   execCommand?: PrInspectorExecCommand;
+  conflictResolver?: Pick<DcPrConflictResolver, "resolve">;
 }
+
+export type PrConflictTarget = ConflictResolutionRequest;
 
 const defaultExecCommand: PrInspectorExecCommand = async (file, args, options) => {
   const { stdout, stderr } = await execFileAsync(file, args, options);
@@ -68,9 +78,11 @@ export class DcPrInspectorAgent {
   private static instance?: DcPrInspectorAgent;
   private activeInspections = new Map<number, PrInspectionResult>();
   private readonly execCommand: PrInspectorExecCommand;
+  private readonly conflictResolver: Pick<DcPrConflictResolver, "resolve">;
 
   constructor(options?: PrInspectorOptions) {
     this.execCommand = options?.execCommand ?? defaultExecCommand;
+    this.conflictResolver = options?.conflictResolver ?? dcPrConflictResolver;
   }
 
   public static getInstance(): DcPrInspectorAgent {
@@ -86,6 +98,27 @@ export class DcPrInspectorAgent {
 
   public getInspection(prNumber: number): PrInspectionResult | undefined {
     return this.activeInspections.get(prNumber);
+  }
+
+  /**
+   * Resuelve conflictos de rebase para un PR en un Git worktree aislado
+   * delegando al orquestador DcPrConflictResolver (Super-Agente #99).
+   */
+  public async resolveConflicts(
+    target: PrConflictTarget,
+    options?: ConflictResolverOptions,
+  ): Promise<ConflictResolutionResult> {
+    return this.conflictResolver.resolve(
+      {
+        prNumber: target.prNumber,
+        repoNwo: target.repoNwo,
+        headBranch: target.headBranch,
+        baseBranch: target.baseBranch || "master",
+        authorLogin: target.authorLogin,
+        worktreePath: target.worktreePath,
+      },
+      options,
+    );
   }
 
   /**
