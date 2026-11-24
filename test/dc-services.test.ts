@@ -4,7 +4,10 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { DcServicesManager } from "../src/features/dc-services/core/dc-services-manager.ts";
+import {
+  DcServicesManager,
+  assertValidServiceName,
+} from "../src/features/dc-services/core/dc-services-manager.ts";
 import dcServicesExtension from "../src/features/dc-services/dc-services.ts";
 
 test("DcServicesManager manages lifecycle of background processes and reads logs", async () => {
@@ -136,6 +139,88 @@ test("dcServicesExtension registers session_shutdown to stop session-started ser
   } finally {
     await manager.stopService("ephemeralSvc", 1000).catch(() => {});
     await manager.stopService("persistentSvc", 1000).catch(() => {});
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test("DcServicesManager (S6): blocks path traversal and symlink escapes in dc_service_logs", () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "dc-services-sec-logs-"));
+  const outsideFile = path.join(tmpDir, "secret.log");
+  const workspaceDir = path.join(tmpDir, "workspace");
+  fs.mkdirSync(path.join(workspaceDir, ".pi"), { recursive: true });
+  fs.writeFileSync(outsideFile, "TOP_SECRET_DATA\n", "utf8");
+
+  try {
+    const manager = new DcServicesManager(workspaceDir);
+
+    const maliciousNames = [
+      "../state",
+      "../../secret",
+      "../../../etc/passwd",
+      "foo/bar",
+      "foo\\bar",
+      "..",
+      ".",
+      "",
+      "svc\0evil",
+      "svc..evil",
+      "svc name",
+    ];
+
+    for (const bad of maliciousNames) {
+      assert.throws(() => assertValidServiceName(bad), /inválido/i);
+      assert.throws(() => manager.getLogPath(bad), /inválido/i);
+      assert.throws(() => manager.getLogs({ service: bad }), /inválido/i);
+    }
+
+    // Symlink inside logs dir pointing outside workspace must be blocked
+    const symlinkLog = path.join(workspaceDir, ".pi", "dc-services", "logs", "sym-svc.log");
+    fs.symlinkSync(outsideFile, symlinkLog);
+    assert.throws(() => manager.getLogs({ service: "sym-svc" }), /Acceso denegado|symlinks/i);
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test("DcServicesManager (S6): confines config.cwd inside workspace root and blocks escapes", async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "dc-services-sec-cwd-"));
+  const outsideDir = path.join(tmpDir, "outside");
+  const workspaceDir = path.join(tmpDir, "workspace");
+  const nestedDir = path.join(workspaceDir, "apps", "api");
+  const symlinkEscape = path.join(workspaceDir, "link-out");
+
+  fs.mkdirSync(outsideDir, { recursive: true });
+  fs.mkdirSync(path.join(workspaceDir, ".pi"), { recursive: true });
+  fs.mkdirSync(nestedDir, { recursive: true });
+  fs.symlinkSync(outsideDir, symlinkEscape);
+
+  fs.writeFileSync(
+    path.join(workspaceDir, ".pi", "services.json"),
+    JSON.stringify({
+      services: {
+        absEscape: { command: "sh -c 'sleep 5'", cwd: outsideDir },
+        relEscape: { command: "sh -c 'sleep 5'", cwd: "../outside" },
+        symEscape: { command: "sh -c 'sleep 5'", cwd: "link-out" },
+        badEnv: { command: "sh -c 'sleep 5'", env: { "BAD=KEY": "1" } },
+        validNested: { command: "sh -c 'pwd && sleep 5'", cwd: "apps/api" },
+      },
+    }),
+    "utf8",
+  );
+
+  const manager = new DcServicesManager(workspaceDir);
+
+  try {
+    await assert.rejects(() => manager.startService("absEscape"), /Acceso denegado/i);
+    await assert.rejects(() => manager.startService("relEscape"), /Acceso denegado/i);
+    await assert.rejects(() => manager.startService("symEscape"), /Acceso denegado/i);
+    await assert.rejects(() => manager.startService("badEnv"), /Variable de entorno inválida/i);
+
+    const status = await manager.startService("validNested");
+    assert.equal(status.state, "running");
+    await manager.stopService("validNested", 1000);
+  } finally {
+    await manager.stopService("validNested", 1000).catch(() => {});
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
 });

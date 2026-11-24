@@ -1,5 +1,5 @@
 import * as http from "node:http";
-import { timingSafeEqual } from "node:crypto";
+import { createHmac, timingSafeEqual } from "node:crypto";
 import type { GitHubIssuePayload } from "./dc-issue-dispatcher.ts";
 import type { GitHubIssueCommentPayload } from "./dc-issue-comment-types.ts";
 import {
@@ -11,9 +11,20 @@ import {
 } from "../core/dc-super-agent-definition.ts";
 import { dcSuperAgentRegistry, type DcSuperAgentRegistry } from "../core/dc-super-agent-registry.ts";
 
+export const MAX_GITHUB_WEBHOOK_BODY_BYTES = 5 * 1024 * 1024;
+
+const SHA256_SIGNATURE_RE = /^sha256=[a-f0-9]{64}$/i;
+
 export interface GitHubGatewayOptions {
   port?: number;
+  /** Shared secret for GitHub HMAC-SHA256 `X-Hub-Signature-256` authentication. */
+  webhookSecret?: string;
+  /** Alias for `webhookSecret`. */
+  secret?: string;
+  /** Header-based capability token (`X-DC-Capability` or `Authorization: Bearer <token>`). */
   capability?: string;
+  /** Maximum accepted request payload size in bytes (defaults to 5 MiB). */
+  maxBodyBytes?: number;
   host?: string;
   expectedRepoNwo?: string; // ej: "davidcoachdev/dc-pi"
   gatewayId?: string;
@@ -65,6 +76,9 @@ export class DcGitHubGateway {
   private readonly gatewayName: string;
   private readonly registry: DcSuperAgentRegistry;
   private readonly agentHandlers = new Map<number, DcSuperAgentEventHandler>();
+  private readonly webhookSecret?: string;
+  private readonly capability?: string;
+  private readonly maxBodyBytes: number;
 
   constructor(private options: GitHubGatewayOptions = {}) {
     this.port = options.port ?? 4545;
@@ -73,6 +87,12 @@ export class DcGitHubGateway {
     this.gatewayId = options.gatewayId ?? "dc_github_gateway";
     this.gatewayName = options.gatewayName ?? "DC GitHub Ingress Gateway";
     this.registry = options.registry ?? dcSuperAgentRegistry;
+    this.webhookSecret = options.webhookSecret ?? options.secret;
+    this.capability = options.capability;
+    this.maxBodyBytes =
+      typeof options.maxBodyBytes === "number" && options.maxBodyBytes > 0
+        ? options.maxBodyBytes
+        : MAX_GITHUB_WEBHOOK_BODY_BYTES;
 
     if (options.agentHandlers) {
       for (const [key, handler] of Object.entries(options.agentHandlers)) {
@@ -289,6 +309,45 @@ export class DcGitHubGateway {
     return false;
   }
 
+  private verifyCapabilityHeader(req: http.IncomingMessage): boolean {
+    if (!this.capability) {
+      return false;
+    }
+    const directHeader = req.headers["x-dc-capability"];
+    const authHeader = req.headers["authorization"];
+    let supplied = "";
+    if (typeof directHeader === "string" && directHeader.length > 0) {
+      supplied = directHeader;
+    } else if (typeof authHeader === "string" && authHeader.toLowerCase().startsWith("bearer ")) {
+      supplied = authHeader.slice(7).trim();
+    }
+    if (!supplied) {
+      return false;
+    }
+    const suppliedBuf = Buffer.from(supplied, "utf8");
+    const expectedBuf = Buffer.from(this.capability, "utf8");
+    if (suppliedBuf.length !== expectedBuf.length) {
+      return false;
+    }
+    return timingSafeEqual(suppliedBuf, expectedBuf);
+  }
+
+  private verifyHmacSignature(rawBody: Buffer, signatureHeader: string | string[] | undefined): boolean {
+    if (!this.webhookSecret || typeof signatureHeader !== "string") {
+      return false;
+    }
+    if (!SHA256_SIGNATURE_RE.test(signatureHeader)) {
+      return false;
+    }
+    const expectedHex = createHmac("sha256", this.webhookSecret).update(rawBody).digest("hex");
+    const expectedBuf = Buffer.from(`sha256=${expectedHex}`, "utf8");
+    const suppliedBuf = Buffer.from(signatureHeader.toLowerCase(), "utf8");
+    if (suppliedBuf.length !== expectedBuf.length) {
+      return false;
+    }
+    return timingSafeEqual(suppliedBuf, expectedBuf);
+  }
+
   private handleRequest(req: http.IncomingMessage, res: http.ServerResponse): void {
     // Solo aceptamos POST a /github-webhook o /
     let url: URL;
@@ -305,10 +364,22 @@ export class DcGitHubGateway {
       return;
     }
 
-    const supplied = Buffer.from(url.searchParams.get("capability") ?? "");
-    const expected = Buffer.from(this.options.capability ?? "");
-    if (!expected.length || supplied.length !== expected.length || !timingSafeEqual(supplied, expected)) {
-      res.writeHead(401);
+    // Rechazar secretos expuestos en query-string (?capability=...) y fallar cerrado sin auth configurada
+    if (url.searchParams.has("capability") || (!this.webhookSecret && !this.capability)) {
+      res.writeHead(401, { "Content-Type": "text/plain" });
+      res.end("Unauthorized");
+      return;
+    }
+
+    if (this.capability && !this.verifyCapabilityHeader(req)) {
+      res.writeHead(401, { "Content-Type": "text/plain" });
+      res.end("Unauthorized");
+      return;
+    }
+
+    const signatureHeader = req.headers["x-hub-signature-256"];
+    if (this.webhookSecret && (typeof signatureHeader !== "string" || !SHA256_SIGNATURE_RE.test(signatureHeader))) {
+      res.writeHead(401, { "Content-Type": "text/plain" });
       res.end("Unauthorized");
       return;
     }
@@ -316,20 +387,60 @@ export class DcGitHubGateway {
     const deliveryId = (req.headers["x-github-delivery"] as string) || "";
     const eventType = req.headers["x-github-event"] as string;
 
-    let body = "";
-    req.on("data", (chunk) => {
-      body += chunk;
-      // Protección de tamaño: 5 MB máx
-      if (body.length > 5 * 1024 * 1024) {
-        res.writeHead(413, { "Content-Type": "text/plain" });
-        res.end("Payload Too Large");
-        req.destroy();
+    const chunks: Buffer[] = [];
+    let totalBytes = 0;
+    let payloadTooLarge = false;
+
+    req.on("error", () => {
+      payloadTooLarge = true;
+      chunks.length = 0;
+    });
+
+    req.on("data", (rawChunk: Buffer | string) => {
+      if (payloadTooLarge) {
+        return;
       }
+      const chunk = Buffer.isBuffer(rawChunk) ? rawChunk : Buffer.from(rawChunk, "utf8");
+      totalBytes += chunk.length;
+      // Protección de tamaño: 5 MB máx por defecto (sin ERR_HTTP_HEADERS_SENT)
+      if (totalBytes > this.maxBodyBytes) {
+        payloadTooLarge = true;
+        chunks.length = 0;
+        req.pause();
+        if (!res.headersSent && !res.writableEnded) {
+          res.writeHead(413, {
+            "Content-Type": "text/plain",
+            Connection: "close",
+          });
+          res.end("Payload Too Large", () => {
+            if (!req.destroyed) {
+              req.destroy();
+            }
+          });
+        } else if (!req.destroyed) {
+          req.destroy();
+        }
+        return;
+      }
+      chunks.push(chunk);
     });
 
     req.on("end", () => {
+      if (payloadTooLarge || res.headersSent || res.writableEnded) {
+        return;
+      }
+
+      const rawBody = Buffer.concat(chunks, totalBytes);
+      chunks.length = 0;
+
+      if (this.webhookSecret && !this.verifyHmacSignature(rawBody, signatureHeader)) {
+        res.writeHead(401, { "Content-Type": "text/plain" });
+        res.end("Unauthorized");
+        return;
+      }
+
       try {
-        const payload = JSON.parse(body);
+        const payload = JSON.parse(rawBody.toString("utf8"));
 
         // Validar repositorio si está restringido
         const incomingRepo = typeof payload?.repository?.full_name === "string" ? payload.repository.full_name.toLowerCase() : "";

@@ -1,6 +1,7 @@
 import test, { mock } from "node:test";
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
+import { createHmac } from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -77,15 +78,24 @@ test("public daemon preserves one launch and records actual worker/delivery outc
     dcNotifier: { notify: (...args: unknown[]) => { logs.push(JSON.stringify(args)); }, notifyHerdr: (message: string) => { logs.push(message); } },
   } });
   let forwardingUrl = "";
+  let webhookSecret = "";
   const tunnel = new EventEmitter() as EventEmitter & { kill: () => boolean; unref: () => void };
   tunnel.kill = () => true; tunnel.unref = () => {};
-  const spawnMock = mock.method(childProcess, "spawn", (command: string, args: string[]) => {
+  const spawnMock = mock.method(childProcess, "spawn", (command: string, args: string[], options?: { stdio?: unknown; env?: Record<string, string | undefined> }) => {
     assert.equal(command, "gh");
     assert.equal(args[0], "webhook");
     assert.equal(args[1], "forward");
     assert.equal(args[2], "--repo=fixture/daemon-fixture");
     assert.ok(args[3]?.startsWith("--events="));
-    forwardingUrl = args.find(arg => arg.startsWith("--url="))!.slice(6);
+    assert.ok(!args.some(arg => arg.includes("capability=")), "gh --url/argv must never embed ?capability=");
+    assert.deepEqual(options?.stdio, ["ignore", "ignore", "pipe"]);
+    assert.equal(options?.env?.GH_WEBHOOK_SECRET, undefined, "GH_WEBHOOK_SECRET env var must not be used");
+    const urlArg = args.find(arg => arg.startsWith("--url="));
+    assert.ok(urlArg, "gh webhook forward must receive --url=");
+    forwardingUrl = urlArg.slice(6);
+    const secretArg = args.find(arg => arg.startsWith("--secret="));
+    assert.ok(secretArg, "gh webhook forward must receive --secret= for GitHub HMAC signing");
+    webhookSecret = secretArg.slice("--secret=".length);
     return tunnel;
   });
   syncBuiltinESMExports();
@@ -118,6 +128,8 @@ test("public daemon preserves one launch and records actual worker/delivery outc
     },
   } as any);
   const check = () => commands.get("dc-control").handler("check", ctx);
+  const originalWebhookSecretEnv = process.env.DC_GITHUB_WEBHOOK_SECRET;
+  delete process.env.DC_GITHUB_WEBHOOK_SECRET;
   try {
     // Manual dispatch works before any receiver/tunnel exists, using the actual singleton dispatcher.
     assert.equal(manager.getStatus().running, false);
@@ -127,14 +139,23 @@ test("public daemon preserves one launch and records actual worker/delivery outc
     await check(); assert.equal(prepares, 1);
     await manager.start({ cwd: root, hasUI: false } as Parameters<typeof manager.start>[0]);
     const url = new URL(forwardingUrl);
-    const secret = url.searchParams.get("capability")!;
-    assert.equal(url.hostname, "127.0.0.1"); assert.match(secret, /^[a-f0-9]{64}$/);
+    assert.equal(url.hostname, "127.0.0.1");
+    assert.equal(url.searchParams.get("capability"), null);
+    assert.match(webhookSecret, /^[a-f0-9]{64}$/);
     const payload = { action: "opened", issue: { number: 99, title: "fixture", body: "body", user: { login: "fixture-author" } }, repository: { full_name: "fixture/daemon-fixture" } };
-    const send = async (delivery: string, target = forwardingUrl) => {
-      const response = await fetch(target, { method: "POST", headers: { "x-github-event": "issues", "x-github-delivery": delivery }, body: JSON.stringify(payload) });
-      const text = await response.text(); assert.ok(!text.includes(secret)); return response.status;
+    const send = async (delivery: string, target = forwardingUrl, signatureMode: "valid" | "none" | "invalid" = "valid") => {
+      const body = JSON.stringify(payload);
+      const headers: Record<string, string> = { "x-github-event": "issues", "x-github-delivery": delivery };
+      if (signatureMode === "valid") {
+        headers["x-hub-signature-256"] = `sha256=${createHmac("sha256", webhookSecret).update(body).digest("hex")}`;
+      } else if (signatureMode === "invalid") {
+        headers["x-hub-signature-256"] = `sha256=${"0".repeat(64)}`;
+      }
+      const response = await fetch(target, { method: "POST", headers, body });
+      const text = await response.text(); assert.ok(!text.includes(webhookSecret)); return response.status;
     };
-    assert.equal(await send("first", `${url.origin}${url.pathname}`), 401);
+    assert.equal(await send("first", `${url.origin}${url.pathname}`, "none"), 401);
+    assert.equal(await send("first", `${url.origin}${url.pathname}`, "invalid"), 401);
     assert.deepEqual(await Promise.all([send("first"), send("second"), send("third")]), [202, 202, 202]);
     await started;
     assert.equal(prepares, 1); assert.equal(workers, 1); assert.equal(deliveries, 0);
@@ -217,10 +238,15 @@ test("public daemon preserves one launch and records actual worker/delivery outc
         if (scenario === "verification-failed") assert.doesNotMatch(result.error || "", /exit code 0/);
       });
     }
-    tunnel.emit("error", new Error(`simulated failure ${forwardingUrl}`));
-    assert.ok(!JSON.stringify(manager.getStatus()).includes(secret));
-    assert.ok(!logs.join("\n").includes(secret));
+    tunnel.emit("error", new Error(`simulated failure ${forwardingUrl} ${webhookSecret}`));
+    assert.ok(!JSON.stringify(manager.getStatus()).includes(webhookSecret));
+    assert.ok(!logs.join("\n").includes(webhookSecret));
   } finally {
+    if (originalWebhookSecretEnv === undefined) {
+      delete process.env.DC_GITHUB_WEBHOOK_SECRET;
+    } else {
+      process.env.DC_GITHUB_WEBHOOK_SECRET = originalWebhookSecretEnv;
+    }
     releaseWorker(); await shutdown({ reason: "reload" }); await manager.stop(); runInWorktreeMock.mock.restore(); spawnMock.mock.restore(); clock.mock.restore(); syncBuiltinESMExports(); mock.restoreAll();
   }
 });

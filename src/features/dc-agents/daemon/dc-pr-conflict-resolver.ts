@@ -1,13 +1,18 @@
 import { execFile, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { promisify } from "node:util";
+import * as os from "node:os";
 import * as path from "node:path";
 import * as fs from "node:fs";
 import { getDcAgentsPaths } from "../../../core/dc-paths.ts";
+import { assertPathWithinRoots } from "../../../core/dc-path-confinement.ts";
 import { dcIssueNotifier } from "./dc-issue-notifier.ts";
 import { leaseTaxi, releaseTaxi } from "../core/dc-taxi-dispatcher.ts";
 import { isVipAccount } from "../core/dc-taxi-accounts.ts";
 import { DEFAULT_DC_AGENTS_CONFIG } from "../core/dc-ephemeral-types.ts";
+import { assertValidGitRef } from "../core/dc-worktree-manager.ts";
+
+export { assertValidGitRef };
 
 const execFileAsync = promisify(execFile);
 
@@ -230,10 +235,30 @@ export class DcPrConflictResolver {
       DEFAULT_DC_AGENTS_CONFIG.routing.defaultSubagentModel;
     const provider = callOptions?.provider ?? this.defaults.provider ?? "cpam";
 
-    const baseBranch = req.baseBranch || "master";
-    const repoSlug = req.repoNwo.replace(/[/\\:]/g, "-");
-    const worktreeDir =
-      req.worktreePath ?? path.join(worktreeBaseDir, repoSlug, `pr-${req.prNumber}-resolve-conflict`);
+    const baseBranch = assertValidGitRef(req.baseBranch || "master", "baseBranch");
+    const headBranch = assertValidGitRef(req.headBranch, "headBranch");
+    if (!Number.isInteger(req.prNumber) || req.prNumber <= 0) {
+      throw new Error(`Número de PR inválido: ${String(req.prNumber)}`);
+    }
+    const repoSlug =
+      req.repoNwo.replace(/[^A-Za-z0-9_-]+/g, "-").replace(/^-+|-+$/g, "") || "repo";
+    const explicitWorktreePath = req.worktreePath?.trim();
+    const worktreeDir = explicitWorktreePath
+      ? assertPathWithinRoots(
+          explicitWorktreePath === "~"
+            ? os.homedir()
+            : explicitWorktreePath.startsWith("~/") ||
+                explicitWorktreePath.startsWith(`~${path.sep}`)
+              ? path.join(os.homedir(), explicitWorktreePath.slice(2))
+              : explicitWorktreePath,
+          [worktreeBaseDir, os.tmpdir(), process.cwd()],
+          "directorio de worktree",
+        )
+      : assertPathWithinRoots(
+          path.join(worktreeBaseDir, repoSlug, `pr-${req.prNumber}-resolve-conflict`),
+          [worktreeBaseDir],
+          "directorio de worktree",
+        );
 
     const targetNotify = {
       repoRoot,
@@ -258,7 +283,7 @@ export class DcPrConflictResolver {
 
     // 1. Preparar directorio de worktrees y limpiar residuo previo
     fs.mkdirSync(path.dirname(worktreeDir), { recursive: true });
-    try { await execCommand("git", ["worktree", "remove", "--force", worktreeDir], { cwd: repoRoot }); } catch {}
+    try { await execCommand("git", ["worktree", "remove", "--force", "--", worktreeDir], { cwd: repoRoot }); } catch {}
     if (fs.existsSync(worktreeDir)) {
       try { fs.rmSync(worktreeDir, { recursive: true, force: true }); } catch {}
     }
@@ -269,15 +294,15 @@ export class DcPrConflictResolver {
     );
 
     // 2. Fetch y checkout de la rama del PR en worktree temporal
-    for (const ref of [`${req.headBranch}:${req.headBranch}`, req.headBranch, `pull/${req.prNumber}/head:${req.headBranch}`]) {
+    for (const ref of [`${headBranch}:${headBranch}`, headBranch, `pull/${req.prNumber}/head:${headBranch}`]) {
       try {
-        await execCommand("git", ["fetch", "origin", ref], { cwd: repoRoot });
+        await execCommand("git", ["fetch", "--", "origin", ref], { cwd: repoRoot });
         break;
       } catch {}
     }
 
     try {
-      await execCommand("git", ["worktree", "add", worktreeDir, req.headBranch], { cwd: repoRoot });
+      await execCommand("git", ["worktree", "add", "--", worktreeDir, headBranch], { cwd: repoRoot });
     } catch (err: any) {
       return {
         ok: false,
@@ -291,7 +316,7 @@ export class DcPrConflictResolver {
 
     try {
       // 3. Iniciar el rebase sobre origin/<baseBranch>
-      await execCommand("git", ["fetch", "origin", baseBranch], { cwd: worktreeDir });
+      await execCommand("git", ["fetch", "--", "origin", baseBranch], { cwd: worktreeDir });
 
       let hasConflict = false;
       try {
@@ -301,7 +326,7 @@ export class DcPrConflictResolver {
       }
 
       if (!hasConflict) {
-        await execCommand("git", ["push", "--force-with-lease", "origin", req.headBranch], { cwd: worktreeDir });
+        await execCommand("git", ["push", "--force-with-lease", "origin", headBranch], { cwd: worktreeDir });
         await notify(
           targetNotify,
           `🕵️‍♀️ **DC Super-Agent 99**: ✔ El PR #${req.prNumber} no requirió intervención manual. Rama rebasada limpiamente contra \`origin/${baseBranch}\` y actualizada en GitHub.`,
@@ -383,7 +408,7 @@ export class DcPrConflictResolver {
       // 7. Concluir rebase y push seguro con --force-with-lease
       await execCommand("git", ["add", "."], { cwd: worktreeDir });
       await execCommand("git", ["rebase", "--continue"], { cwd: worktreeDir, env: { ...process.env, GIT_EDITOR: "true" } });
-      await execCommand("git", ["push", "--force-with-lease", "origin", req.headBranch], { cwd: worktreeDir });
+      await execCommand("git", ["push", "--force-with-lease", "origin", headBranch], { cwd: worktreeDir });
 
       await notify(
         targetNotify,
@@ -407,7 +432,7 @@ export class DcPrConflictResolver {
       );
     } finally {
       // 8. Desmontaje limpio del quirófano worktree
-      try { await execCommand("git", ["worktree", "remove", "--force", worktreeDir], { cwd: repoRoot }); } catch {}
+      try { await execCommand("git", ["worktree", "remove", "--force", "--", worktreeDir], { cwd: repoRoot }); } catch {}
       if (fs.existsSync(worktreeDir)) {
         try { fs.rmSync(worktreeDir, { recursive: true, force: true }); } catch {}
       }

@@ -2,11 +2,18 @@ import type { SupervisorSessionState } from "./dc-supervisor-bus.ts";
 
 export type SessionRole = "orchestrator" | "super_agent_86" | "super_agent_99" | "worker";
 
+export const DEFAULT_MAX_IPC_BUFFER_BYTES = 256 * 1024; // 256 KiB
+
+export function getIpcAuthTokenPath(socketPath: string): string {
+  return `${socketPath}.token`;
+}
+
 // Eventos que los clientes (sesiones Pi / Super-Agentes) envían a dc-control
 export type ClientToSupervisorMessage =
   | {
       type: "session_online";
       sessionId: string;
+      authToken?: string;
       role: SessionRole;
       pid: number;
       cwd: string;
@@ -56,6 +63,11 @@ export type SupervisorToClientMessage =
       type: "ack_registration";
       sessionId: string;
       supervisorPid: number;
+      timestamp: number;
+    }
+  | {
+      type: "auth_error";
+      reason: string;
       timestamp: number;
     }
   | {

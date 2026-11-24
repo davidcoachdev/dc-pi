@@ -8,7 +8,44 @@ import type {
   ServiceRuntimeStatus,
   WorkspaceServicesConfigFile,
 } from "./dc-services-types.ts";
+import { assertPathWithinRoots } from "../../../core/dc-path-confinement.ts";
 import { redactSecrets } from "../../dc-websearch/core/dc-websearch-security.ts";
+
+const VALID_SERVICE_NAME_RE = /^[a-zA-Z0-9._-]+$/;
+const VALID_ENV_KEY_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+export function assertValidServiceName(serviceName: string): string {
+  if (
+    typeof serviceName !== "string" ||
+    serviceName.length === 0 ||
+    !VALID_SERVICE_NAME_RE.test(serviceName) ||
+    serviceName === "." ||
+    serviceName === ".." ||
+    serviceName.includes("..")
+  ) {
+    throw new Error(
+      `Nombre de servicio inválido: "${String(serviceName)}". Solo se permiten [a-zA-Z0-9._-] sin ".." ni separadores de ruta.`,
+    );
+  }
+  return serviceName;
+}
+
+function sanitizeServiceEnv(
+  env: Record<string, string> | undefined,
+): Record<string, string> {
+  if (!env || typeof env !== "object") return {};
+  const cleaned: Record<string, string> = {};
+  for (const [key, value] of Object.entries(env)) {
+    if (!VALID_ENV_KEY_RE.test(key)) {
+      throw new Error(`Variable de entorno inválida en configuración de servicio: "${key}"`);
+    }
+    if (typeof value !== "string" || value.includes("\0")) {
+      throw new Error(`Valor inválido para variable de entorno "${key}"`);
+    }
+    cleaned[key] = value;
+  }
+  return cleaned;
+}
 
 interface SavedProcessState {
   pid: number;
@@ -62,11 +99,13 @@ export async function stopSessionStartedServices(cwd?: string): Promise<void> {
 }
 
 export class DcServicesManager {
+  private readonly cwd: string;
   private runtimeDir: string;
   private logsDir: string;
   private stateFilePath: string;
 
-  constructor(private readonly cwd: string = process.cwd()) {
+  constructor(cwd: string = process.cwd()) {
+    this.cwd = cwd;
     this.runtimeDir = path.join(this.cwd, ".pi", "dc-services");
     this.logsDir = path.join(this.runtimeDir, "logs");
     this.stateFilePath = path.join(this.runtimeDir, "state.json");
@@ -152,7 +191,9 @@ export class DcServicesManager {
   }
 
   public getLogPath(serviceName: string): string {
-    return path.join(this.logsDir, `${serviceName}.log`);
+    const safeName = assertValidServiceName(serviceName);
+    const candidate = path.join(this.logsDir, `${safeName}.log`);
+    return assertPathWithinRoots(candidate, [this.logsDir], `log del servicio "${safeName}"`);
   }
 
   public listConfiguredServices(): Record<string, ServiceConfig> {
@@ -160,12 +201,13 @@ export class DcServicesManager {
   }
 
   public getServiceStatus(name: string): ServiceRuntimeStatus {
-    const config = this.getConfigFile().services[name];
-    const state = this.readState()[name];
-    const logPath = this.getLogPath(name);
+    const safeName = assertValidServiceName(name);
+    const config = this.getConfigFile().services[safeName];
+    const state = this.readState()[safeName];
+    const logPath = this.getLogPath(safeName);
 
     if (!config) {
-      throw new Error(`Servicio "${name}" no encontrado en .pi/services.json`);
+      throw new Error(`Servicio "${safeName}" no encontrado en .pi/services.json`);
     }
 
     let isRunning = false;
@@ -179,7 +221,7 @@ export class DcServicesManager {
     }
 
     return {
-      name,
+      name: safeName,
       state: isRunning ? "running" : "stopped",
       pid: isRunning ? state?.pid : undefined,
       uptimeSeconds,
@@ -197,28 +239,41 @@ export class DcServicesManager {
   }
 
   public async startService(name: string): Promise<ServiceRuntimeStatus> {
-    const config = this.getConfigFile().services[name];
+    const safeName = assertValidServiceName(name);
+    const config = this.getConfigFile().services[safeName];
     if (!config) {
-      throw new Error(`Servicio "${name}" no está configurado en .pi/services.json`);
+      throw new Error(`Servicio "${safeName}" no está configurado en .pi/services.json`);
+    }
+    if (typeof config.command !== "string" || config.command.trim().length === 0 || config.command.includes("\0")) {
+      throw new Error(`Comando inválido para el servicio "${safeName}"`);
     }
 
     const state = this.readState();
-    const existing = state[name];
+    const existing = state[safeName];
 
     if (existing && this.isProcessAlive(existing.pid)) {
-      return this.getServiceStatus(name);
+      return this.getServiceStatus(safeName);
     }
 
-    const serviceCwd = config.cwd
-      ? (path.isAbsolute(config.cwd) ? config.cwd : path.resolve(this.cwd, config.cwd))
+    const rawServiceCwd = config.cwd
+      ? path.resolve(this.cwd, config.cwd)
       : this.cwd;
+    const serviceCwd = assertPathWithinRoots(
+      rawServiceCwd,
+      [this.cwd],
+      `directorio de trabajo del servicio "${safeName}"`,
+    );
+    const serviceEnv = sanitizeServiceEnv(config.env);
 
-    const logPath = this.getLogPath(name);
+    const logPath = this.getLogPath(safeName);
     fs.mkdirSync(path.dirname(logPath), { recursive: true });
     const logFd = fs.openSync(logPath, "a");
     const timestamp = new Date().toISOString();
-    fs.appendFileSync(logPath, `\n=== [DC Services] Starting ${name} at ${timestamp}: ${config.command} ===\n`, "utf8");
+    fs.appendFileSync(logPath, `\n=== [DC Services] Starting ${safeName} at ${timestamp}: ${config.command} ===\n`, "utf8");
 
+    // Local developer-authored `.pi/services.json` commands may use shell syntax
+    // (pipes, &&, quoted args, npm scripts). `serviceCwd`, `serviceName`, `logPath`
+    // and `serviceEnv` are strictly validated/confined before spawning.
     const child = spawn(config.command, [], {
       cwd: serviceCwd,
       shell: true,
@@ -226,7 +281,7 @@ export class DcServicesManager {
       stdio: ["ignore", logFd, logFd],
       env: {
         ...process.env,
-        ...config.env,
+        ...serviceEnv,
       },
     });
 
@@ -238,35 +293,36 @@ export class DcServicesManager {
 
     const pid = child.pid;
     if (!pid) {
-      throw new Error(`No se pudo iniciar el proceso para ${name}`);
+      throw new Error(`No se pudo iniciar el proceso para ${safeName}`);
     }
 
     child.unref();
 
-    state[name] = {
+    state[safeName] = {
       pid,
       startedAt: Date.now(),
       command: config.command,
     };
     this.writeState(state);
-    recordSessionStartedService(this.cwd, name);
+    recordSessionStartedService(this.cwd, safeName);
 
     // Breve pausa para comprobar si murió de inmediato
     await new Promise((r) => setTimeout(r, 200));
 
-    return this.getServiceStatus(name);
+    return this.getServiceStatus(safeName);
   }
 
   public async stopService(name: string, timeoutMs: number = 5000): Promise<ServiceRuntimeStatus> {
+    const safeName = assertValidServiceName(name);
     const state = this.readState();
-    const record = state[name];
-    const logPath = this.getLogPath(name);
-    clearSessionStartedService(this.cwd, name);
+    const record = state[safeName];
+    const logPath = this.getLogPath(safeName);
+    clearSessionStartedService(this.cwd, safeName);
 
     if (!record || !this.isProcessAlive(record.pid)) {
-      delete state[name];
+      delete state[safeName];
       this.writeState(state);
-      return this.getServiceStatus(name);
+      return this.getServiceStatus(safeName);
     }
 
     const pid = record.pid;
@@ -324,31 +380,33 @@ export class DcServicesManager {
       }
     }
 
-    delete state[name];
+    delete state[safeName];
     this.writeState(state);
 
     try {
-      fs.appendFileSync(logPath, `\n=== [DC Services] Stopped ${name} at ${new Date().toISOString()} ===\n`, "utf8");
+      fs.appendFileSync(logPath, `\n=== [DC Services] Stopped ${safeName} at ${new Date().toISOString()} ===\n`, "utf8");
     } catch {
       /* ignore */
     }
 
-    return this.getServiceStatus(name);
+    return this.getServiceStatus(safeName);
   }
 
   public async restartService(name: string): Promise<ServiceRuntimeStatus> {
-    await this.stopService(name);
-    return this.startService(name);
+    const safeName = assertValidServiceName(name);
+    await this.stopService(safeName);
+    return this.startService(safeName);
   }
 
   public getLogs(options: ServiceLogsOptions): ServiceLogsResult {
-    const logPath = this.getLogPath(options.service);
+    const safeName = assertValidServiceName(options.service);
+    const logPath = this.getLogPath(safeName);
     const limit = Math.min(2000, Math.max(1, options.lines ?? 100));
     const maxBytes = options.maxBytes ?? 100 * 1024;
 
     if (!fs.existsSync(logPath)) {
       return {
-        service: options.service,
+        service: safeName,
         logPath,
         totalLines: 0,
         lines: ["(archivo de logs vacío o sin iniciar)"],
@@ -374,7 +432,7 @@ export class DcServicesManager {
     const slice = allLines.slice(-limit);
 
     return {
-      service: options.service,
+      service: safeName,
       logPath,
       totalLines: allLines.length,
       lines: slice,

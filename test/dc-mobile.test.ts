@@ -5,6 +5,7 @@ import {
   DcAdbDriver,
   DcAdbError,
   DC_EMPTY_TEXT_MESSAGE,
+  DC_INVALID_TEXT_CONTROL_CHARS_MESSAGE,
   escapeAdbInputText,
   resolveAdbKeycode,
   type DcAdbExecFn,
@@ -108,6 +109,39 @@ test("dc-mobile: escapeAdbInputText rejects empty and blank text", () => {
         error.message === DC_EMPTY_TEXT_MESSAGE,
     );
   }
+});
+
+test("dc-mobile (S6): escapeAdbInputText and inputText reject newline, CR, tab, NUL and control-char injection", () => {
+  const payloads = [
+    "hola\nid",
+    "hola\rid",
+    "hola\r\nrm -rf /",
+    "hola\tmundo",
+    "hola\0mundo",
+    "hola\x1b[31m",
+    "hola\x7fmundo",
+    "hola\u2028id",
+    "hola\u2029id",
+  ];
+
+  for (const payload of payloads) {
+    assert.throws(
+      () => escapeAdbInputText(payload),
+      (error: unknown) =>
+        error instanceof DcAdbError &&
+        error.code === "INVALID_ARGUMENT" &&
+        error.message === DC_INVALID_TEXT_CONTROL_CHARS_MESSAGE,
+    );
+  }
+
+  assert.equal(escapeAdbInputText("hi!"), "hi\\!");
+
+  const { execFn, calls } = recordingExecFn();
+  const driver = new DcAdbDriver({ execFn });
+  for (const payload of payloads) {
+    assert.throws(() => driver.inputText("emulator-5554", payload), DcAdbError);
+  }
+  assert.equal(calls.length, 0, "control-char injection payloads must never reach adb");
 });
 
 test("dc-mobile: resolveAdbKeycode maps names case-insensitively and rejects unknown keys", () => {

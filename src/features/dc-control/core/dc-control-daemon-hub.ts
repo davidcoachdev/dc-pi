@@ -11,6 +11,8 @@ export interface DaemonHubConfig {
   pidPath?: string;
   sessionsBaseDir?: string;
   hungThresholdMs?: number;
+  authToken?: string;
+  maxBufferBytes?: number;
 }
 
 export class DcControlDaemonHub {
@@ -33,6 +35,8 @@ export class DcControlDaemonHub {
     this.server = new DcSupervisorIpcServer({
       socketPath: this.socketPath,
       registry: this.registry,
+      authToken: config?.authToken,
+      maxBufferBytes: config?.maxBufferBytes,
     });
 
     this.watchdog = new DcSupervisorWatchdog(this.registry, {
@@ -71,8 +75,15 @@ export class DcControlDaemonHub {
       }
     }
 
-    // 2. Registrar el PID actual
-    fs.writeFileSync(this.pidPath, process.pid.toString(), "utf-8");
+    // 2. Registrar el PID actual (creando directorio padre con 0700 si falta)
+    const pidDir = path.dirname(this.pidPath);
+    if (!fs.existsSync(pidDir)) {
+      fs.mkdirSync(pidDir, { recursive: true, mode: 0o700 });
+      if (process.platform !== "win32") {
+        fs.chmodSync(pidDir, 0o700);
+      }
+    }
+    fs.writeFileSync(this.pidPath, process.pid.toString(), { encoding: "utf-8", mode: 0o600 });
 
     // 3. Iniciar servidor IPC y Watchdog
     await this.server.start();
@@ -114,6 +125,10 @@ export class DcControlDaemonHub {
 
   public get activePidPath(): string {
     return this.pidPath;
+  }
+
+  public getAuthToken(): string {
+    return this.server.getAuthToken();
   }
 }
 

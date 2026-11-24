@@ -1,6 +1,25 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { getDcStudioDir } from "../../../core/dc-paths.ts";
+import { assertPathWithinRoots } from "../../../core/dc-path-confinement.ts";
+
+const SAFE_CHAT_ID_RE = /^[A-Za-z0-9._-]+$/;
+
+export function assertValidChatMessageId(id: string): string {
+  if (
+    typeof id !== "string" ||
+    id.length === 0 ||
+    !SAFE_CHAT_ID_RE.test(id) ||
+    id === "." ||
+    id === ".." ||
+    id.includes("..")
+  ) {
+    throw new Error(
+      `ID de mensaje inválido: "${String(id)}". Solo se permiten [A-Za-z0-9._-] sin ".." ni separadores de ruta.`,
+    );
+  }
+  return id;
+}
 
 export interface ChatMessageEntry {
   id: string;
@@ -44,14 +63,22 @@ export class DcSuperAgentChatManager {
     }
   }
 
+  private resolveMessageFile(id: string): string {
+    const safeId = assertValidChatMessageId(id);
+    const candidate = path.join(this.chatDir, `${safeId}.json`);
+    return assertPathWithinRoots(candidate, [this.chatDir], "archivo de mensaje de chat");
+  }
+
   public recordMessage(msg: Omit<ChatMessageEntry, "receivedAt" | "status"> & { status?: ChatMessageEntry["status"] }): ChatMessageEntry {
     this.ensureDir();
+    const safeId = assertValidChatMessageId(msg.id);
     const entry: ChatMessageEntry = {
       ...msg,
+      id: safeId,
       status: msg.status || "pending_review",
       receivedAt: Date.now(),
     };
-    const file = path.join(this.chatDir, `${entry.id}.json`);
+    const file = this.resolveMessageFile(safeId);
     try {
       fs.writeFileSync(file, JSON.stringify(entry, null, 2), "utf8");
     } catch {}
@@ -60,7 +87,7 @@ export class DcSuperAgentChatManager {
 
   public updateStatus(id: string, status: ChatMessageEntry["status"], finalReply?: string): void {
     this.ensureDir();
-    const file = path.join(this.chatDir, `${id}.json`);
+    const file = this.resolveMessageFile(id);
     if (fs.existsSync(file)) {
       try {
         const raw = fs.readFileSync(file, "utf8");
@@ -84,7 +111,12 @@ export class DcSuperAgentChatManager {
       const list: ChatMessageEntry[] = [];
       for (const f of files) {
         try {
-          const raw = fs.readFileSync(path.join(this.chatDir, f), "utf8");
+          const filePath = assertPathWithinRoots(
+            path.join(this.chatDir, f),
+            [this.chatDir],
+            "archivo de mensaje de chat",
+          );
+          const raw = fs.readFileSync(filePath, "utf8");
           list.push(JSON.parse(raw));
         } catch {}
       }

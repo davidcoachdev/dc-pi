@@ -26,7 +26,7 @@ function createMockExec(opts: {
     opts.commands.push(`${file} ${args.join(" ")}`);
 
     if (file === "git" && args[0] === "worktree" && args[1] === "add") {
-      const wtDir = args[2]!;
+      const wtDir = args[2] === "--" ? args[3]! : args[2]!;
       fs.mkdirSync(wtDir, { recursive: true });
       if (opts.conflictFile) {
         const target = path.join(wtDir, opts.conflictFile);
@@ -46,7 +46,8 @@ function createMockExec(opts: {
       throw new Error("1 test failed");
     }
     if (file === "git" && args[0] === "worktree" && args[1] === "remove") {
-      fs.rmSync(args[3]!, { recursive: true, force: true });
+      const wtDir = args[3] === "--" ? args[4]! : args[3]!;
+      fs.rmSync(wtDir, { recursive: true, force: true });
     }
     return { stdout: "ok", stderr: "" };
   };
@@ -90,10 +91,10 @@ test("DcPrInspectorAgent.resolveConflicts - Delega rebase limpio sin conflictos 
     assert.deepEqual(result.conflictedFiles, []);
     assert.equal(taxiLeased, false);
     assert.equal(piSpawned, false);
-    assert.ok(commands.some((c) => c.startsWith("git worktree add ")));
+    assert.ok(commands.some((c) => c.startsWith("git worktree add -- ")));
     assert.ok(commands.includes("git rebase origin/master"));
     assert.ok(commands.includes("git push --force-with-lease origin feat/clean-rebase"));
-    assert.ok(commands.filter((c) => c.startsWith("git worktree remove --force ")).length >= 2);
+    assert.ok(commands.filter((c) => c.startsWith("git worktree remove --force -- ")).length >= 2);
     assert.ok(notifications.some((n) => n.includes("rebasada limpiamente")));
   } finally {
     fs.rmSync(tmpRoot, { recursive: true, force: true });
@@ -153,7 +154,7 @@ test("DcPrConflictResolver - Flujo completo: conflicto -> taxi -> Pi -> cero mar
     const idxTest = commands.indexOf("npm test");
     const idxContinue = commands.indexOf("git rebase --continue");
     const idxPush = commands.indexOf("git push --force-with-lease origin feat/conflict");
-    const idxFinalRemove = commands.map((c) => c.startsWith("git worktree remove --force ")).lastIndexOf(true);
+    const idxFinalRemove = commands.map((c) => c.startsWith("git worktree remove --force -- ")).lastIndexOf(true);
 
     assert.ok(idxBuild >= 0);
     assert.ok(idxTest > idxBuild);
@@ -344,4 +345,133 @@ test("DcChatDispatcher - Super-Agente #99 orienta sobre resolución de conflicto
   });
   assert.equal(singletonRes.respondent, "super_agent_99");
   assert.ok(singletonRes.reply.includes("force-with-lease"));
+});
+
+test("S8: DcPrConflictResolver rejects git option injection and invalid branch refs before invoking git", async () => {
+  const tmpRoot = makeTempWorktreeRoot();
+  const commands: string[] = [];
+  const notifications: string[] = [];
+
+  try {
+    const resolver = new DcPrConflictResolver({
+      execCommand: createMockExec({ commands }),
+      worktreeBaseDir: tmpRoot,
+      repoRoot: tmpRoot,
+      notify: async (_target, msg) => { notifications.push(msg); },
+    });
+
+    const badHeadBranches = [
+      "--upload-pack=sh -c id",
+      "-f",
+      "--force",
+      "+master",
+      "+HEAD",
+      "feat/..evil",
+      "feat/a@{0}",
+      "feat/a b",
+      "feat/a\nb",
+      "feat/a\0b",
+      "feat/ref.lock",
+      "feat/a~1",
+      "feat/a:b",
+    ];
+
+    for (const headBranch of badHeadBranches) {
+      await assert.rejects(
+        () =>
+          resolver.resolve({
+            prNumber: 99,
+            repoNwo: "davidcoachdev/dc-pi",
+            headBranch,
+            baseBranch: "master",
+            authorLogin: "mallory",
+          }),
+        /headBranch inválido/i,
+      );
+    }
+
+    const badBaseBranches = [
+      "--upload-pack=evil",
+      "-f",
+      "+master",
+      "+HEAD",
+      "master..HEAD",
+      "master@{1}",
+      "master.lock",
+    ];
+
+    for (const baseBranch of badBaseBranches) {
+      await assert.rejects(
+        () =>
+          resolver.resolve({
+            prNumber: 99,
+            repoNwo: "davidcoachdev/dc-pi",
+            headBranch: "feat/safe",
+            baseBranch,
+            authorLogin: "mallory",
+          }),
+        /baseBranch inválido/i,
+      );
+    }
+
+    assert.equal(commands.length, 0, "rejected refs must never execute any git command");
+    assert.equal(notifications.length, 0, "rejected refs must fail before notifying");
+  } finally {
+    fs.rmSync(tmpRoot, { recursive: true, force: true });
+  }
+});
+
+test("S8: DcPrConflictResolver confines explicit req.worktreePath and rejects escapes before running git", async () => {
+  const tmpRoot = makeTempWorktreeRoot();
+  const commands: string[] = [];
+  const notifications: string[] = [];
+
+  try {
+    const resolver = new DcPrConflictResolver({
+      execCommand: createMockExec({ commands }),
+      worktreeBaseDir: tmpRoot,
+      repoRoot: tmpRoot,
+      notify: async (_target, msg) => { notifications.push(msg); },
+    });
+
+    const badWorktreePaths = [
+      "/etc/shadow",
+      "../../escape",
+      "~/.ssh/id_rsa",
+    ];
+
+    for (const worktreePath of badWorktreePaths) {
+      await assert.rejects(
+        () =>
+          resolver.resolve({
+            prNumber: 101,
+            repoNwo: "davidcoachdev/dc-pi",
+            headBranch: "feat/safe",
+            baseBranch: "master",
+            authorLogin: "mallory",
+            worktreePath,
+          }),
+        /Acceso denegado|fuera de los directorios permitidos/i,
+      );
+    }
+
+    assert.equal(commands.length, 0, "unconfined worktreePath must never invoke git");
+    assert.equal(notifications.length, 0, "unconfined worktreePath must fail before notifying");
+
+    // Ruta válida dentro de os.tmpdir() sigue siendo permitida y usa '--' en git worktree add/remove
+    const validCustomPath = path.join(tmpRoot, "custom-pr-101");
+    const okRes = await resolver.resolve({
+      prNumber: 101,
+      repoNwo: "davidcoachdev/dc-pi",
+      headBranch: "feat/safe",
+      baseBranch: "master",
+      authorLogin: "davidcoachdev",
+      worktreePath: validCustomPath,
+    });
+    assert.equal(okRes.ok, true);
+    assert.ok(commands.some((c) => c === `git worktree add -- ${validCustomPath} feat/safe`));
+    assert.ok(commands.some((c) => c === `git worktree remove --force -- ${validCustomPath}`));
+  } finally {
+    fs.rmSync(tmpRoot, { recursive: true, force: true });
+  }
 });

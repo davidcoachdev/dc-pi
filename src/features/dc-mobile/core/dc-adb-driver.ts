@@ -13,6 +13,9 @@ export const DC_ADB_UNAVAILABLE_MESSAGE =
 
 export const DC_EMPTY_TEXT_MESSAGE = "texto vacío: nada que escribir.";
 
+export const DC_INVALID_TEXT_CONTROL_CHARS_MESSAGE =
+  "texto inválido: no se permiten saltos de línea, tabs ni caracteres de control en input text.";
+
 export type DcAdbEncoding = "utf8" | "buffer";
 
 export interface DcAdbExecOptions {
@@ -66,7 +69,8 @@ export const ADB_KEYCODES: Readonly<Record<string, string>> = {
   tab: "KEYCODE_TAB",
 };
 
-const SHELL_SPECIALS = /([\\'"`$&|;<>()[\]*?{}~#])/g;
+const CONTROL_CHARS_RE = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/;
+const SHELL_SPECIALS = /([\\'"`$&|;<>()[\]*?{}~#!])/g;
 
 function defaultExecFn(
   file: string,
@@ -106,7 +110,9 @@ function readErrorCode(error: unknown): string | undefined {
 }
 
 /**
- * Escapes user text for `adb shell input text` (S4).
+ * Escapes user text for `adb shell input text` (S4/S6).
+ * - Rejects empty/blank text and control characters (`\n`, `\r`, `\t`, NUL, etc.)
+ *   that could split or inject extra commands in Android's `sh`.
  * - Spaces become `%s`.
  * - Shell metacharacters are backslash-escaped because `adb shell` re-parses
  *   its arguments on the device side.
@@ -114,6 +120,9 @@ function readErrorCode(error: unknown): string | undefined {
 export function escapeAdbInputText(text: string): string {
   if (!text || text.trim().length === 0) {
     throw new DcAdbError("INVALID_ARGUMENT", DC_EMPTY_TEXT_MESSAGE);
+  }
+  if (CONTROL_CHARS_RE.test(text)) {
+    throw new DcAdbError("INVALID_ARGUMENT", DC_INVALID_TEXT_CONTROL_CHARS_MESSAGE);
   }
 
   return text.replace(/ /g, "%s").replace(SHELL_SPECIALS, "\\$1");

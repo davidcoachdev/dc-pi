@@ -14,12 +14,88 @@ import type {
 
 export const DEFAULT_CDP_URL = "http://127.0.0.1:9222";
 
+const LOOPBACK_CDP_HOSTS = new Set(["localhost", "127.0.0.1", "::1"]);
+const HTTP_CDP_PROTOCOLS = new Set(["http:", "https:"]);
+const WS_CDP_PROTOCOLS = new Set(["ws:", "wss:"]);
+
 /**
- * Normaliza la URL base de Chrome DevTools Protocol.
+ * Comprueba si el hostname corresponde estrictamente a un host loopback
+ * permitido para Chrome DevTools Protocol (`localhost`, `127.0.0.1`, `::1`).
+ */
+export function isLoopbackCdpHost(hostname: string): boolean {
+  const normalized = hostname.trim().toLowerCase().replace(/^\[|\]$/g, "");
+  return LOOPBACK_CDP_HOSTS.has(normalized);
+}
+
+/**
+ * Valida una URL de Chrome DevTools Protocol (HTTP/HTTPS o WS/WSS) restringiéndola
+ * estrictamente a loopback para prevenir SSRF hacia hosts remotos, red interna o metadata cloud.
+ */
+export function validateCdpUrl(
+  rawUrl: string,
+  kind: "http" | "ws" | "any" = "any",
+): string {
+  const trimmed = rawUrl.trim();
+  if (!trimmed) {
+    throw new Error("URL CDP vacía o inválida");
+  }
+
+  let parsed: URL;
+  try {
+    parsed = new URL(trimmed);
+  } catch (err) {
+    throw new Error(
+      `URL CDP inválida: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+
+  const allowedProtocols =
+    kind === "http"
+      ? HTTP_CDP_PROTOCOLS
+      : kind === "ws"
+        ? WS_CDP_PROTOCOLS
+        : new Set([...HTTP_CDP_PROTOCOLS, ...WS_CDP_PROTOCOLS]);
+
+  if (!allowedProtocols.has(parsed.protocol)) {
+    throw new Error(
+      `Protocolo CDP bloqueado por seguridad (SSRF): ${parsed.protocol}`,
+    );
+  }
+
+  if (parsed.username || parsed.password) {
+    throw new Error("Credenciales embebidas en URL CDP bloqueadas por seguridad");
+  }
+
+  if (!isLoopbackCdpHost(parsed.hostname)) {
+    throw new Error(
+      `Host CDP bloqueado por seguridad (SSRF): solo se permite loopback (localhost, 127.0.0.1, [::1]), recibido "${parsed.hostname}"`,
+    );
+  }
+
+  if (HTTP_CDP_PROTOCOLS.has(parsed.protocol)) {
+    if (parsed.search || parsed.hash) {
+      throw new Error("URL base CDP HTTP no debe contener query ni fragmento");
+    }
+    const cleanPath = parsed.pathname.replace(/\/+$/, "");
+    return `${parsed.origin}${cleanPath}`;
+  }
+
+  return parsed.toString();
+}
+
+/**
+ * Valida una URL WebSocket (`ws://` o `wss://`) de target CDP contra SSRF.
+ */
+export function validateCdpWebSocketUrl(rawWsUrl: string): string {
+  return validateCdpUrl(rawWsUrl, "ws");
+}
+
+/**
+ * Normaliza y valida la URL base HTTP/HTTPS de Chrome DevTools Protocol.
  */
 export function normalizeCdpUrl(rawUrl?: string): string {
-  const url = rawUrl?.trim() || process.env.CHROME_CDP_URL || DEFAULT_CDP_URL;
-  return url.replace(/\/+$/, "");
+  const url = rawUrl?.trim() || process.env.CHROME_CDP_URL?.trim() || DEFAULT_CDP_URL;
+  return validateCdpUrl(url, "http");
 }
 
 /**
@@ -35,6 +111,7 @@ export async function getCdpStatus(rawCdpUrl?: string): Promise<BrowserCdpStatus
 
   try {
     const versionRes = await fetch(`${cdpUrl}/json/version`, {
+      redirect: "error",
       signal: AbortSignal.timeout(3000),
     });
     if (versionRes.ok) {
@@ -72,6 +149,7 @@ export async function getCdpStatus(rawCdpUrl?: string): Promise<BrowserCdpStatus
 export async function listPageTargets(rawCdpUrl?: string): Promise<BrowserPageTarget[]> {
   const cdpUrl = normalizeCdpUrl(rawCdpUrl);
   const res = await fetch(`${cdpUrl}/json/list`, {
+    redirect: "error",
     signal: AbortSignal.timeout(4000),
   });
   if (!res.ok) {
@@ -83,13 +161,18 @@ export async function listPageTargets(rawCdpUrl?: string): Promise<BrowserPageTa
 
   return raw
     .filter((item) => item?.type === "page")
-    .map((item) => ({
-      id: String(item.id),
-      title: String(item.title ?? ""),
-      url: String(item.url ?? ""),
-      hasWebSocketDebuggerUrl: Boolean(item.webSocketDebuggerUrl),
-      webSocketDebuggerUrl: item.webSocketDebuggerUrl ? String(item.webSocketDebuggerUrl) : undefined,
-    }));
+    .map((item) => {
+      const wsUrl = item.webSocketDebuggerUrl
+        ? validateCdpWebSocketUrl(String(item.webSocketDebuggerUrl))
+        : undefined;
+      return {
+        id: String(item.id),
+        title: String(item.title ?? ""),
+        url: String(item.url ?? ""),
+        hasWebSocketDebuggerUrl: Boolean(wsUrl),
+        webSocketDebuggerUrl: wsUrl,
+      };
+    });
 }
 
 function validateConfinedOutputPath(outputPath: string, cwd: string): string {
@@ -142,8 +225,9 @@ export async function navigatePage(
     throw new Error(`La pestaña ${target.id} no expone webSocketDebuggerUrl para control remoto`);
   }
 
+  const wsUrl = validateCdpWebSocketUrl(target.webSocketDebuggerUrl);
   const startTime = Date.now();
-  const ws = new WebSocket(target.webSocketDebuggerUrl);
+  const ws = new WebSocket(wsUrl);
 
   try {
     await waitForWsOpen(ws, 5000);
@@ -190,7 +274,8 @@ export async function capturePageScreenshot(options: BrowserScreenshotOptions): 
     throw new Error(`La pestaña ${target.id} no expone webSocketDebuggerUrl para captura`);
   }
 
-  const ws = new WebSocket(target.webSocketDebuggerUrl);
+  const wsUrl = validateCdpWebSocketUrl(target.webSocketDebuggerUrl);
+  const ws = new WebSocket(wsUrl);
 
   try {
     await waitForWsOpen(ws, 5000);

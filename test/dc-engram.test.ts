@@ -12,6 +12,8 @@ import {
   isProjectEnrolled,
   resolveEngramProjectName,
   openEngramExplorer,
+  openUrl,
+  validateSafeBrowserUrl,
 } from "../src/features/dc-engram/index.ts";
 
 test("dc-engram: resolveEngramProjectName prioritizes explicit parameter, env var, git identity and fallback", (t) => {
@@ -376,4 +378,58 @@ test("dc-engram: getProjectObservations sanitizes limit bounds and safely handle
     if (origDbEnv !== undefined) process.env.ENGRAM_DB_PATH = origDbEnv;
     else delete process.env.ENGRAM_DB_PATH;
   }
+});
+
+test("dc-engram (S6): validateSafeBrowserUrl and openUrl reject shell injection, control chars and non-http(s) URLs", () => {
+  const spawned: Array<{ cmd: string; args: string[] }> = [];
+  const fakeSpawn = ((cmd: string, args: string[]) => {
+    spawned.push({ cmd, args });
+    return {
+      on: () => ({ unref: () => {} }),
+      unref: () => {},
+    };
+  }) as any;
+
+  const rejectedUrls = [
+    "",
+    "   ",
+    "file:///etc/passwd",
+    "javascript:alert(1)",
+    "ftp://example.com/file",
+    "https://example.com/a & calc.exe",
+    "https://example.com/a&calc.exe",
+    "https://example.com/a|whoami",
+    "https://example.com/a;id",
+    "https://example.com/a<b",
+    "https://example.com/a>b",
+    "https://example.com/a^b",
+    "https://example.com/%COMSPEC%",
+    "https://example.com/a!b",
+    'https://example.com/"quoted"',
+    "https://example.com/'quoted'",
+    "https://example.com/`id`",
+    "https://example.com/$(id)",
+    "https://example.com/a\ncalc.exe",
+    "https://example.com/a\rcalc.exe",
+    "https://example.com/a\0b",
+    "https://example.com/a\tb",
+  ];
+
+  for (const badUrl of rejectedUrls) {
+    assert.throws(() => validateSafeBrowserUrl(badUrl));
+    assert.throws(() => openUrl(badUrl, fakeSpawn));
+  }
+  assert.equal(spawned.length, 0, "malicious URLs must never invoke spawn");
+
+  const safeHttps = "https://engram.davidcoach.dev/dashboard/projects/dc-pi";
+  assert.equal(validateSafeBrowserUrl(safeHttps), safeHttps);
+  openUrl(safeHttps, fakeSpawn);
+  assert.equal(spawned.length, 1);
+  assert.ok(spawned[0]!.args.includes(safeHttps));
+
+  const safeHttp = "http://localhost:3000/status";
+  assert.equal(validateSafeBrowserUrl(safeHttp), safeHttp);
+  openUrl(safeHttp, fakeSpawn);
+  assert.equal(spawned.length, 2);
+  assert.ok(spawned[1]!.args.includes(safeHttp));
 });

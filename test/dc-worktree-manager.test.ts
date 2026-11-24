@@ -6,6 +6,7 @@ import * as path from "node:path";
 import { execFileSync } from "node:child_process";
 import {
   DcWorktreeManager,
+  assertValidGitRef,
   sanitizeBranchSlug,
 } from "../src/features/dc-agents/core/dc-worktree-manager.ts";
 
@@ -84,4 +85,131 @@ test("DcWorktreeManager creates, symlinks and cleanly disposes a real Git worktr
 
   // Limpiar directorio temporal
   fs.rmSync(tempDir, { recursive: true, force: true });
+});
+
+test("S8: assertValidGitRef accepts safe refs and rejects option injection and illegal ref syntax", () => {
+  for (const valid of ["master", "main", "HEAD", "feat/fix-1", "release/v1.2.3", "fix/ola1b_sec"]) {
+    assert.equal(assertValidGitRef(valid), valid);
+  }
+
+  const invalidRefs = [
+    "",
+    "-f",
+    "--upload-pack=sh -c id",
+    "--orphan",
+    "-b",
+    "+master",
+    "+HEAD",
+    "+feat/force",
+    "main..HEAD",
+    "feat/..evil",
+    "main@{0}",
+    "feat/with space",
+    "feat/line\nbreak",
+    "feat/nul\0byte",
+    "HEAD~1",
+    "HEAD^2",
+    "a:b",
+    "feat/a?b",
+    "feat/*",
+    "feat/[a]",
+    "feat\\bar",
+    "feat/foo.lock",
+    "feat/foo.lock/bar",
+    "feat/",
+    "/feat",
+    "feat.",
+    ".hidden",
+    "feat/.hidden",
+    "feat//double",
+    "@",
+  ];
+
+  for (const bad of invalidRefs) {
+    assert.throws(() => assertValidGitRef(bad), /inválido/i, `expected rejection for "${bad}"`);
+  }
+});
+
+test("S8: DcWorktreeManager.createForTask rejects malicious baseBranch, prefixBranch and taskSlug before git runs", async () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "dc-worktree-sec-"));
+  const manager = new DcWorktreeManager();
+
+  try {
+    await assert.rejects(
+      () =>
+        manager.createForTask({
+          repoRoot: tempDir,
+          taskId: "task-1",
+          taskSlug: "valid-slug",
+          baseBranch: "--upload-pack=sh -c id",
+        }),
+      /baseBranch inválido/i,
+    );
+
+    await assert.rejects(
+      () =>
+        manager.createForTask({
+          repoRoot: tempDir,
+          taskId: "task-1",
+          taskSlug: "valid-slug",
+          baseBranch: "-f",
+        }),
+      /baseBranch inválido/i,
+    );
+
+    await assert.rejects(
+      () =>
+        manager.createForTask({
+          repoRoot: tempDir,
+          taskId: "task-1",
+          taskSlug: "valid-slug",
+          baseBranch: "+master",
+        }),
+      /baseBranch inválido/i,
+    );
+
+    await assert.rejects(
+      () =>
+        manager.createForTask({
+          repoRoot: tempDir,
+          taskId: "task-1",
+          taskSlug: "valid-slug",
+          prefixBranch: "+feat/",
+        }),
+      /branchName inválido/i,
+    );
+
+    await assert.rejects(
+      () =>
+        manager.createForTask({
+          repoRoot: tempDir,
+          taskId: "task-1",
+          taskSlug: "valid-slug",
+          prefixBranch: "--upload-pack=evil/",
+        }),
+      /branchName inválido/i,
+    );
+
+    await assert.rejects(
+      () =>
+        manager.createForTask({
+          repoRoot: tempDir,
+          taskId: "task-1",
+          taskSlug: "--upload-pack=evil",
+        }),
+      /taskSlug inválido/i,
+    );
+
+    await assert.rejects(
+      () =>
+        manager.createForTask({
+          repoRoot: tempDir,
+          taskId: "task-1",
+          taskSlug: "-f",
+        }),
+      /taskSlug inválido/i,
+    );
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
 });

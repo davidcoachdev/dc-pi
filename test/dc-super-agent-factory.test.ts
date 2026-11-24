@@ -1,11 +1,16 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { createHmac } from "node:crypto";
 import { DcSuperAgentRegistry, dcSuperAgentRegistry } from "../src/features/dc-agents/core/dc-super-agent-registry.ts";
 import { DcSuperAgentFactory, createSuperAgent } from "../src/features/dc-agents/core/dc-super-agent-factory.ts";
 import { DcGitHubGateway } from "../src/features/dc-agents/daemon/dc-github-gateway.ts";
 import { DcChatDispatcher, dcChatDispatcher } from "../src/features/dc-agents/daemon/dc-chat-dispatcher.ts";
 import { createSuperAgentsSidebarCard } from "../src/features/dc-sidebar/components/dc-sidebar-super-agents-card.ts";
 import { registerControlDaemonCommands } from "../src/features/dc-agents/daemon/dc-control-commands.ts";
+
+function signWebhookBody(secret: string, rawBody: string): string {
+  return `sha256=${createHmac("sha256", secret).update(rawBody).digest("hex")}`;
+}
 
 function stripAnsi(text: string): string {
   return text.replace(/\x1b\[[0-9;]*m/g, "");
@@ -137,9 +142,10 @@ test("DcGitHubGateway - Metadata neutral y enrutamiento dinámico por Registry (
     },
   });
 
+  const webhookSecret = "gateway-hmac-secret-test";
   const gateway = new DcGitHubGateway({
     port: 0,
-    capability: "gateway-cap-test",
+    webhookSecret,
     expectedRepoNwo: "davidcoachdev/dc-pi",
     registry: testRegistry,
     onIssueOpened: () => {
@@ -173,15 +179,29 @@ test("DcGitHubGateway - Metadata neutral y enrutamiento dinámico por Registry (
   assert.ok(subscribed.includes("issue_comment"));
   assert.ok(subscribed.includes("pull_request"));
 
+  // Query-string ?capability= debe rechazarse con 401
+  const leakedQueryRes = await fetch(`http://127.0.0.1:${port}/github-webhook?capability=${webhookSecret}`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-GitHub-Event": "issues",
+      "X-GitHub-Delivery": "del-query-rejected",
+    },
+    body: JSON.stringify({ action: "opened", issue: { number: 1 }, repository: { full_name: "davidcoachdev/dc-pi" } }),
+  });
+  assert.equal(leakedQueryRes.status, 401);
+
   const postWebhook = async (event: string, delivery: string, payload: unknown) => {
-    const res = await fetch(`http://127.0.0.1:${port}/github-webhook?capability=gateway-cap-test`, {
+    const rawBody = JSON.stringify(payload);
+    const res = await fetch(`http://127.0.0.1:${port}/github-webhook`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         "X-GitHub-Event": event,
         "X-GitHub-Delivery": delivery,
+        "X-Hub-Signature-256": signWebhookBody(webhookSecret, rawBody),
       },
-      body: JSON.stringify(payload),
+      body: rawBody,
     });
     return { status: res.status, json: await res.json() as any };
   };
