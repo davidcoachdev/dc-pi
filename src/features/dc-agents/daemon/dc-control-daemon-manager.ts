@@ -34,8 +34,22 @@ export interface DaemonStatus {
  * - Spawnea el túnel oficial `gh webhook forward` en background sin bloquear la sesión.
  * - Al recibir un issue, dispara la notificación visual y el aislamiento en worktree.
  */
-const VALID_REPO_NWO_RE = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
+const VALID_REPO_NWO_RE = /^(?!.*\.\.)(?!\.\/)(?!.*\/\.$)[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
 const VALID_HOOK_ID_RE = /^\d+$/;
+
+export function isValidRepoNwo(nwo: string): boolean {
+  if (!VALID_REPO_NWO_RE.test(nwo)) {
+    return false;
+  }
+  const [owner, repo] = nwo.split("/");
+  if (!owner || !repo) {
+    return false;
+  }
+  if (owner === "." || owner === ".." || repo === "." || repo === "..") {
+    return false;
+  }
+  return !owner.includes("..") && !repo.includes("..");
+}
 
 export class DcControlDaemonManager {
   private static instance?: DcControlDaemonManager;
@@ -67,11 +81,11 @@ export class DcControlDaemonManager {
     // 1. Detener instancias previas si existían
     await this.stop();
 
-    const capability = randomBytes(32).toString("hex");
+    const webhookSecret = process.env.DC_GITHUB_WEBHOOK_SECRET || randomBytes(32).toString("hex");
     // 2. Iniciar el Gateway Ingress Neutral respaldado por DcSuperAgentRegistry
     this.receiver = new DcGitHubGateway({
       port: 4545,
-      capability,
+      webhookSecret,
       expectedRepoNwo: repo.fullNwo,
       registry: dcSuperAgentRegistry,
       onIssueOpened: (payload) => this.executeIssue(payload, repo, ctx),
@@ -114,7 +128,7 @@ export class DcControlDaemonManager {
 
     const activePort = await this.receiver.start();
     const subscribedEvents = this.receiver.getSubscribedGitHubEvents();
-    this.startTunnel(repo.fullNwo, activePort, capability, ctx, subscribedEvents);
+    this.startTunnel(repo.fullNwo, activePort, webhookSecret, ctx, subscribedEvents);
     return this.getStatus();
   }
 
@@ -418,37 +432,48 @@ export class DcControlDaemonManager {
   private startTunnel(
     repoNwo: string,
     port: number,
-    capability: string,
+    webhookSecret: string,
     ctx?: ExtensionContext,
     subscribedEvents?: string[],
   ): void {
-    if (!VALID_REPO_NWO_RE.test(repoNwo)) {
+    if (!isValidRepoNwo(repoNwo)) {
       this.isTunnelRunning = false;
       return;
     }
-    const url = `http://127.0.0.1:${port}/github-webhook?capability=${capability}`;
+    const url = `http://127.0.0.1:${port}/github-webhook`;
     const eventsArg = subscribedEvents && subscribedEvents.length > 0
       ? subscribedEvents.join(",")
       : "issues,issue_comment,pull_request";
-    const args = ["webhook", "forward", `--repo=${repoNwo}`, `--events=${eventsArg}`, `--url=${url}`];
+    // Upstream `gh webhook forward` only supports `-S/--secret` (not an env var) to instruct
+    // GitHub to sign forwarded deliveries with `X-Hub-Signature-256`. Uses a per-start ephemeral
+    // 32-byte secret unless `DC_GITHUB_WEBHOOK_SECRET` is configured.
+    const args = [
+      "webhook",
+      "forward",
+      `--repo=${repoNwo}`,
+      `--events=${eventsArg}`,
+      `--url=${url}`,
+      `--secret=${webhookSecret}`,
+    ];
 
     try {
       const child = spawn("gh", args, {
-        stdio: ["ignore", "pipe", "pipe"],
+        stdio: ["ignore", "ignore", "pipe"],
       });
       this.tunnelProcess = child;
       this.tunnelPid = child.pid;
       this.isTunnelRunning = true;
 
       child.stderr?.on("data", (data: Buffer) => {
-        const errText = data.toString("utf8");
-        // Log para depuración sin spam
+        const rawText = data.toString("utf8");
+        const errText = webhookSecret ? rawText.split(webhookSecret).join("[REDACTED]") : rawText;
+        // Log para depuración sin spam ni fugas del secreto
         if (errText.includes("Error") || errText.includes("422")) {
           console.error(`[dc-control-tunnel] ${errText.trim()}`);
         }
       });
 
-      child.on("error", (err) => {
+      child.on("error", () => {
         if (this.tunnelProcess === child) {
           this.isTunnelRunning = false;
           this.tunnelPid = undefined;
@@ -469,7 +494,7 @@ export class DcControlDaemonManager {
       });
 
       child.unref?.();
-    } catch (err: any) {
+    } catch {
       this.isTunnelRunning = false;
       this.tunnelPid = undefined;
       if (ctx) {
@@ -508,7 +533,7 @@ export class DcControlDaemonManager {
     // Limpiar hooks temporales de forwarder en GitHub únicamente para el repositorio validado
     try {
       const fullNwo = this.currentRepo?.fullNwo;
-      if (fullNwo && VALID_REPO_NWO_RE.test(fullNwo)) {
+      if (fullNwo && isValidRepoNwo(fullNwo)) {
         const rawHookIds = execFileSync(
           "gh",
           [
@@ -569,7 +594,7 @@ export class DcControlDaemonManager {
             try {
               const cmdline = fs.readFileSync(`/proc/${pid}/cmdline`, "utf8");
               if (cmdline.includes("webhook") && cmdline.includes("forward")) {
-                const match = cmdline.match(/--repo=([^\0\s]+).*--url=http:\/\/127\.0\.0\.1:(\d+)\/github-webhook\?capability=([a-f0-9]+)/);
+                const match = cmdline.match(/--repo=([^\0\s]+).*--url=http:\/\/127\.0\.0\.1:(\d+)\/github-webhook(?:\0|\s|$)/);
                 if (match) {
                   const detectedRepoNwo = match[1]!;
                   const activeRepo = this.currentRepo ?? resolveCurrentRepoIdentity(process.cwd());

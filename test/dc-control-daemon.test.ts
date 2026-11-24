@@ -3,15 +3,21 @@ import assert from "node:assert/strict";
 import * as http from "node:http";
 import * as fs from "node:fs";
 import * as os from "node:os";
+import { createHmac } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import * as path from "node:path";
 import { parseGitHubRepoNwo, resolveCurrentRepoIdentity } from "../src/features/dc-agents/daemon/dc-repo-resolver.ts";
 import { DcConflictGuard } from "../src/features/dc-agents/daemon/dc-conflict-guard.ts";
 import { DcControlReceiver } from "../src/features/dc-agents/daemon/dc-control-receiver.ts";
-import { DcControlDaemonManager } from "../src/features/dc-agents/daemon/dc-control-daemon-manager.ts";
+import { DcGitHubGateway } from "../src/features/dc-agents/daemon/dc-github-gateway.ts";
+import { DcControlDaemonManager, isValidRepoNwo } from "../src/features/dc-agents/daemon/dc-control-daemon-manager.ts";
 import { DcIssueDispatcher, type GitHubIssuePayload } from "../src/features/dc-agents/daemon/dc-issue-dispatcher.ts";
 import { handleToolCall } from "../src/features/dc-scan-guard/index.ts";
 import { dcConflictGuard } from "../src/features/dc-agents/daemon/dc-conflict-guard.ts";
+
+function signGitHubWebhook(secret: string, body: string | Buffer): string {
+  return `sha256=${createHmac("sha256", secret).update(body).digest("hex")}`;
+}
 
 test("dc-repo-resolver: parseGitHubRepoNwo extrae owner/repo limpiamente", () => {
   assert.deepEqual(parseGitHubRepoNwo("https://github.com/davidcoachdev/dc-pi.git"), {
@@ -92,13 +98,32 @@ test("dc-conflict-guard: reserva y detecta colisiones de archivos", () => {
 
 test("receiver authenticates before parsing or deduplication and requires repository and event identity", async () => {
   let calls = 0;
-  const receiver = new DcControlReceiver({ port: 0, expectedRepoNwo: "org/repo",
-    capability: "test-capability", onIssueOpened: () => { calls++; } });
+  const webhookSecret = "test-hmac-secret";
+  const receiver = new DcControlReceiver({
+    port: 0,
+    expectedRepoNwo: "org/repo",
+    webhookSecret,
+    onIssueOpened: () => { calls++; },
+  });
   const port = await receiver.start();
-  const send = async (token: string, payload: unknown, event = "issues") => {
-    const response = await fetch(`http://127.0.0.1:${port}/github-webhook${token}`, {
-      method: "POST", headers: { "x-github-event": event, "x-github-delivery": "same-id" },
-      body: typeof payload === "string" ? payload : JSON.stringify(payload),
+  const send = async (
+    payload: unknown,
+    opts?: { event?: string; signature?: string | null; query?: string },
+  ) => {
+    const rawBody = typeof payload === "string" ? payload : JSON.stringify(payload);
+    const headers: Record<string, string> = {
+      "x-github-event": opts?.event ?? "issues",
+      "x-github-delivery": "same-id",
+    };
+    if (opts?.signature === undefined) {
+      headers["x-hub-signature-256"] = signGitHubWebhook(webhookSecret, rawBody);
+    } else if (opts.signature !== null) {
+      headers["x-hub-signature-256"] = opts.signature;
+    }
+    const response = await fetch(`http://127.0.0.1:${port}/github-webhook${opts?.query ?? ""}`, {
+      method: "POST",
+      headers,
+      body: rawBody,
     });
     return { code: response.status, body: await response.text() };
   };
@@ -114,29 +139,39 @@ test("receiver authenticates before parsing or deduplication and requires reposi
       request.on("error", reject); request.end();
     });
     assert.equal(malformed.code, 400);
-    assert.ok(!malformed.body.includes("test-capability"));
-    assert.equal((await send("", "not json")).code, 401);
-    assert.equal((await send("?capability=wrong", payload)).code, 401);
-    assert.equal((await send("?capability=test-capability", { ...payload, repository: {} })).code, 403);
-    assert.equal((await send("?capability=test-capability", { ...payload, repository: { full_name: "bad/repo" } })).code, 403);
+    assert.ok(!malformed.body.includes(webhookSecret));
+    // Missing HMAC signature rejected with 401 before JSON parse / dedup
+    assert.equal((await send("not json", { signature: null })).code, 401);
+    // Malformed HMAC signature rejected with 401
+    assert.equal((await send(payload, { signature: "sha256=bad" })).code, 401);
+    // Valid format but wrong HMAC digest rejected with 401 before JSON parse / dedup
+    assert.equal((await send("not json", { signature: `sha256=${"0".repeat(64)}` })).code, 401);
+    assert.equal((await send(payload, { signature: `sha256=${"0".repeat(64)}` })).code, 401);
+    // Query-string ?capability= is actively rejected with 401
+    assert.equal((await send(payload, { query: `?capability=${webhookSecret}` })).code, 401);
+    // Valid HMAC checks repository identity
+    assert.equal((await send({ ...payload, repository: {} })).code, 403);
+    assert.equal((await send({ ...payload, repository: { full_name: "bad/repo" } })).code, 403);
     assert.equal(calls, 0);
-    assert.match((await send("?capability=test-capability", { ...payload, zen: "hello" }, "ping")).body, /pong/);
-    const ignored = await send("?capability=test-capability", payload, "push");
+    assert.match((await send({ ...payload, zen: "hello" }, { event: "ping" })).body, /pong/);
+    const ignored = await send(payload, { event: "push" });
     assert.match(ignored.body, /ignored_event/);
     assert.equal(calls, 0);
-    const accepted = await send("?capability=test-capability", payload);
+    // Previous rejected requests must NOT have poisoned delivery deduplication
+    const accepted = await send(payload);
     assert.equal(accepted.code, 202);
     assert.equal(calls, 1);
-    assert.match((await send("?capability=test-capability", payload)).body, /ignored_duplicate/);
+    assert.match((await send(payload)).body, /ignored_duplicate/);
   } finally { await receiver.stop(); }
 });
 
-test("dc-control-receiver: levanta servidor loopback, procesa webhook y deduplica entregas", async () => {
+test("dc-control-receiver: levanta servidor loopback, procesa webhook con HMAC y deduplica entregas", async () => {
   let receivedIssue: any = null;
+  const webhookSecret = "loopback-hmac-secret";
 
   const receiver = new DcControlReceiver({
     port: 4599,
-    capability: "test-capability",
+    webhookSecret,
     expectedRepoNwo: "davidcoachdev/dc-pi",
     onIssueOpened: (payload) => {
       receivedIssue = payload;
@@ -164,21 +199,23 @@ test("dc-control-receiver: levanta servidor loopback, procesa webhook y deduplic
     },
   };
 
-  // Enviar POST HTTP al receptor local
+  // Enviar POST HTTP al receptor local con X-Hub-Signature-256
   await new Promise<void>((resolve, reject) => {
     const data = JSON.stringify(samplePayload);
     const req = http.request(
-      `http://127.0.0.1:${port}/github-webhook?capability=test-capability`,
+      `http://127.0.0.1:${port}/github-webhook`,
       {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
           "X-GitHub-Event": "issues",
           "X-GitHub-Delivery": "delivery-uuid-1",
+          "X-Hub-Signature-256": signGitHubWebhook(webhookSecret, data),
         },
       },
       (res) => {
         assert.equal(res.statusCode, 202);
+        res.resume();
         resolve();
       },
     );
@@ -195,13 +232,14 @@ test("dc-control-receiver: levanta servidor loopback, procesa webhook y deduplic
   await new Promise<void>((resolve, reject) => {
     const data = JSON.stringify(samplePayload);
     const req = http.request(
-      `http://127.0.0.1:${port}/github-webhook?capability=test-capability`,
+      `http://127.0.0.1:${port}/github-webhook`,
       {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
           "X-GitHub-Event": "issues",
           "X-GitHub-Delivery": "delivery-uuid-1", // Mismo delivery ID
+          "X-Hub-Signature-256": signGitHubWebhook(webhookSecret, data),
         },
       },
       (res) => {
@@ -221,6 +259,109 @@ test("dc-control-receiver: levanta servidor loopback, procesa webhook y deduplic
 
   await receiver.stop();
   assert.equal(receiver.isRunning(), false);
+});
+
+test("dc-github-gateway: rechaza payload >5 MB con un único 413 sin ERR_HTTP_HEADERS_SENT", async (t) => {
+  const webhookSecret = "oversized-hmac-secret";
+  const serverErrors: Error[] = [];
+  const uncaughtErrors: Error[] = [];
+  const onUncaught = (err: Error) => {
+    uncaughtErrors.push(err);
+  };
+  process.on("uncaughtException", onUncaught);
+  t.after(() => {
+    process.off("uncaughtException", onUncaught);
+  });
+
+  const gateway = new DcGitHubGateway({
+    port: 0,
+    webhookSecret,
+    expectedRepoNwo: "org/repo",
+    onError: (err) => serverErrors.push(err),
+  });
+
+  const port = await gateway.start();
+  t.after(async () => {
+    await gateway.stop();
+  });
+
+  const oversizedBody = Buffer.alloc(5 * 1024 * 1024 + 512 * 1024, 0x61); // 5.5 MiB
+  const signature = signGitHubWebhook(webhookSecret, oversizedBody);
+
+  const result = await new Promise<{ statusCode?: number; body: string }>((resolve, reject) => {
+    let settled = false;
+    const req = http.request(
+      {
+        hostname: "127.0.0.1",
+        port,
+        path: "/github-webhook",
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-GitHub-Event": "issues",
+          "X-GitHub-Delivery": "oversized-delivery-1",
+          "X-Hub-Signature-256": signature,
+        },
+      },
+      (res) => {
+        let body = "";
+        res.on("data", (chunk) => {
+          body += chunk.toString("utf8");
+        });
+        res.on("end", () => {
+          if (!settled) {
+            settled = true;
+            resolve({ statusCode: res.statusCode, body });
+          }
+        });
+      },
+    );
+
+    req.on("error", (err: any) => {
+      // EPIPE/ECONNRESET en el cliente al abortar subida tras 413 es normal en HTTP/1.1
+      if (err?.code === "EPIPE" || err?.code === "ECONNRESET") {
+        return;
+      }
+      if (!settled) {
+        settled = true;
+        reject(err);
+      }
+    });
+
+    // Enviar en múltiples chunks para ejercitar múltiples eventos `data` tras cruzar los 5 MB
+    const chunkSize = 256 * 1024;
+    for (let offset = 0; offset < oversizedBody.length; offset += chunkSize) {
+      if (req.destroyed) break;
+      req.write(oversizedBody.subarray(offset, offset + chunkSize));
+    }
+    if (!req.destroyed) {
+      req.end();
+    }
+  });
+
+  await new Promise((r) => setTimeout(r, 50));
+
+  assert.equal(result.statusCode, 413);
+  assert.equal(result.body, "Payload Too Large");
+  assert.equal(serverErrors.length, 0, "No debe registrar errores del servidor");
+  assert.equal(
+    uncaughtErrors.some((e: any) => e?.code === "ERR_HTTP_HEADERS_SENT"),
+    false,
+    "Nunca debe lanzar ERR_HTTP_HEADERS_SENT en respuestas 413",
+  );
+
+  // El gateway debe seguir atendiendo solicitudes válidas después del 413
+  const pingBody = JSON.stringify({ zen: "still alive", repository: { full_name: "org/repo" } });
+  const pingRes = await fetch(`http://127.0.0.1:${port}/github-webhook`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-GitHub-Event": "ping",
+      "X-Hub-Signature-256": signGitHubWebhook(webhookSecret, pingBody),
+    },
+    body: pingBody,
+  });
+  assert.equal(pingRes.status, 200);
 });
 
 test("dc-scan-guard: bloquea herramientas edit/write sobre archivos reservados por conflict guard", () => {
@@ -323,6 +464,17 @@ test("dc-control-daemon-manager: stop() valida fullNwo contra inyección, usa ex
   assert.equal(fs.existsSync(injectMarker), false, "Nunca debe interpolar fullNwo en un shell");
   assert.equal(fs.existsSync(ghLogFile), false, "No debe invocar gh si fullNwo no cumple el formato owner/repo");
 
+  // Validar rechazo de segmentos de path traversal (`..` / `.`) manteniendo `.` válido en nombres de repo
+  assert.equal(isValidRepoNwo("davidcoachdev/dc-pi"), true);
+  assert.equal(isValidRepoNwo("davidcoachdev/.github"), true);
+  assert.equal(isValidRepoNwo("davidcoachdev/dc-pi.js"), true);
+  for (const invalidNwo of ["foo/..", "../bar", "../evil", "foo/../bar", "./bar", "foo/."]) {
+    assert.equal(isValidRepoNwo(invalidNwo), false, `Debe rechazar repo NWO inválido: ${invalidNwo}`);
+    (manager as any).currentRepo = { owner: "foo", repo: "bar", fullNwo: invalidNwo };
+    await manager.stop();
+    assert.equal(fs.existsSync(ghLogFile), false, `stop() nunca debe invocar gh para ${invalidNwo}`);
+  }
+
   // Ahora con un fullNwo válido debe usar execFileSync("gh", [...]) y borrar los hooks numéricos devueltos
   (manager as any).currentRepo = {
     owner: "davidcoachdev",
@@ -337,6 +489,146 @@ test("dc-control-daemon-manager: stop() valida fullNwo contra inyección, usa ex
   assert.equal(ghCalls.length, 2);
   assert.match(ghCalls[0]!, /^api repos\/davidcoachdev\/dc-pi\/hooks --jq /);
   assert.equal(ghCalls[1], "api repos/davidcoachdev/dc-pi/hooks/98765 -X DELETE");
+});
+
+test("dc-control-daemon-manager: start() pasa --secret a gh webhook forward sin ?capability= en --url y autentica HMAC end-to-end", async (t) => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "dc-daemon-start-argv-"));
+  const tempBin = path.join(tempRoot, "bin");
+  const repoDir = path.join(tempRoot, "repo");
+  fs.mkdirSync(tempBin, { recursive: true });
+  fs.mkdirSync(repoDir, { recursive: true });
+
+  const originalPath = process.env.PATH || "";
+  const originalSecret = process.env.DC_GITHUB_WEBHOOK_SECRET;
+  const originalGhEnvSecret = process.env.GH_WEBHOOK_SECRET;
+  const testSecret = "super-secret-hmac-key-0123456789abcdef0123456789abcdef0123456789";
+  process.env.DC_GITHUB_WEBHOOK_SECRET = testSecret;
+  delete process.env.GH_WEBHOOK_SECRET;
+
+  const ghArgvLog = path.join(tempRoot, "gh-spawn-argv.log");
+  const ghEnvLog = path.join(tempRoot, "gh-spawn-env.log");
+  const ghScript = path.join(tempBin, "gh");
+  fs.writeFileSync(
+    ghScript,
+    `#!/bin/sh\nif [ "$1" = "webhook" ] && [ "$2" = "forward" ]; then\n  printf '%s\\n' "$@" > "${ghArgvLog}"\n  printf '%s' "\${GH_WEBHOOK_SECRET:-}" > "${ghEnvLog}"\n  printf 'Error: simulated stderr with %s\\n' "${testSecret}" >&2\n  sleep 5\nfi\nexit 0\n`,
+    { mode: 0o755 },
+  );
+
+  execFileSync("git", ["-C", repoDir, "init", "--quiet"]);
+  execFileSync("git", ["-C", repoDir, "remote", "add", "origin", "https://github.com/davidcoachdev/dc-pi.git"]);
+
+  const errorLogs: string[] = [];
+  t.mock.method(console, "error", (...args: unknown[]) => {
+    errorLogs.push(args.map(String).join(" "));
+  });
+
+  process.env.PATH = `${tempBin}:${originalPath}`;
+  const manager = new DcControlDaemonManager();
+  t.mock.method(manager, "executeIssue", async () => {});
+
+  t.after(async () => {
+    await manager.stop();
+    process.env.PATH = originalPath;
+    if (originalSecret === undefined) {
+      delete process.env.DC_GITHUB_WEBHOOK_SECRET;
+    } else {
+      process.env.DC_GITHUB_WEBHOOK_SECRET = originalSecret;
+    }
+    if (originalGhEnvSecret === undefined) {
+      delete process.env.GH_WEBHOOK_SECRET;
+    } else {
+      process.env.GH_WEBHOOK_SECRET = originalGhEnvSecret;
+    }
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  });
+
+  const status = await manager.start({ cwd: repoDir } as any);
+  assert.equal(status.running, true);
+  assert.equal(status.tunnelActive, true);
+
+  // Esperar brevemente a que el script stub `gh` vuelque sus argumentos, env y stderr
+  for (let i = 0; i < 40 && (!fs.existsSync(ghArgvLog) || !fs.existsSync(ghEnvLog) || errorLogs.length === 0); i++) {
+    await new Promise((r) => setTimeout(r, 25));
+  }
+  assert.equal(fs.existsSync(ghArgvLog), true, "El proceso gh webhook forward debe haberse invocado");
+
+  const spawnedArgs = fs.readFileSync(ghArgvLog, "utf8").trim().split("\n");
+  assert.equal(spawnedArgs[0], "webhook");
+  assert.equal(spawnedArgs[1], "forward");
+  assert.equal(spawnedArgs[2], "--repo=davidcoachdev/dc-pi");
+
+  const urlArg = spawnedArgs.find((a) => a.startsWith("--url="));
+  assert.ok(urlArg, "Debe incluir --url=");
+  assert.equal(urlArg, `--url=http://127.0.0.1:${status.port}/github-webhook`);
+  assert.equal(urlArg.includes("?capability="), false, "Nunca debe embeber ?capability= en --url");
+  assert.equal(spawnedArgs.some((a) => a.includes("?capability=")), false, "Nunca debe pasar ?capability= en argv");
+
+  const secretArg = spawnedArgs.find((a) => a.startsWith("--secret="));
+  assert.equal(secretArg, `--secret=${testSecret}`, "Debe pasar --secret=<secret> para que GitHub firme X-Hub-Signature-256");
+  const passedSecret = secretArg!.slice("--secret=".length);
+  assert.equal(fs.readFileSync(ghEnvLog, "utf8"), "", "No debe pasar la variable muerta GH_WEBHOOK_SECRET");
+
+  // Verificación end-to-end del gateway HTTP usando el secreto pasado a `gh webhook forward`
+  const targetUrl = urlArg.slice("--url=".length);
+  const issueBody = JSON.stringify({
+    action: "opened",
+    issue: { number: 42, title: "HMAC e2e", body: "body", user: { login: "davidcoachdev" } },
+    repository: { full_name: "davidcoachdev/dc-pi" },
+  });
+
+  const unsignedRes = await fetch(targetUrl, {
+    method: "POST",
+    headers: { "x-github-event": "issues", "x-github-delivery": "e2e-unsigned" },
+    body: issueBody,
+  });
+  const unsignedText = await unsignedRes.text();
+  assert.equal(unsignedRes.status, 401);
+  assert.equal(unsignedText.includes(testSecret), false);
+
+  const badSigRes = await fetch(targetUrl, {
+    method: "POST",
+    headers: {
+      "x-github-event": "issues",
+      "x-github-delivery": "e2e-badsig",
+      "x-hub-signature-256": `sha256=${"0".repeat(64)}`,
+    },
+    body: issueBody,
+  });
+  const badSigText = await badSigRes.text();
+  assert.equal(badSigRes.status, 401);
+  assert.equal(badSigText.includes(testSecret), false);
+
+  const queryCapRes = await fetch(`${targetUrl}?capability=${testSecret}`, {
+    method: "POST",
+    headers: {
+      "x-github-event": "issues",
+      "x-github-delivery": "e2e-cap",
+      "x-hub-signature-256": signGitHubWebhook(passedSecret, issueBody),
+    },
+    body: issueBody,
+  });
+  const queryCapText = await queryCapRes.text();
+  assert.equal(queryCapRes.status, 401);
+  assert.equal(queryCapText.includes(testSecret), false);
+
+  const signedRes = await fetch(targetUrl, {
+    method: "POST",
+    headers: {
+      "x-github-event": "issues",
+      "x-github-delivery": "e2e-signed",
+      "x-hub-signature-256": signGitHubWebhook(passedSecret, issueBody),
+    },
+    body: issueBody,
+  });
+  const signedText = await signedRes.text();
+  assert.equal(signedRes.status, 202);
+  assert.equal(signedText.includes(testSecret), false);
+
+  // Nunca filtrar el secreto en getStatus() ni en logs de stderr
+  assert.equal(JSON.stringify(manager.getStatus()).includes(testSecret), false);
+  assert.ok(errorLogs.length > 0, "Debe registrar el error simulado de stderr");
+  assert.equal(errorLogs.join("\n").includes(testSecret), false, "stderr redactado nunca debe filtrar webhookSecret");
+  assert.equal(errorLogs.join("\n").includes("[REDACTED]"), true);
 });
 
 
