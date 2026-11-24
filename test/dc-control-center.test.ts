@@ -4,6 +4,7 @@ import type { Theme } from "@earendil-works/pi-coding-agent";
 import { CollaboratorsDatabase, getCollaboratorsDatabase } from "../src/features/dc-agents/daemon/dc-collaborators-db.ts";
 import { DcIssueDispatcher } from "../src/features/dc-agents/daemon/dc-issue-dispatcher.ts";
 import { DcControlCenterPanel } from "../src/features/dc-agents/views/dc-control-center-modal.ts";
+import { dcApprovalCoordinator } from "../src/features/dc-approval/core/dc-approval-coordinator.ts";
 
 const dummyTheme: Theme = {
   fg: (_color: string, text: string) => text,
@@ -109,6 +110,12 @@ test("DcIssueDispatcher: Doble Validación Soberana bloquea autores no permitido
   assert.equal(requestedAuthor, "hacker-test-user");
   assert.ok(resApproved, "Debe despachar si el usuario lo autorizó");
   assert.equal(resApproved?.issueNumber, randomIssueNum);
+  assert.equal(
+    getCollaboratorsDatabase().getCollaborator("hacker-test-user")?.status,
+    "PENDING",
+    "La aprobación unitaria (allowed-once / true) NO debe escalar permanentemente a ALLOW en SQLite",
+  );
+  assert.equal(dcApprovalCoordinator.getActiveGrantCount(), 0, "No deben quedar grants sin consumir en activeGrants");
 
   // Limpiar dispatch
   await dispatcher.cleanupDispatch("davidcoachdev/dc-pi", randomIssueNum);

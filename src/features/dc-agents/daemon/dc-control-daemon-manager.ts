@@ -7,9 +7,10 @@ import { dcNotifier } from "../../../integrations/dc-notify/dc-notifier.ts";
 import { resolveCurrentRepoIdentity, type RepoIdentity } from "./dc-repo-resolver.ts";
 import { DcGitHubGateway } from "./dc-github-gateway.ts";
 import { dcSuperAgentRegistry } from "../core/dc-super-agent-registry.ts";
-import { dcIssueDispatcher, type GitHubIssuePayload, type DispatchedIssueTask } from "./dc-issue-dispatcher.ts";
+import { dcIssueDispatcher, buildIssueGrantScope, type GitHubIssuePayload, type DispatchedIssueTask } from "./dc-issue-dispatcher.ts";
 import { dcPrInspectorAgent } from "./dc-pr-inspector-agent.ts";
 import { promptApprovalModal } from "../../dc-approval/views/dc-approval-modal.ts";
+import { dcApprovalCoordinator } from "../../dc-approval/core/dc-approval-coordinator.ts";
 import { dcPrDelivery } from "./dc-pr-delivery.ts";
 import { dcWorkerRunner, updateWorktreeOddRoadmap } from "./dc-worker-runner.ts";
 import { dcIssueNotifier } from "./dc-issue-notifier.ts";
@@ -140,19 +141,30 @@ export class DcControlDaemonManager {
                   dcNotifier.notify(ctx, "DC GitHub Sentinel", progress, "info");
                 }
               },
-              async (author, issueNum, title) => {
+              async (author, issueNum, title, requestId) => {
+                const grantId = requestId || `collab-${author}-${issueNum}`;
+                const grantScope = buildIssueGrantScope(repo.fullNwo, issueNum, author);
                 // Si la terminal no tiene UI interactiva, fail-closed
-                if (!ctx?.hasUI) return false;
-                // Abre el modal interactivo de aprobación
+                if (!ctx?.hasUI) {
+                  dcApprovalCoordinator.revokeGrant(grantId);
+                  return "denied";
+                }
+                // Abre el modal interactivo de aprobación unitaria (una sola vez)
                 const outcome = await promptApprovalModal(ctx, {
-                  id: `collab-${author}-${issueNum}`,
+                  id: grantId,
                   toolName: "GitHub Issue Webhook",
                   action: `Autorizar a @${author} para despacho autónomo en Issue #${issueNum}`,
                   target: title,
-                  reason: `Usuario en estado PENDING abrió el Issue #${issueNum}. Requiere reconocimiento humano para lista blanca.`,
+                  reason: `Usuario en estado PENDING abrió el Issue #${issueNum}. Requiere aprobación humana unitaria (una sola vez).`,
                   timestamp: Date.now(),
                 });
-                return outcome === "allowed-once";
+                if (outcome === "allowed-once") {
+                  // Registrar/acotar concesión unitaria al ámbito exacto de este repo/issue/autor
+                  dcApprovalCoordinator.grantOnce(grantId, { scope: grantScope });
+                  return "allowed-once";
+                }
+                dcApprovalCoordinator.revokeGrant(grantId);
+                return "denied";
               },
             );
 
@@ -326,14 +338,21 @@ export class DcControlDaemonManager {
         dcNotifier.notify(ctx, "DC Super-Agent 86", `Error en superagente Issue #${issueDetails.number}: ${errorMsg}`, "error");
         // Elevación interactiva mediante modal visual si hay UI activa
         if (ctx.hasUI) {
+          const errorRequestId = `error-${issueDetails.number}-${Date.now()}`;
           void promptApprovalModal(ctx, {
-            id: `error-${issueDetails.number}-${Date.now()}`,
+            id: errorRequestId,
             toolName: "DC Super-Agent Runner",
             action: `Atender bloqueo/fallo en Issue #${issueDetails.number}`,
             target: issueDetails.title,
             reason: `El subagente se detuvo: ${errorMsg}. Continúa manualmente; este aviso no reintenta la ejecución.`,
             timestamp: Date.now(),
-          }).catch(() => {});
+          })
+            .then(() => {
+              dcApprovalCoordinator.revokeGrant(errorRequestId);
+            })
+            .catch(() => {
+              dcApprovalCoordinator.revokeGrant(errorRequestId);
+            });
         }
       }
     } finally {
