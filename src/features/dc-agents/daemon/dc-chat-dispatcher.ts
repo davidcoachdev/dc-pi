@@ -4,6 +4,8 @@ import { scanRunningPiProcesses } from "../../dc-control/core/dc-process-scanner
 import { dcIssueDispatcher } from "./dc-issue-dispatcher.ts";
 import { dcIssueConversationalAgent } from "./dc-issue-conversational-agent.ts";
 import { dcPrInspectorAgent, type DcPrInspectorAgent } from "./dc-pr-inspector-agent.ts";
+import { dcSuperAgentRegistry, type DcSuperAgentRegistry } from "../core/dc-super-agent-registry.ts";
+import type { DcSuperAgentDefinition } from "../core/dc-super-agent-definition.ts";
 import * as fs from "node:fs";
 import * as path from "node:path";
 
@@ -22,6 +24,7 @@ export interface ChatDispatchResponse {
 
 export interface DcChatDispatcherOptions {
   prInspector?: Pick<DcPrInspectorAgent, "getActiveInspections" | "resolveConflicts">;
+  registry?: DcSuperAgentRegistry;
 }
 
 function extractPrNumber(text: string): number | null {
@@ -39,9 +42,11 @@ function extractPrNumber(text: string): number | null {
 export class DcChatDispatcher {
   private static instance?: DcChatDispatcher;
   private readonly prInspector: Pick<DcPrInspectorAgent, "getActiveInspections" | "resolveConflicts">;
+  private readonly registry: DcSuperAgentRegistry;
 
   constructor(options?: DcChatDispatcherOptions) {
     this.prInspector = options?.prInspector ?? dcPrInspectorAgent;
+    this.registry = options?.registry ?? dcSuperAgentRegistry;
   }
 
   public static getInstance(): DcChatDispatcher {
@@ -69,7 +74,16 @@ export class DcChatDispatcher {
       return this.handleSuperAgent99Query(query);
     }
 
-    // 4. Caso: Issue específico de GitHub
+    // 4. Caso: Hilo de cualquier Super-Agente federado registrado dinámicamente
+    if (threadId.startsWith("general-") || threadId.startsWith("super_agent_")) {
+      const candidateId = threadId.replace(/^general-/, "");
+      const registeredAgent = this.registry.getAgentById(candidateId);
+      if (registeredAgent) {
+        return this.handleFederatedSuperAgentQuery(registeredAgent);
+      }
+    }
+
+    // 5. Caso: Issue específico de GitHub
     return this.handleIssueQuery(query);
   }
 
@@ -116,19 +130,40 @@ Comandos y consultas soportadas en este hilo:
       };
     }
 
-    // Consulta del Gateway y Super-Agentes
-    if (q.includes("gateway") || q.includes("86") || q.includes("99") || q.includes("daemon") || q.includes("agente")) {
+    // Consulta del Gateway y Super-Agentes federados
+    if (
+      q.includes("gateway") ||
+      q.includes("86") ||
+      q.includes("99") ||
+      q.includes("daemon") ||
+      q.includes("agente") ||
+      q.includes("super")
+    ) {
       const gatewayState = daemonStatus.running ? "● **ONLINE**" : "○ **INACTIVO**";
       const tunnelState = daemonStatus.tunnelActive ? "✓ Activo" : "○ Inactivo";
       const taskCount = dispatches.length;
+      const registeredAgents = this.registry.listAgents();
+      const inspections = this.prInspector.getActiveInspections();
+      const portLabel = daemonStatus.port ? `Puerto ${daemonStatus.port}` : "Sin puerto activo";
 
       let reply = `### 📡 Gateway Ingress & Super-Agentes\n`;
-      reply += `- **Gateway GitHub**: ${gatewayState} (Puerto ${daemonStatus.port})\n`;
+      reply += `- **Gateway GitHub**: ${gatewayState} (${portLabel})\n`;
       reply += `- **Túnel Webhook**: ${tunnelState}\n`;
       reply += `- **Repositorio**: \`${daemonStatus.repo?.fullNwo || "No detectado"}\`\n\n`;
-      reply += `**Super-Agentes Registrados:**\n`;
-      reply += `- 🤖 **#86 (Issue Resolver)**: ${taskCount > 0 ? `[Ocupado: ${taskCount} misiones]` : "[En espera / Idle]"}\n`;
-      reply += `- 🤖 **#99 (PR Inspector)**: [En espera / Idle]\n`;
+      reply += `**Super-Agentes Registrados (${registeredAgents.length}):**\n`;
+
+      for (const agent of registeredAgents) {
+        const icon = agent.icon || (agent.role === "pr_inspector" ? "🕵️‍♀️" : "🤖");
+        let statusBadge = "[En espera / Idle]";
+        if (agent.agentNumber === 86 || agent.role === "issue_resolver") {
+          statusBadge = taskCount > 0 ? `[Ocupado: ${taskCount} misiones]` : "[En espera / Idle]";
+        } else if (agent.agentNumber === 99 || agent.role === "pr_inspector") {
+          statusBadge = inspections.length > 0 ? `[${inspections.length} PRs auditados]` : "[En espera / Idle]";
+        } else if (daemonStatus.running) {
+          statusBadge = "[Activo en Gateway]";
+        }
+        reply += `- ${icon} **#${agent.agentNumber} ${agent.name}** (\`${agent.role}\`): ${statusBadge} · triggers: \`${agent.eventTriggers.join(", ")}\`\n`;
+      }
 
       if (taskCount > 0) {
         reply += `\n**Misiones en curso:**\n`;
@@ -146,15 +181,33 @@ Comandos y consultas soportadas en este hilo:
     // Consulta general / resumen por defecto
     const totalPi = runningProcesses.length;
     const daemonState = daemonStatus.running ? "ONLINE" : "DETENIDO";
+    const registeredAgents = this.registry.listAgents();
+    const agentSummary = registeredAgents
+      .map((a) => `#${a.agentNumber} (${a.role})`)
+      .join(", ");
     return {
       respondent: "dc_control",
       reply: `### 🎮 DC-Control • Informe de Operaciones
 - **Sesiones de Pi activas**: ${totalPi}
-- **Daemon Hub & Receptor**: ${daemonState}
-- **Super-Agente 86**: ${dispatches.length > 0 ? `${dispatches.length} misiones activas` : "En espera de eventos"}
+- **Gateway Ingress**: ${daemonState}
+- **Super-Agentes Registrados (${registeredAgents.length})**: ${agentSummary || "Ninguno"}
+- **Misiones activas (#86)**: ${dispatches.length > 0 ? `${dispatches.length} misiones activas` : "En espera de eventos"}
 - **Repositorio**: \`${daemonStatus.repo?.fullNwo || "N/A"}\`
 
-*Escribe "ayuda" para ver comandos o dirígete al hilo específico para interactuar con un agente.*`,
+*Escribe "ayuda" para ver comandos o pregunta por "gateway" / "agentes" para ver la lista federada.*`,
+    };
+  }
+
+  private handleFederatedSuperAgentQuery(agent: DcSuperAgentDefinition): ChatDispatchResponse {
+    const icon = agent.icon || "🤖";
+    return {
+      respondent: agent.id,
+      reply:
+        `### ${icon} ${agent.name} (#${agent.agentNumber})\n` +
+        `- **Rol**: \`${agent.role}\`\n` +
+        `- **Descripción**: ${agent.description}\n` +
+        `- **Triggers**: \`${agent.eventTriggers.join(", ")}\`\n` +
+        `- **Worktree Scope**: \`${agent.worktreeScope}\``,
     };
   }
 
