@@ -22,8 +22,8 @@ after(() => {
 });
 const { DcRemoteQuestionManager, dcRemoteQuestionManager } = await import("../src/features/dc-agents/daemon/dc-remote-question.ts");
 const { DcAgentQuestionPanel } = await import("../src/features/dc-agents/views/dc-agent-question-modal.ts");
-const { registerControlDaemonCommands, registerWebhookDaemonCommands } = await import("../src/features/dc-agents/daemon/dc-control-commands.ts");
-const { dcControlDaemonManager, dcWebhookDaemonManager } = await import("../src/features/dc-agents/daemon/dc-control-daemon-manager.ts");
+const { registerControlDaemonCommands } = await import("../src/features/dc-agents/daemon/dc-control-commands.ts");
+const { dcControlDaemonManager } = await import("../src/features/dc-agents/daemon/dc-control-daemon-manager.ts");
 
 const dummyTheme: Theme = {
   fg: (_color: string, text: string) => text,
@@ -45,7 +45,7 @@ test("S5: public supervisor uses the sidebar-published context, serializes quest
     return timer;
   });
   const clear = t.mock.method(globalThis, "clearInterval", (value: unknown) => { assert.equal(value, timer); });
-  const stop = t.mock.method(dcWebhookDaemonManager, "stop", async () => {});
+  const stop = t.mock.method(dcControlDaemonManager, "stop", async () => {});
   let opens = 0;
   let component: { handleInput(data: string): void } | undefined;
   const ctx = { hasUI: true, mode: "tui", ui: {
@@ -61,7 +61,7 @@ test("S5: public supervisor uses the sidebar-published context, serializes quest
   const packet = dcRemoteQuestionManager.postQuestion({ id: "t3-supervisor", issueNumber: 21,
     issueTitle: "Integración", contextSummary: "Esperando humano", question: "¿Seguimos?", options: ["Sí", "No"] });
   try {
-    registerWebhookDaemonCommands(pi);
+    registerControlDaemonCommands(pi);
     assert.equal(unrefs, 1);
     delete globals[contextKey];
     await tick();

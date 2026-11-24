@@ -1,7 +1,7 @@
 # Responder consultas del Super-Agent
 
 Los workers publican preguntas mediante `dcRemoteQuestionManager`. El supervisor de
-`registerWebhookDaemonCommands` consulta `getPendingQuestions()` y abre
+`registerControlDaemonCommands` consulta `getPendingQuestions()` y abre
 `promptAgentQuestionModal` usando el contexto TUI que el sidebar ya publica en
 `Symbol.for("dc.sidebar.ctx")`. No modifica el sidebar ni inicia un daemon para
 mostrar preguntas. Sin contexto, sin UI o fuera de modo TUI, deja la consulta pendiente.

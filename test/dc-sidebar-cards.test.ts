@@ -7,6 +7,9 @@ import { syncBuiltinESMExports } from "node:module";
 import { getEffectiveTodoTasks, createTodoCard } from "../src/features/dc-sidebar/components/dc-sidebar-todo-card.ts";
 import { getEffectiveAgents, createAgentsCard, openSubagentsView } from "../src/features/dc-sidebar/components/dc-sidebar-agents-card.ts";
 import { createStatusCard, TaxiUnitList } from "../src/features/dc-sidebar/components/dc-sidebar-status-card.ts";
+import { createSuperAgentsSidebarCard } from "../src/features/dc-sidebar/components/dc-sidebar-super-agents-card.ts";
+import { DcSuperAgentRegistry } from "../src/features/dc-agents/core/dc-super-agent-registry.ts";
+import { createSuperAgent } from "../src/features/dc-agents/core/dc-super-agent-factory.ts";
 import { getCachedAccountQuotas, clearCachedQuotasForTesting } from "../src/features/dc-sidebar/providers/dc-quota-provider.ts";
 import {
   formatFleetSummaryText,
@@ -388,6 +391,102 @@ test("TaxiUnitList: pestañas Activas, Taller y VIP filtran correctamente las un
   assert.ok(list.children.some((c) => c.options.title.includes("uc01")));
   assert.ok(!list.children.some((c) => c.options.title.includes("ac01")));
   assert.ok(!list.children.some((c) => c.options.title.includes("ac03")));
+});
+
+function stripAnsi(text: string): string {
+  return text.replace(/\x1b\[[0-9;]*m/g, "");
+}
+
+test("DcSuperAgentsSidebarCard: renderiza sub-tabs [#86], [#99], dinámicos y [⚙ CONFIG] y permite cambiar entre vistas", () => {
+  const registry = new DcSuperAgentRegistry({ withDefaults: true });
+  createSuperAgent({
+    agentNumber: 42,
+    name: "Docs Auditor",
+    role: "docs_auditor",
+    description: "Revisa consistencia de documentación",
+    eventTriggers: ["pull_request", "chat"],
+    icon: "📚",
+    registry,
+  });
+
+  let renderRequests = 0;
+  const card = createSuperAgentsSidebarCard(() => {
+    renderRequests++;
+  }, registry);
+
+  // 1. Sub-tabs construidas dinámicamente desde el registry
+  const subTabs = card.getSubTabs();
+  assert.deepEqual(
+    subTabs.map((t) => t.label),
+    ["[#42]", "[#86]", "[#99]", "[⚙ CONFIG]"],
+  );
+  assert.equal(card.getActiveSubTab(), "agent:86");
+
+  // 2. Render por defecto: barra de sub-tabs + vista en vivo de #86 + lista federada Gateway Ingress
+  const defaultLines = card.render(64).map(stripAnsi);
+  const defaultRendered = defaultLines.join("\n");
+  assert.match(defaultLines[3] ?? "", /\[#42\]/);
+  assert.match(defaultLines[3] ?? "", /\[#86\]/);
+  assert.match(defaultLines[3] ?? "", /\[#99\]/);
+  assert.match(defaultLines[3] ?? "", /\[⚙ CONFIG\]/);
+  assert.match(defaultRendered, /Misión #86:/);
+  assert.match(defaultRendered, /Gateway Ingress:/);
+  assert.match(defaultRendered, /Agente #86/);
+  assert.match(defaultRendered, /Agente #99/);
+  assert.match(defaultRendered, /#42 Docs Auditor/);
+
+  // 3. Clic de ratón en la sub-tab [#99] sobre la fila de pestañas (y = 3)
+  const tabRow = defaultLines[3]!;
+  const col99 = tabRow.indexOf("[#99]") + 2;
+  const click99 = card.handleMouse({ type: "click", button: "left", x: col99, y: 3 } as any);
+  assert.equal(click99?.handled, true);
+  assert.equal(card.getActiveSubTab(), "agent:99");
+  assert.ok(renderRequests >= 1);
+
+  const rendered99 = stripAnsi(card.render(64).join("\n"));
+  assert.match(rendered99, /Inspección #99:/);
+  assert.match(rendered99, /pr_inspector/);
+  assert.doesNotMatch(rendered99, /Misión #86:/);
+
+  // 4. Clic de ratón en la sub-tab [⚙ CONFIG]
+  const lines99 = card.render(64).map(stripAnsi);
+  const colConfig = lines99[3]!.indexOf("[⚙ CONFIG]") + 3;
+  const clickConfig = card.handleMouse({ type: "click", button: "left", x: colConfig, y: 3 } as any);
+  assert.equal(clickConfig?.handled, true);
+  assert.equal(card.getActiveSubTab(), "config");
+
+  const renderedConfig = stripAnsi(card.render(64).join("\n"));
+  assert.match(renderedConfig, /Salud de Binarios/);
+  assert.match(renderedConfig, /GitHub CLI \(gh\):/);
+  assert.match(renderedConfig, /Daemon Hub:/);
+  assert.match(renderedConfig, /Gateway Ingress:/);
+  assert.match(renderedConfig, /Receptor Local:/);
+  assert.match(renderedConfig, /\[\/dc-control ↗\]/);
+  assert.match(renderedConfig, /\[Iniciar\]|\[Detener\]/);
+  assert.doesNotMatch(renderedConfig, /Misión #86:/);
+  assert.doesNotMatch(renderedConfig, /Inspección #99:/);
+
+  // 5. Cambio programático y por teclado hacia agente dinámico #42 y fallback si se desregistra
+  assert.equal(card.setActiveSubTab("#42"), true);
+  assert.equal(card.getActiveSubTab(), "agent:42");
+  const rendered42 = stripAnsi(card.render(64).join("\n"));
+  assert.match(rendered42, /#42 Docs Auditor/);
+  assert.match(rendered42, /Misión #42:/);
+  assert.match(rendered42, /Revisa consistencia de documentación/);
+
+  assert.equal(card.setActiveSubTab("agent:999"), false);
+  assert.equal(card.getActiveSubTab(), "agent:42");
+
+  // Navegación por teclado: Tab avanza a #86, 'c' salta a config
+  card.handleInput("\t");
+  assert.equal(card.getActiveSubTab(), "agent:86");
+  card.handleInput("c");
+  assert.equal(card.getActiveSubTab(), "config");
+
+  // Al desregistrar #42 estando activo, hace fallback al agente #86
+  assert.equal(card.setActiveSubTab("agent:42"), true);
+  registry.unregisterAgent(42);
+  assert.equal(card.getActiveSubTab(), "agent:86");
 });
 
 

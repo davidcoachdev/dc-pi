@@ -586,5 +586,3 @@ export class DcControlDaemonManager {
 }
 
 export const dcControlDaemonManager = DcControlDaemonManager.getInstance();
-export const dcWebhookDaemonManager = dcControlDaemonManager;
-export const DcWebhookDaemonManager = DcControlDaemonManager;
