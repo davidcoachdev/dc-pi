@@ -91,9 +91,9 @@ test("public daemon preserves one launch and records actual worker/delivery outc
   syncBuiltinESMExports();
   const { getCollaboratorsDatabase } = await import("../src/features/dc-agents/daemon/dc-collaborators-db.ts");
   getCollaboratorsDatabase().setCollaborator("fixture-author", "ALLOW", "CONTRIBUTOR", "fixture");
-  const { DcControlDaemonManager, DcWebhookDaemonManager } = await import("../src/features/dc-agents/daemon/dc-control-daemon-manager.ts");
+  const { DcControlDaemonManager } = await import("../src/features/dc-agents/daemon/dc-control-daemon-manager.ts");
   const manager = DcControlDaemonManager.getInstance();
-  const { registerControlDaemonCommands, registerWebhookDaemonCommands } = await import("../src/features/dc-agents/daemon/dc-control-commands.ts");
+  const { registerControlDaemonCommands } = await import("../src/features/dc-agents/daemon/dc-control-commands.ts");
   const { dcIssueDispatcher } = await import("../src/features/dc-agents/daemon/dc-issue-dispatcher.ts");
   const commands = new Map<string, any>();
   let shutdown: any;

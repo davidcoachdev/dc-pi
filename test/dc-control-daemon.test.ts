@@ -131,7 +131,7 @@ test("receiver authenticates before parsing or deduplication and requires reposi
   } finally { await receiver.stop(); }
 });
 
-test("dc-webhook-receiver: levanta servidor loopback, procesa webhook y deduplica entregas", async () => {
+test("dc-control-receiver: levanta servidor loopback, procesa webhook y deduplica entregas", async () => {
   let receivedIssue: any = null;
 
   const receiver = new DcControlReceiver({

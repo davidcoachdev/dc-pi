@@ -181,5 +181,3 @@ export function registerControlDaemonCommands(pi: ExtensionAPI): void {
     await dcControlDaemonManager.stop();
   });
 }
-
-export const registerWebhookDaemonCommands = registerControlDaemonCommands;
