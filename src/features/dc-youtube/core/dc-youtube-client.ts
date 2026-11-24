@@ -15,6 +15,143 @@ import { redactSecrets } from "../../dc-websearch/core/dc-websearch-security.ts"
 
 const execFileAsync = promisify(execFile);
 
+const ALLOWED_YOUTUBE_HOSTS = new Set([
+  "youtube.com",
+  "www.youtube.com",
+  "m.youtube.com",
+  "music.youtube.com",
+  "youtu.be",
+  "youtube-nocookie.com",
+  "www.youtube-nocookie.com",
+]);
+
+const YOUTUBE_VIDEO_ID_RE = /^[A-Za-z0-9_-]{11}$/;
+const SCHEME_PREFIX_RE = /^[a-zA-Z][a-zA-Z0-9+.-]*:/;
+const UNSAFE_URL_CHARS_RE = /[\s\x00-\x1f\x7f]/;
+const VALID_SUB_LANG_RE = /^[a-zA-Z0-9_.,*-]{1,64}$/;
+
+/**
+ * Valida estrictamente que una URL apunte a un host oficial de YouTube sobre `https:`,
+ * bloqueando SSRF hacia metadata cloud, loopback, IPs privadas, credenciales embebidas
+ * y esquemas peligrosos (`file://`, `ftp://`, `http://`, etc.).
+ */
+export function validateYoutubeUrl(rawUrl: string): string {
+  const trimmed = rawUrl.trim();
+  if (!trimmed || UNSAFE_URL_CHARS_RE.test(trimmed)) {
+    throw new Error("URL de YouTube vacía o contiene caracteres inválidos");
+  }
+
+  let parsed: URL;
+  try {
+    parsed = new URL(trimmed);
+  } catch (err) {
+    throw new Error(
+      `URL de YouTube inválida: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+
+  if (parsed.protocol !== "https:") {
+    throw new Error(
+      `Esquema bloqueado en dc-youtube (SSRF): solo se permite https:, recibido "${parsed.protocol}"`,
+    );
+  }
+
+  if (parsed.username || parsed.password) {
+    throw new Error("Credenciales embebidas en URL de YouTube bloqueadas por seguridad");
+  }
+
+  if (parsed.port !== "") {
+    throw new Error(`Puerto personalizado bloqueado en URL de YouTube: ${parsed.port}`);
+  }
+
+  const host = parsed.hostname.toLowerCase();
+  if (!ALLOWED_YOUTUBE_HOSTS.has(host)) {
+    throw new Error(
+      `Host bloqueado en dc-youtube (SSRF): solo se permiten dominios oficiales de YouTube, recibido "${parsed.hostname}"`,
+    );
+  }
+
+  return parsed.toString();
+}
+
+/**
+ * Valida una URL oficial de YouTube o un ID de video de 11 caracteres y devuelve
+ * la URL canónica validada sobre `https:`.
+ */
+export function validateYoutubeUrlOrId(urlOrId: string): string {
+  const trimmed = urlOrId.trim();
+  if (!trimmed || UNSAFE_URL_CHARS_RE.test(trimmed)) {
+    throw new Error("URL o ID de YouTube vacío o con caracteres inválidos");
+  }
+
+  if (trimmed.includes("://") || SCHEME_PREFIX_RE.test(trimmed)) {
+    return validateYoutubeUrl(trimmed);
+  }
+
+  if (YOUTUBE_VIDEO_ID_RE.test(trimmed) && !trimmed.startsWith("--")) {
+    return validateYoutubeUrl(
+      `https://www.youtube.com/watch?v=${encodeURIComponent(trimmed)}`,
+    );
+  }
+
+  throw new Error(
+    `URL o ID de YouTube inválido o bloqueado por seguridad: "${trimmed}"`,
+  );
+}
+
+function validateSubtitleLanguage(rawLang: string): string {
+  const clean = rawLang.trim();
+  if (!clean || clean.startsWith("-") || !VALID_SUB_LANG_RE.test(clean)) {
+    throw new Error(`Código de idioma de subtítulos inválido: "${rawLang}"`);
+  }
+  return clean;
+}
+
+export function buildYtDlpSearchArgs(query: string, limit = 5): string[] {
+  const cleanQuery = query.trim();
+  if (!cleanQuery) {
+    throw new Error("La consulta de búsqueda de YouTube no puede estar vacía");
+  }
+  const safeLimit = Number.isFinite(limit)
+    ? Math.min(Math.max(1, Math.floor(limit)), 10)
+    : 5;
+  return [
+    "--dump-json",
+    "--flat-playlist",
+    "--no-warnings",
+    "--",
+    `ytsearch${safeLimit}:${cleanQuery}`,
+  ];
+}
+
+export function buildYtDlpVideoDetailsArgs(urlOrId: string): string[] {
+  const target = validateYoutubeUrlOrId(urlOrId);
+  return ["--dump-json", "--skip-download", "--no-warnings", "--", target];
+}
+
+export function buildYtDlpTranscriptArgs(
+  urlOrId: string,
+  lang: string,
+  outputTemplate: string,
+): string[] {
+  const target = validateYoutubeUrlOrId(urlOrId);
+  const safeLang = validateSubtitleLanguage(lang);
+  return [
+    "--write-subs",
+    "--write-auto-subs",
+    "--sub-lang",
+    safeLang,
+    "--sub-format",
+    "vtt/srt",
+    "--skip-download",
+    "--no-warnings",
+    "-o",
+    outputTemplate,
+    "--",
+    target,
+  ];
+}
+
 let cachedYtDlpAvailable: boolean | null = null;
 
 /**
@@ -55,15 +192,13 @@ export function formatDuration(seconds?: number): string {
 }
 
 export async function searchYoutube(options: YoutubeSearchOptions): Promise<YoutubeSearchResultItem[]> {
-  const limit = Math.min(25, Math.max(1, options.limit ?? 5));
-  const query = options.query.trim();
-  const searchPrefix = `ytsearch${limit}:${query}`;
+  const args = buildYtDlpSearchArgs(options.query, options.limit ?? 5);
   const timeout = options.timeoutMs ?? 20000;
 
   try {
     const { stdout } = await execFileAsync(
       "yt-dlp",
-      ["--dump-json", "--flat-playlist", "--no-warnings", searchPrefix],
+      args,
       { timeout, maxBuffer: 10 * 1024 * 1024, encoding: "utf8" },
     );
 
@@ -100,12 +235,13 @@ export async function searchYoutube(options: YoutubeSearchOptions): Promise<Yout
 }
 
 export async function getVideoDetails(urlOrId: string, timeoutMs = 25000): Promise<YoutubeVideoDetails> {
-  const target = urlOrId.startsWith("http") ? urlOrId : `https://www.youtube.com/watch?v=${urlOrId}`;
+  const target = validateYoutubeUrlOrId(urlOrId);
+  const args = buildYtDlpVideoDetailsArgs(target);
 
   try {
     const { stdout } = await execFileAsync(
       "yt-dlp",
-      ["--dump-json", "--skip-download", "--no-warnings", target],
+      args,
       { timeout: timeoutMs, maxBuffer: 15 * 1024 * 1024, encoding: "utf8" },
     );
 
@@ -146,32 +282,18 @@ export async function getVideoDetails(urlOrId: string, timeoutMs = 25000): Promi
 }
 
 export async function getTranscript(options: YoutubeTranscriptOptions): Promise<YoutubeTranscriptResult> {
-  const target = options.urlOrId.startsWith("http")
-    ? options.urlOrId
-    : `https://www.youtube.com/watch?v=${options.urlOrId}`;
-
-  const lang = options.language ?? "es,en";
+  const target = validateYoutubeUrlOrId(options.urlOrId);
+  const lang = validateSubtitleLanguage(options.language ?? "es,en");
   const timeout = options.timeoutMs ?? 35000;
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "dc-yt-transcript-"));
 
   try {
     const outputTemplate = path.join(tmpDir, "%(id)s.%(ext)s");
+    const args = buildYtDlpTranscriptArgs(target, lang, outputTemplate);
 
     await execFileAsync(
       "yt-dlp",
-      [
-        "--write-subs",
-        "--write-auto-subs",
-        "--sub-lang",
-        lang,
-        "--sub-format",
-        "vtt/srt",
-        "--skip-download",
-        "--no-warnings",
-        "-o",
-        outputTemplate,
-        target,
-      ],
+      args,
       { timeout, encoding: "utf8" },
     );
 

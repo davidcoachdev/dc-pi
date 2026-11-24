@@ -2,8 +2,10 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { markdownToSpokenText } from "../core/dc-audio-cleaner.ts";
-import { synthesizeAudio } from "../core/dc-audio-synthesizer.ts";
-import type { AudioTtsEngine } from "../core/dc-audio-types.ts";
+import {
+  resolveConfinedAudioPath,
+  synthesizeAudio,
+} from "../core/dc-audio-synthesizer.ts";
 
 export function registerDcAudioTools(pi: ExtensionAPI): void {
   // 1. Tool Markdown to Audio
@@ -23,8 +25,19 @@ export function registerDcAudioTools(pi: ExtensionAPI): void {
     } as any,
     async execute(_id, params: any, _signal, _onUpdate, ctx): Promise<any> {
       try {
-        const cwd = ctx?.cwd ?? process.cwd();
-        const resolvedPath = path.isAbsolute(params.path) ? params.path : path.resolve(cwd, params.path);
+        const cwd = path.resolve(ctx?.cwd ?? process.cwd());
+        const resolvedPath = resolveConfinedAudioPath(
+          String(params.path ?? ""),
+          cwd,
+          "archivo Markdown de entrada (cwd o tmpdir)",
+        );
+        const confinedOutputPath = params.outputPath
+          ? resolveConfinedAudioPath(
+              String(params.outputPath),
+              cwd,
+              "ruta de salida de audio (cwd o tmpdir)",
+            )
+          : undefined;
 
         if (!fs.existsSync(resolvedPath)) {
           throw new Error(`Archivo no encontrado: ${resolvedPath}`);
@@ -39,7 +52,7 @@ export function registerDcAudioTools(pi: ExtensionAPI): void {
 
         const res = await synthesizeAudio({
           text: spokenText,
-          outputPath: params.outputPath,
+          outputPath: confinedOutputPath,
           language: params.language,
           speed: params.speed,
           cwd,
@@ -79,10 +92,17 @@ export function registerDcAudioTools(pi: ExtensionAPI): void {
     } as any,
     async execute(_id, params: any, _signal, _onUpdate, ctx): Promise<any> {
       try {
-        const cwd = ctx?.cwd ?? process.cwd();
+        const cwd = path.resolve(ctx?.cwd ?? process.cwd());
+        const confinedOutputPath = params.outputPath
+          ? resolveConfinedAudioPath(
+              String(params.outputPath),
+              cwd,
+              "ruta de salida de audio (cwd o tmpdir)",
+            )
+          : undefined;
         const res = await synthesizeAudio({
           text: params.text,
-          outputPath: params.outputPath,
+          outputPath: confinedOutputPath,
           language: params.language,
           speed: params.speed,
           cwd,

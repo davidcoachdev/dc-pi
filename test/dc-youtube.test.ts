@@ -2,10 +2,17 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import {
+  buildYtDlpSearchArgs,
+  buildYtDlpTranscriptArgs,
+  buildYtDlpVideoDetailsArgs,
   cleanVttText,
   formatDuration,
+  getTranscript,
+  getVideoDetails,
   isYtDlpAvailable,
   resetYtDlpAvailabilityCache,
+  validateYoutubeUrl,
+  validateYoutubeUrlOrId,
 } from "../src/features/dc-youtube/core/dc-youtube-client.ts";
 import dcYoutubeExtension from "../src/features/dc-youtube/dc-youtube.ts";
 
@@ -91,4 +98,112 @@ test("dcYoutubeExtension registers all 4 YouTube tools and /dc-youtube command",
   }
 
   assert.ok(registeredCommands.includes("dc-youtube"));
+});
+
+test("dc-youtube: validateYoutubeUrl and validateYoutubeUrlOrId accept official YouTube HTTPS URLs and bare IDs", () => {
+  const validUrls = [
+    "https://youtube.com/watch?v=dQw4w9WgXcQ",
+    "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+    "https://m.youtube.com/watch?v=dQw4w9WgXcQ",
+    "https://music.youtube.com/watch?v=dQw4w9WgXcQ",
+    "https://youtu.be/dQw4w9WgXcQ",
+    "https://youtube-nocookie.com/embed/dQw4w9WgXcQ",
+    "https://www.youtube-nocookie.com/embed/dQw4w9WgXcQ",
+  ];
+
+  for (const url of validUrls) {
+    assert.equal(validateYoutubeUrl(url), url);
+    assert.equal(validateYoutubeUrlOrId(url), url);
+  }
+
+  assert.equal(
+    validateYoutubeUrlOrId("dQw4w9WgXcQ"),
+    "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+  );
+});
+
+test("dc-youtube: rejects SSRF, non-https schemes, credentials, metadata IPs, non-YouTube domains and flag injection", async () => {
+  const forbiddenInputs = [
+    "http://www.youtube.com/watch?v=dQw4w9WgXcQ",
+    "file:///etc/passwd",
+    "ftp://www.youtube.com/watch?v=dQw4w9WgXcQ",
+    "javascript:alert(1)",
+    "https://user:pass@www.youtube.com/watch?v=dQw4w9WgXcQ",
+    "https://evil.com/watch?v=dQw4w9WgXcQ",
+    "https://youtube.com.evil.com/watch?v=dQw4w9WgXcQ",
+    "https://127.0.0.1/watch?v=dQw4w9WgXcQ",
+    "https://localhost/watch?v=dQw4w9WgXcQ",
+    "https://[::1]/watch?v=dQw4w9WgXcQ",
+    "http://169.254.169.254/latest/meta-data",
+    "https://169.254.169.254/latest/meta-data",
+    "https://www.youtube.com:8443/watch?v=dQw4w9WgXcQ",
+    "--exec=id",
+    "--version",
+    "-o /tmp/pwned",
+  ];
+
+  for (const bad of forbiddenInputs) {
+    assert.throws(
+      () => validateYoutubeUrlOrId(bad),
+      /bloquead|SSRF|inválid|Esquema|Credenciales|Host|Puerto/i,
+      `validateYoutubeUrlOrId should reject ${bad}`,
+    );
+  }
+
+  await assert.rejects(
+    () => getVideoDetails("http://169.254.169.254/latest/meta-data"),
+    /bloquead|SSRF|Esquema|Host/i,
+  );
+
+  await assert.rejects(
+    () => getTranscript({ urlOrId: "https://evil.com/video" }),
+    /bloquead|SSRF|Host/i,
+  );
+
+  await assert.rejects(
+    () => getTranscript({ urlOrId: "file:///etc/passwd" }),
+    /bloquead|SSRF|Esquema/i,
+  );
+});
+
+test("dc-youtube: yt-dlp argument builders always place '--' immediately before target URL/query", () => {
+  const detailsArgs = buildYtDlpVideoDetailsArgs("https://youtu.be/dQw4w9WgXcQ");
+  const detailsSep = detailsArgs.indexOf("--");
+  assert.ok(detailsSep >= 0, "video details argv must contain '--'");
+  assert.equal(detailsSep, detailsArgs.length - 2);
+  assert.equal(detailsArgs[detailsSep + 1], "https://youtu.be/dQw4w9WgXcQ");
+
+  const transcriptArgs = buildYtDlpTranscriptArgs(
+    "dQw4w9WgXcQ",
+    "es,en",
+    "/tmp/out/%(id)s.%(ext)s",
+  );
+  const transcriptSep = transcriptArgs.indexOf("--");
+  assert.ok(transcriptSep >= 0, "transcript argv must contain '--'");
+  assert.equal(transcriptSep, transcriptArgs.length - 2);
+  assert.equal(
+    transcriptArgs[transcriptSep + 1],
+    "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+  );
+
+  const searchArgs = buildYtDlpSearchArgs("--exec=whoami typescript", 3);
+  const searchSep = searchArgs.indexOf("--");
+  assert.ok(searchSep >= 0, "search argv must contain '--'");
+  assert.equal(searchSep, searchArgs.length - 2);
+  assert.equal(searchArgs[searchSep + 1], "ytsearch3:--exec=whoami typescript");
+
+  assert.throws(
+    () => buildYtDlpTranscriptArgs("dQw4w9WgXcQ", "--exec=id", "/tmp/out/%(id)s.%(ext)s"),
+    /idioma de subtítulos inválido/i,
+  );
+});
+
+test("dc-youtube: buildYtDlpSearchArgs guards NaN/non-finite limits and clamps integer range 1..10", () => {
+  assert.equal(buildYtDlpSearchArgs("typescript", Number.NaN).at(-1), "ytsearch5:typescript");
+  assert.equal(buildYtDlpSearchArgs("typescript", Number.POSITIVE_INFINITY).at(-1), "ytsearch5:typescript");
+  assert.equal(buildYtDlpSearchArgs("typescript", Number.NEGATIVE_INFINITY).at(-1), "ytsearch5:typescript");
+  assert.equal(buildYtDlpSearchArgs("typescript", 0).at(-1), "ytsearch1:typescript");
+  assert.equal(buildYtDlpSearchArgs("typescript", -4).at(-1), "ytsearch1:typescript");
+  assert.equal(buildYtDlpSearchArgs("typescript", 3.9).at(-1), "ytsearch3:typescript");
+  assert.equal(buildYtDlpSearchArgs("typescript", 99).at(-1), "ytsearch10:typescript");
 });
