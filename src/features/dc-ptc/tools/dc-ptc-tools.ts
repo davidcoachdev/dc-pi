@@ -3,7 +3,13 @@
  */
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { runPtcProgram } from "../core/dc-ptc-runner.ts";
+import {
+  runPtcProgram,
+  clampPtcTimeoutMs,
+  PTC_MIN_TIMEOUT_MS,
+  PTC_MAX_TIMEOUT_MS,
+  PTC_DEFAULT_TIMEOUT_MS,
+} from "../core/dc-ptc-runner.ts";
 import { classifyNativeToolScan } from "../../dc-scan-guard/dc-scan-guard.ts";
 
 export function registerDcPtcTools(pi: ExtensionAPI): void {
@@ -22,12 +28,12 @@ export function registerDcPtcTools(pi: ExtensionAPI): void {
         },
         timeoutMs: {
           type: "number",
-          description: "Tiempo máximo de ejecución en milisegundos (default: 30000 = 30 segundos).",
+          description: `Tiempo máximo de ejecución en milisegundos (min: ${PTC_MIN_TIMEOUT_MS}, max: ${PTC_MAX_TIMEOUT_MS}, default: ${PTC_DEFAULT_TIMEOUT_MS}).`,
         },
       },
       required: ["code"],
     } as any,
-    async execute(_id, params: any, _signal, _onUpdate, ctx): Promise<any> {
+    async execute(_id, params: any, signal, _onUpdate, ctx): Promise<any> {
       try {
         const cwd = ctx?.cwd ?? process.cwd();
         const guardDecision = classifyNativeToolScan("dc_ptc_run", {
@@ -42,10 +48,12 @@ export function registerDcPtcTools(pi: ExtensionAPI): void {
           };
         }
 
+        const timeoutMs = clampPtcTimeoutMs(params?.timeoutMs);
         const result = await runPtcProgram({
           code: params.code,
           cwd,
-          timeoutMs: params.timeoutMs,
+          timeoutMs,
+          signal,
         });
 
         const lines: string[] = [

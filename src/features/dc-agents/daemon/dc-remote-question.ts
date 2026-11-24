@@ -1,6 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { getDcStudioDir } from "../../../core/dc-paths.ts";
+import { getDcAgentsPaths } from "../../../core/dc-paths.ts";
 
 export interface AgentQuestionPacket {
   id: string; // uuid único de la pregunta
@@ -24,7 +24,7 @@ export interface AgentAnswerPacket {
 
 /**
  * Gestor IPC de Consultas Remotas entre Workers en Background y la Sesión Principal de Pi.
- * Utiliza un directorio atómico de buzón en ~/.pi/agent/dc-studio/questions/ y answers/.
+ * Utiliza un directorio atómico de buzón en ~/.pi/agent/dc-studio/agents/questions/ y answers/.
  */
 export class DcRemoteQuestionManager {
   private static instance?: DcRemoteQuestionManager;
@@ -32,9 +32,14 @@ export class DcRemoteQuestionManager {
   private answersDir: string;
 
   constructor(customBaseDir?: string) {
-    const base = customBaseDir || getDcStudioDir();
-    this.questionsDir = path.join(base, "questions");
-    this.answersDir = path.join(base, "answers");
+    if (customBaseDir) {
+      this.questionsDir = path.join(customBaseDir, "questions");
+      this.answersDir = path.join(customBaseDir, "answers");
+    } else {
+      const agentPaths = getDcAgentsPaths();
+      this.questionsDir = agentPaths.questionsDir;
+      this.answersDir = agentPaths.answersDir;
+    }
     this.ensureDirs();
   }
 

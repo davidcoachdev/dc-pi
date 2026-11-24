@@ -3,7 +3,10 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { randomUUID } from "node:crypto";
 import { dcNotifier } from "../../../integrations/dc-notify/dc-notifier.ts";
+import { getPiCodingAgentDir, resolveSettingsFilePath } from "../../../core/dc-paths.ts";
 import { getSidebarContext } from "../dc-sidebar.ts";
+
+export { resolveSettingsFilePath };
 
 export interface ProfileEntry {
   name: string;
@@ -29,17 +32,10 @@ export function resolveProfilesFilePath(): string {
   const gentleAiPath = path.join(os.homedir(), ".pi", "gentle-ai", "profiles.json");
   if (fs.existsSync(gentleAiPath)) return gentleAiPath;
 
-  const agentPath = path.join(os.homedir(), ".pi", "agent", "profiles.json");
+  const agentPath = path.join(getPiCodingAgentDir(), "profiles.json");
   if (fs.existsSync(agentPath)) return agentPath;
 
   return gentleAiPath;
-}
-
-/**
- * Resuelve la ruta a settings.json de Pi.
- */
-export function resolveSettingsFilePath(): string {
-  return path.join(os.homedir(), ".pi", "agent", "settings.json");
 }
 
 /**

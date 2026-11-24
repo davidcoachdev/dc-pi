@@ -1,5 +1,4 @@
 import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { openDcModal } from "../../ui/dc-modal.ts";
@@ -9,13 +8,9 @@ import { syncLiveCliProxyModels } from "./core/dc-models-sync.ts";
 import { dcNotifier } from "../../integrations/dc-notify/dc-notifier.ts";
 import { DcModelsPanel, type ModelAccountTab, type ModelItem, type EffortLevel } from "./dc-models-panel.ts";
 import { resolveRecommendedContextWindow, resolveSafeMaxTokens } from "./core/dc-model-calibration.ts";
-import { getPiCodingAgentDir, writeFileAtomicSync } from "../../core/dc-paths.ts";
+import { getPiCodingAgentDir, resolveSettingsFilePath, writeFileAtomicSync } from "../../core/dc-paths.ts";
 
-export function resolveSettingsFilePath(): string {
-  return path.join(getPiCodingAgentDir(), "settings.json");
-}
-
-export const SETTINGS_FILE = path.join(os.homedir(), ".pi/agent/settings.json");
+export { resolveSettingsFilePath };
 
 /**
  * Guarda el modelo y nivel de thinking seleccionados en settings.json para que

@@ -7,8 +7,7 @@
  */
 
 import * as fs from "node:fs";
-import * as path from "node:path";
-import * as os from "node:os";
+import { ensureDirectory, getDcAgentsPaths } from "../../../core/dc-paths.ts";
 import type {
   DcAgentsConfigFile,
   DcEphemeralToolPreset,
@@ -17,19 +16,10 @@ import type {
 import { DEFAULT_DC_AGENTS_CONFIG } from "./dc-ephemeral-types.ts";
 import { isVipAccount } from "./dc-taxi-accounts.ts";
 
-const CONFIG_FILE_PATH = path.join(os.homedir(), ".pi", "agent", "dc-studio", "dc-agents.json");
-
-function ensureDirectory(targetPath: string): void {
-  const dir = path.dirname(targetPath);
-  if (!fs.existsSync(dir)) {
-    fs.mkdirSync(dir, { recursive: true });
-  }
-}
-
 /**
- * Carga la configuración del subsistema de agentes desde dc-studio/dc-agents.json.
+ * Carga la configuración del subsistema de agentes desde dc-studio/agents/config.json.
  */
-export function loadDcAgentsConfig(configPath: string = CONFIG_FILE_PATH): DcAgentsConfigFile {
+export function loadDcAgentsConfig(configPath: string = getDcAgentsPaths().config): DcAgentsConfigFile {
   if (!fs.existsSync(configPath)) {
     return { ...DEFAULT_DC_AGENTS_CONFIG };
   }
@@ -59,11 +49,11 @@ export function loadDcAgentsConfig(configPath: string = CONFIG_FILE_PATH): DcAge
 }
 
 /**
- * Guarda la configuración persistente en dc-studio/dc-agents.json.
+ * Guarda la configuración persistente en dc-studio/agents/config.json.
  */
 export function saveDcAgentsConfig(
   config: DcAgentsConfigFile,
-  configPath: string = CONFIG_FILE_PATH,
+  configPath: string = getDcAgentsPaths().config,
 ): void {
   try {
     ensureDirectory(configPath);

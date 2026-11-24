@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import * as os from "node:os";
 import type { Theme, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { getDcAgentsPaths } from "../../../core/dc-paths.ts";
 import {
   Key, matchesKey, truncateToWidth, visibleWidth,
   type Component, type TUI, type TuiMouseEvent, type TuiMouseEventResult,
@@ -371,7 +371,7 @@ export class DcControlCenterPanel implements Component {
     // Si no hay dispatches en vuelo y no estamos en modo simulado, buscar worktrees en disco
     if (!this.simulatedMode && items.filter((i) => i.kind === "task").length === 0) {
       try {
-        const wtBase = path.join(os.homedir(), ".pi", "agent", "dc-studio", "agents", "worktrees");
+        const wtBase = getDcAgentsPaths().worktreesDir;
         if (fs.existsSync(wtBase)) {
           const repos = fs.readdirSync(wtBase);
           for (const repo of repos) {

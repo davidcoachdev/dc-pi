@@ -1,9 +1,9 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import * as os from "node:os";
 import * as net from "node:net";
 import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
+import { getDcControlPaths } from "../../../core/dc-paths.ts";
 import { getCanonicalDcSupervisorPaths } from "./dc-supervisor-paths.ts";
 
 const currentDir = path.dirname(fileURLToPath(import.meta.url));
@@ -55,7 +55,7 @@ export class DcSupervisorLauncher {
     const candidates = [
       path.join(currentDir, "dc-control-daemon-hub.js"),
       path.join(process.cwd(), ".test-build", "src", "features", "dc-control", "core", "dc-control-daemon-hub.js"),
-      path.join(os.homedir(), ".pi", "agent", "dc-studio", "control", "daemon-entry.js"),
+      getDcControlPaths().daemonEntry,
     ];
 
     for (const cand of candidates) {

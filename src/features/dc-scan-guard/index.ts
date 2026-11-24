@@ -1,5 +1,5 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { classifyShellCommand, classifyNativeToolScan, GUARDED_TOOLS } from "./dc-scan-guard.ts";
+import { classifyShellCommand, classifyNativeToolScan, classifyPtcCode, GUARDED_TOOLS } from "./dc-scan-guard.ts";
 import { globalAntiLoopGuard } from "./dc-anti-loop-guard.ts";
 import { dcConflictGuard } from "../dc-agents/daemon/dc-conflict-guard.ts";
 export * from "./dc-spill-guard.ts";
@@ -23,12 +23,6 @@ export function handleToolCall(event: PiToolCallEvent): PiToolCallResult | undef
 
     const rawInput = event.input ?? event.args;
 
-    // 0. Detector de bucles y repetición infinita (Anti-Loop Guard de DeepSeek)
-    const loopDecision = globalAntiLoopGuard.evaluate(event.toolName, rawInput);
-    if (!loopDecision.allow && loopDecision.warning) {
-      return { block: true, reason: loopDecision.warning };
-    }
-
     // 1. Verificación para herramientas shell (bash, sh)
     if (event.toolName === "bash" || event.toolName === "shell" || event.toolName === "sh") {
       const command = rawInput?.command;
@@ -46,9 +40,23 @@ export function handleToolCall(event: PiToolCallEvent): PiToolCallResult | undef
       }
     }
 
-    // 3. Verificación de Conflicto de Archivos Reservados por Subagentes Autónomos (Issue Conflict Guard)
+    // 2b. Verificación para ejecución programática PTC (dc_ptc_run)
+    if (event.toolName === "dc_ptc_run") {
+      const cwd = typeof rawInput?.cwd === "string" ? rawInput.cwd : process.cwd();
+      const decision = classifyPtcCode(rawInput?.code, cwd);
+      if (decision.block && decision.reason) {
+        return { block: true, reason: decision.reason };
+      }
+    }
+
+    // 3. Verificación de credenciales/raíz y Conflicto de Archivos Reservados (edit, write)
     if (event.toolName === "edit" || event.toolName === "write") {
-      const targetPath = (rawInput?.path || rawInput?.file) as string;
+      const scanDecision = classifyNativeToolScan(event.toolName, rawInput);
+      if (scanDecision.block && scanDecision.reason) {
+        return { block: true, reason: scanDecision.reason };
+      }
+
+      const targetPath = (rawInput?.path || rawInput?.file || rawInput?.filePath) as string;
       if (typeof targetPath === "string") {
         const conflict = dcConflictGuard.checkFileConflict(targetPath);
         if (conflict) {
@@ -58,6 +66,12 @@ export function handleToolCall(event: PiToolCallEvent): PiToolCallResult | undef
           };
         }
       }
+    }
+
+    // 4. Detector de bucles y repetición infinita (Anti-Loop Guard de DeepSeek)
+    const loopDecision = globalAntiLoopGuard.evaluate(event.toolName, rawInput);
+    if (!loopDecision.allow && loopDecision.warning) {
+      return { block: true, reason: loopDecision.warning };
     }
 
     return undefined;

@@ -7,10 +7,22 @@
  */
 
 import { randomBytes } from "node:crypto";
-import type { ApprovalOutcome, ApprovalRequest } from "./dc-approval-types.ts";
+import type { ApprovalRequest } from "./dc-approval-types.ts";
+
+export const DEFAULT_GRANT_TTL_MS = 5 * 60 * 1000;
+
+export interface GrantOnceOptions {
+  ttlMs?: number;
+  scope?: string;
+}
+
+interface ActiveGrant {
+  expiresAt: number;
+  scope?: string;
+}
 
 export class DcApprovalCoordinator {
-  private activeGrants = new Set<string>();
+  private activeGrants = new Map<string, ActiveGrant>();
 
   createRequest(toolName: string, action: string, reason: string, target?: string): ApprovalRequest {
     return {
@@ -23,23 +35,71 @@ export class DcApprovalCoordinator {
     };
   }
 
-  grantOnce(requestId: string): void {
-    this.activeGrants.add(requestId);
+  grantOnce(requestId: string, options?: GrantOnceOptions): void {
+    const normalizedId = requestId.trim();
+    if (!normalizedId) return;
+    const now = Date.now();
+    this.pruneExpired(now);
+    const ttlMs = options?.ttlMs ?? DEFAULT_GRANT_TTL_MS;
+    if (ttlMs <= 0) {
+      this.activeGrants.delete(normalizedId);
+      return;
+    }
+    this.activeGrants.set(normalizedId, {
+      expiresAt: now + ttlMs,
+      scope: options?.scope,
+    });
   }
 
   /**
-   * Consume la concesión unitaria. Devuelve true si existía y la elimina inmediatamente.
+   * Consume la concesión unitaria. Devuelve true si existía (y coincide con el ámbito esperado)
+   * y la elimina inmediatamente para evitar reuso o fugas de memoria.
    */
-  consumeGrant(requestId: string): boolean {
-    if (this.activeGrants.has(requestId)) {
-      this.activeGrants.delete(requestId);
-      return true;
+  consumeGrant(requestId: string, expectedScope?: string): boolean {
+    const now = Date.now();
+    this.pruneExpired(now);
+    const grant = this.activeGrants.get(requestId);
+    if (!grant) {
+      return false;
     }
-    return false;
+    if (grant.scope !== undefined && grant.scope !== expectedScope) {
+      return false;
+    }
+    this.activeGrants.delete(requestId);
+    return true;
   }
 
-  hasGrant(requestId: string): boolean {
-    return this.activeGrants.has(requestId);
+  hasGrant(requestId: string, expectedScope?: string): boolean {
+    const now = Date.now();
+    this.pruneExpired(now);
+    const grant = this.activeGrants.get(requestId);
+    if (!grant) {
+      return false;
+    }
+    if (grant.scope !== undefined && grant.scope !== expectedScope) {
+      return false;
+    }
+    return true;
+  }
+
+  revokeGrant(requestId: string): boolean {
+    return this.activeGrants.delete(requestId);
+  }
+
+  pruneExpired(now: number = Date.now()): number {
+    let removed = 0;
+    for (const [id, grant] of this.activeGrants) {
+      if (grant.expiresAt <= now) {
+        this.activeGrants.delete(id);
+        removed++;
+      }
+    }
+    return removed;
+  }
+
+  getActiveGrantCount(now: number = Date.now()): number {
+    this.pruneExpired(now);
+    return this.activeGrants.size;
   }
 
   clear(): void {

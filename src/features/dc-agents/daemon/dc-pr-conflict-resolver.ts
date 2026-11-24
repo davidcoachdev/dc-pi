@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { promisify } from "node:util";
 import * as path from "node:path";
 import * as fs from "node:fs";
-import * as os from "node:os";
+import { getDcAgentsPaths } from "../../../core/dc-paths.ts";
 import { dcIssueNotifier } from "./dc-issue-notifier.ts";
 import { leaseTaxi, releaseTaxi } from "../core/dc-taxi-dispatcher.ts";
 import { isVipAccount } from "../core/dc-taxi-accounts.ts";
@@ -222,7 +222,7 @@ export class DcPrConflictResolver {
     const worktreeBaseDir =
       callOptions?.worktreeBaseDir ??
       this.defaults.worktreeBaseDir ??
-      path.join(os.homedir(), ".pi", "agent", "dc-studio", "worktrees");
+      getDcAgentsPaths().worktreesDir;
     const piTimeoutMs = callOptions?.piTimeoutMs ?? this.defaults.piTimeoutMs ?? 180_000;
     const baseModel =
       callOptions?.baseModel ??

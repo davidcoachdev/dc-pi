@@ -3,9 +3,35 @@ import * as path from "node:path";
 import { DcWorktreeManager, type WorktreeHandle } from "../core/dc-worktree-manager.ts";
 import { dcConflictGuard } from "./dc-conflict-guard.ts";
 import { resolveIssueBaseBranch, type RepoIdentity } from "./dc-repo-resolver.ts";
-import { getCollaboratorsDatabase } from "./dc-collaborators-db.ts";
+import { CollaboratorsDatabase, getCollaboratorsDatabase } from "./dc-collaborators-db.ts";
 import { dcWorkerRunner } from "./dc-worker-runner.ts";
 import { dcIssueNotifier } from "./dc-issue-notifier.ts";
+import { DcApprovalCoordinator, dcApprovalCoordinator } from "../../dc-approval/core/dc-approval-coordinator.ts";
+
+export type IssueAuthorizationDecision =
+  | "allowed-once"
+  | "allowed-permanent"
+  | "denied"
+  | "rejected"
+  | "cancelled"
+  | boolean;
+
+export type IssueAuthorizationCallback = (
+  author: string,
+  issueNumber: number,
+  title: string,
+  requestId: string,
+) => Promise<IssueAuthorizationDecision>;
+
+export interface DcIssueDispatcherOptions {
+  approvalCoordinator?: DcApprovalCoordinator;
+  collaboratorsDb?: CollaboratorsDatabase;
+}
+
+export function buildIssueGrantScope(repoNwo: string, issueNumber: number, author: string): string {
+  const cleanAuthor = author.replace(/^@/, "").toLowerCase().trim();
+  return `issue:${repoNwo.toLowerCase()}#${issueNumber}:${cleanAuthor}`;
+}
 
 export interface GitHubIssuePayload {
   action: string;
@@ -55,6 +81,13 @@ export class DcIssueDispatcher {
   // Key compuesto repoNwo:issueNumber -> DispatchedIssueTask
   private activeDispatches = new Map<string, DispatchedIssueTask>();
   private pendingDispatches = new Set<string>();
+  private approvalCoordinator: DcApprovalCoordinator;
+  private collaboratorsDb?: CollaboratorsDatabase;
+
+  constructor(options?: DcIssueDispatcherOptions) {
+    this.approvalCoordinator = options?.approvalCoordinator ?? dcApprovalCoordinator;
+    this.collaboratorsDb = options?.collaboratorsDb;
+  }
 
   public clear(): void {
     this.activeDispatches.clear();
@@ -64,7 +97,7 @@ export class DcIssueDispatcher {
     payload: GitHubIssuePayload,
     repoIdentity: RepoIdentity,
     onProgress?: (message: string) => void,
-    onPendingAuthorization?: (author: string, issueNumber: number, title: string) => Promise<boolean>,
+    onPendingAuthorization?: IssueAuthorizationCallback,
   ): Promise<DispatchedIssueTask | null> {
     const issue = payload.issue;
     if (!issue || payload.action !== "opened") {
@@ -78,9 +111,10 @@ export class DcIssueDispatcher {
       return null;
     }
     this.pendingDispatches.add(dispatchKey);
+    let approvalRequestId: string | undefined;
     try {
       const authorLogin = (issue.user?.login || "anónimo").replace(/^@/, "").toLowerCase().trim();
-      const collabDb = getCollaboratorsDatabase();
+      const collabDb = this.collaboratorsDb ?? getCollaboratorsDatabase();
 
       // Notificación 1: Issue Recibido (solo si no es un test sintético con autor fixture)
       void dcIssueNotifier.notifyIssue(
@@ -101,26 +135,55 @@ export class DcIssueDispatcher {
           actor: authorLogin,
           message: `Nuevo colaborador @${authorLogin} detectado en Issue #${issueNumber} -> Estado PENDING`,
         });
+      }
 
-        if (onPendingAuthorization) {
+      if ((!record || record.status === "PENDING") && onPendingAuthorization) {
+        if (!record) {
           onProgress?.(`Solicitando autorización interactiva para @${authorLogin}...`);
-          void dcIssueNotifier.notifyIssue(
-            { repoRoot: repoIdentity.repoRoot, repoNwo: repoIdentity.fullNwo, issueNumber },
-            `🤖 **DC Super-Agent 86**: ⏳ Autorización pendiente. El autor @${authorLogin} requiere aprobación interactiva en el Centro de Control de DC Studio.`,
-          );
-          isAllowed = await onPendingAuthorization(authorLogin, issueNumber, issue.title);
-          if (isAllowed) {
-            collabDb.setCollaborator(authorLogin, "ALLOW", "CONTRIBUTOR", "Aprobado interactivamente por el usuario");
-          }
         }
-      } else if (record.status === "PENDING" && onPendingAuthorization) {
         void dcIssueNotifier.notifyIssue(
           { repoRoot: repoIdentity.repoRoot, repoNwo: repoIdentity.fullNwo, issueNumber },
           `🤖 **DC Super-Agent 86**: ⏳ Autorización pendiente. El autor @${authorLogin} requiere aprobación interactiva en el Centro de Control de DC Studio.`,
         );
-        isAllowed = await onPendingAuthorization(authorLogin, issueNumber, issue.title);
-        if (isAllowed) {
-          collabDb.setCollaborator(authorLogin, "ALLOW", record.role, "Aprobado interactivamente por el usuario");
+
+        const grantScope = buildIssueGrantScope(repoIdentity.fullNwo, issueNumber, authorLogin);
+        const approvalRequest = this.approvalCoordinator.createRequest(
+          "GitHub Issue Webhook",
+          `Autorizar a @${authorLogin} para despacho autónomo en Issue #${issueNumber}`,
+          `Usuario en estado PENDING abrió el Issue #${issueNumber}.`,
+          grantScope,
+        );
+        approvalRequestId = approvalRequest.id;
+
+        const decision = await onPendingAuthorization(authorLogin, issueNumber, issue.title, approvalRequest.id);
+
+        if (decision === "allowed-permanent") {
+          this.approvalCoordinator.revokeGrant(approvalRequest.id);
+          collabDb.setCollaborator(
+            authorLogin,
+            "ALLOW",
+            record ? record.role : "CONTRIBUTOR",
+            "Aprobado permanentemente por el usuario",
+          );
+          isAllowed = true;
+        } else if (decision === "allowed-once" || decision === true) {
+          // Concesión unitaria: NO persistir ALLOW permanente en SQLite; consumir grant una sola vez.
+          if (!this.approvalCoordinator.hasGrant(approvalRequest.id, grantScope)) {
+            this.approvalCoordinator.grantOnce(approvalRequest.id, { scope: grantScope });
+          }
+          isAllowed = this.approvalCoordinator.consumeGrant(approvalRequest.id, grantScope);
+          if (isAllowed) {
+            collabDb.log({
+              level: "SECURITY",
+              category: "SECURITY",
+              actor: authorLogin,
+              message: `Concesión unitaria (allowed-once) consumida para @${authorLogin} en Issue #${issueNumber} sin escalar a ALLOW permanente`,
+            });
+          }
+        } else {
+          // "denied" | "rejected" | "cancelled" | false -> fail-closed sin persistir ALLOW ni fugar grants
+          this.approvalCoordinator.revokeGrant(approvalRequest.id);
+          isAllowed = false;
         }
       }
 
@@ -217,6 +280,9 @@ export class DcIssueDispatcher {
       this.activeDispatches.set(dispatchKey, dispatched);
       return dispatched;
     } finally {
+      if (approvalRequestId) {
+        this.approvalCoordinator.revokeGrant(approvalRequestId);
+      }
       this.pendingDispatches.delete(dispatchKey);
     }
   }
