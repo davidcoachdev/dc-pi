@@ -337,6 +337,63 @@ test("dc-scan-guard: normaliza segmentos de punto (/., /./, ///, ~/.) e inspecci
   assert.equal(handleToolCall({ toolName: "dc_ptc_run", input: { code: "pi.bash('rm -rf /')" } })?.block, true);
 });
 
+test("dc-scan-guard handleToolCall: bloquea dc_ptc_run malicioso y edit/write sobre credenciales sensibles, permitiendo uso normal en workspace", () => {
+  // dc_ptc_run malicioso (raíz, credenciales, escape de sandbox)
+  assert.equal(handleToolCall({ toolName: "dc_ptc_run", input: { code: "return pi.fs.read('~/.ssh/id_rsa')" } })?.block, true);
+  assert.equal(handleToolCall({ toolName: "dc_ptc_run", input: { code: "return pi.fs.list('/')" } })?.block, true);
+  assert.equal(handleToolCall({ toolName: "dc_ptc_run", input: { code: "return fs.readFileSync('/etc/passwd', 'utf8')" } })?.block, true);
+  assert.equal(handleToolCall({ toolName: "dc_ptc_run", input: { code: "return process.env" } })?.block, true);
+  assert.equal(handleToolCall({ toolName: "dc_ptc_run", input: { code: "return execSync('id')" } })?.block, true);
+  assert.equal(handleToolCall({ toolName: "dc_ptc_run", input: { code: "return require('node:fs')" } })?.block, true);
+  assert.equal(handleToolCall({ toolName: "dc_ptc_run", input: { code: "return await import('node:fs')" } })?.block, true);
+
+  // dc_ptc_run normal permitido
+  assert.equal(handleToolCall({ toolName: "dc_ptc_run", input: { code: "const pkg = JSON.parse(pi.fs.read('package.json')); return pkg.name;" } }), undefined);
+
+  // edit / write sobre credenciales sensibles bloqueados
+  const editSsh = handleToolCall({
+    toolName: "edit",
+    input: { path: "~/.ssh/id_rsa", oldText: "a", newText: "b" },
+  });
+  assert.equal(editSsh?.block, true);
+  assert.match(editSsh!.reason, /credential-protection/);
+
+  const writeSsh = handleToolCall({
+    toolName: "write",
+    input: { path: "~/.ssh/id_rsa", content: "injected" },
+  });
+  assert.equal(writeSsh?.block, true);
+  assert.match(writeSsh!.reason, /credential-protection/);
+
+  const editAws = handleToolCall({
+    toolName: "edit",
+    input: { path: "~/.aws/credentials", oldText: "a", newText: "b" },
+  });
+  assert.equal(editAws?.block, true);
+  assert.match(editAws!.reason, /credential-protection/);
+
+  const writeAws = handleToolCall({
+    toolName: "write",
+    input: { file: "~/.aws/credentials", content: "injected" },
+  });
+  assert.equal(writeAws?.block, true);
+  assert.match(writeAws!.reason, /credential-protection/);
+
+  // Uso normal en workspace permitido
+  assert.equal(
+    handleToolCall({ toolName: "edit", input: { path: "src/index.ts", oldText: "a", newText: "b" } }),
+    undefined,
+  );
+  assert.equal(
+    handleToolCall({ toolName: "write", input: { path: "src/normal-file.ts", content: "export const ok = true;\n" } }),
+    undefined,
+  );
+  assert.equal(
+    handleToolCall({ toolName: "read", input: { path: "package.json" } }),
+    undefined,
+  );
+});
+
 test("dc-anti-loop-guard: normaliza whitespace trivial y detecta bucles alternantes A->B->A->B sin romper ediciones legítimas", () => {
   assert.equal(
     canonicalizeArguments({ command: "  git   status \n" }),

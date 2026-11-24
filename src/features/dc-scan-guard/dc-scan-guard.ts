@@ -150,16 +150,35 @@ function isRootedRecursiveSearch(tokens: string[]): boolean {
  * contra lecturas no autorizadas o filtraciones (mitigación de la brecha crítica de DeepSeek Harness).
  */
 export const FORBIDDEN_SENSITIVE_PATTERNS: readonly RegExp[] = [
-  /[/\\]\.ssh([/\\]|$)/i,               // Claves SSH (~/.ssh/id_rsa, id_ed25519)
-  /[/\\]\.gnupg([/\\]|$)/i,             // Claves GPG
-  /[/\\]\.aws([/\\]|$)/i,               // Credenciales AWS (~/.aws/credentials)
-  /[/\\]\.config[/\\]gcloud([/\\]|$)/i, // Credenciales Google Cloud
-  /[/\\]\.config[/\\]gh([/\\]|$)/i,     // Tokens GitHub CLI
-  /[/\\]\.azure([/\\]|$)/i,             // Tokens Azure
-  /[/\\]\.netrc$/i,                     // Credenciales en texto claro
-  /[/\\]\.bash_history$/i,              // Historial de comandos con posibles passwords
-  /[/\\]\.zsh_history$/i,
+  /(?:^|[/\\])\.ssh([/\\]|$)/i,               // Claves SSH (~/.ssh/id_rsa, id_ed25519)
+  /(?:^|[/\\])\.gnupg([/\\]|$)/i,             // Claves GPG
+  /(?:^|[/\\])\.aws([/\\]|$)/i,               // Credenciales AWS (~/.aws/credentials)
+  /(?:^|[/\\])\.config[/\\]gcloud([/\\]|$)/i, // Credenciales Google Cloud
+  /(?:^|[/\\])\.config[/\\]gh([/\\]|$)/i,     // Tokens GitHub CLI
+  /(?:^|[/\\])\.azure([/\\]|$)/i,             // Tokens Azure
+  /(?:^|[/\\])\.netrc$/i,                     // Credenciales en texto claro
+  /(?:^|[/\\])\.bash_history$/i,              // Historial de comandos con posibles passwords
+  /(?:^|[/\\])\.zsh_history$/i,
 ];
+
+export const PTC_SANDBOX_ESCAPE_PATTERNS: readonly RegExp[] = [
+  /\bimport\s*\(/,
+  /\brequire\s*\(/,
+  /(?:^|[^.\w$])process\s*(?:\.|\[|\?\.)/,
+  /\b(?:globalThis|global)\s*(?:\.\s*process|\[\s*['"`]process['"`]\s*\])/,
+  /(?:^|[^.\w$])(?:fs|os|child_process)\s*(?:\.|\[)/,
+  /(?:^|[^.\w$])(?:execSync|execFileSync|spawn|spawnSync|fork)\s*\(/,
+  /\bnode:(?:fs|os|path|child_process|vm|module|process|worker_threads|inspector)\b/,
+  /\bconstructor\s*(?:\.\s*constructor|\[\s*['"`]constructor['"`]\s*\])/,
+  /\b(?:mainModule|dlopen)\b/,
+];
+
+export function ptcSandboxEscapeReason(snippet: string): string {
+  return (
+    `dc-scan-guard (ptc-sandbox): se bloqueó un intento de escape de sandbox en \`dc_ptc_run\` (\`${snippet.trim()}\`). ` +
+    `El código PTC solo puede usar la API segura \`pi.fs\` y \`pi.bash\`; el acceso directo a Node (\`fs\`, \`process\`, \`execSync\`, \`require\`, \`import()\`, \`constructor.constructor\`) está prohibido.`
+  );
+}
 
 /**
  * Determina si una ruta o comando intenta acceder a claves o credenciales privadas del host.
@@ -289,9 +308,27 @@ function isPathConfinedToWorkspace(candidatePath: string, cwd: string = process.
   return false;
 }
 
-export function classifyPtcCode(code: unknown, cwd: string = process.cwd()): ScanGuardDecision {
+export interface ClassifyPtcCodeOptions {
+  enforcePtcSandbox?: boolean;
+}
+
+export function classifyPtcCode(
+  code: unknown,
+  cwd: string = process.cwd(),
+  options: ClassifyPtcCodeOptions = {},
+): ScanGuardDecision {
   if (typeof code !== "string" || code.trim() === "") {
     return { block: false };
+  }
+
+  // 0. En dc_ptc_run, bloquear primitivas de escape de sandbox de Node/JS
+  if (options.enforcePtcSandbox !== false) {
+    for (const pattern of PTC_SANDBOX_ESCAPE_PATTERNS) {
+      const escapeMatch = pattern.exec(code);
+      if (escapeMatch) {
+        return { block: true, reason: ptcSandboxEscapeReason(escapeMatch[0]) };
+      }
+    }
   }
 
   // 1. Verificar llamadas destructivas directas de filesystem en Python/Node (rmtree, rmSync, rmdirSync)
@@ -528,7 +565,7 @@ export function classifyShellCommand(command: unknown, depth = 0): ScanGuardDeci
       const subDecision = classifyShellCommand(sub.payload, depth + 1);
       if (subDecision.block) return subDecision;
     } else {
-      const codeDecision = classifyPtcCode(sub.payload);
+      const codeDecision = classifyPtcCode(sub.payload, process.cwd(), { enforcePtcSandbox: false });
       if (codeDecision.block) return codeDecision;
     }
   }
@@ -594,7 +631,7 @@ export function classifyNativeToolScan(toolName: string, input: Record<string, u
     if (ptcDecision.block) return ptcDecision;
   }
 
-  const targetPath = (input.path || input.directory || input.dir || input.filePath) as string | undefined;
+  const targetPath = (input.path || input.directory || input.dir || input.filePath || input.file) as string | undefined;
   if (typeof targetPath === "string") {
     if (isSensitiveCredentialPath(targetPath)) {
       return {
@@ -613,4 +650,49 @@ export function classifyNativeToolScan(toolName: string, input: Record<string, u
   }
 
   return { block: false };
+}
+
+/**
+ * Serializa las reglas canónicas de dc-scan-guard como código JS autocontenido
+ * para procesos hijos aislados (ej. dc-ptc-runner), manteniendo fuente única de verdad
+ * y evitando copias regex divergentes.
+ * Asume que `os` y `path` están disponibles en el ámbito host del subproceso.
+ */
+export function serializeScanGuardRuntimeSource(): string {
+  const serializedSensitive = FORBIDDEN_SENSITIVE_PATTERNS.map((pattern) => ({
+    source: pattern.source,
+    flags: pattern.flags,
+  }));
+  const serializedEscapes = PTC_SANDBOX_ESCAPE_PATTERNS.map((pattern) => ({
+    source: pattern.source,
+    flags: pattern.flags,
+  }));
+
+  return [
+    `const FORBIDDEN_SENSITIVE_PATTERNS = ${JSON.stringify(serializedSensitive)}.map((p) => new RegExp(p.source, p.flags));`,
+    `const PTC_SANDBOX_ESCAPE_PATTERNS = ${JSON.stringify(serializedEscapes)}.map((p) => new RegExp(p.source, p.flags));`,
+    normalizeCandidatePathToken.toString(),
+    isRootPath.toString(),
+    splitSegments.toString(),
+    tokenize.toString(),
+    isRootedFind.toString(),
+    isRecursiveGrep.toString(),
+    isRootedRecursiveSearch.toString(),
+    isSensitiveCredentialPath.toString(),
+    sensitiveCredentialReason.toString(),
+    ptcSandboxEscapeReason.toString(),
+    isDestructiveRm.toString(),
+    destructiveRmReason.toString(),
+    blockReason.toString(),
+    unquoteLiteral.toString(),
+    extractInlineSubshellPayloads.toString(),
+    isPathConfinedToWorkspace.toString(),
+    classifyPtcCode.toString(),
+    isDestructiveGit.toString(),
+    isDestructiveIacOrDb.toString(),
+    isDestructiveCredentialPurge.toString(),
+    isDangerousPkill.toString(),
+    isDestructiveMetadataRm.toString(),
+    classifyShellCommand.toString(),
+  ].join("\n\n");
 }
