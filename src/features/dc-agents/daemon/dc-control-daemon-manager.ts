@@ -6,6 +6,7 @@ import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { dcNotifier } from "../../../integrations/dc-notify/dc-notifier.ts";
 import { resolveCurrentRepoIdentity, type RepoIdentity } from "./dc-repo-resolver.ts";
 import { DcGitHubGateway } from "./dc-github-gateway.ts";
+import { dcSuperAgentRegistry } from "../core/dc-super-agent-registry.ts";
 import { dcIssueDispatcher, type GitHubIssuePayload, type DispatchedIssueTask } from "./dc-issue-dispatcher.ts";
 import { dcPrInspectorAgent } from "./dc-pr-inspector-agent.ts";
 import { promptApprovalModal } from "../../dc-approval/views/dc-approval-modal.ts";
@@ -21,6 +22,8 @@ export interface DaemonStatus {
   repo?: RepoIdentity;
   tunnelActive: boolean;
   activeDispatches: DispatchedIssueTask[];
+  gatewayId?: string;
+  gatewayName?: string;
 }
 
 /**
@@ -64,52 +67,58 @@ export class DcControlDaemonManager {
     await this.stop();
 
     const capability = randomBytes(32).toString("hex");
-    // 2. Iniciar el receptor HTTP local (Gateway Ingress Neutral)
-      this.receiver = new DcGitHubGateway({
-        port: 4545,
-        capability,
-        expectedRepoNwo: repo.fullNwo,
-        onIssueOpened: (payload) => this.executeIssue(payload, repo, ctx),
-        onIssueCommentCreated: async (payload) => {
-          await dcIssueCommentRouter.handleComment(payload);
-        },
-        onPullRequest: async (payload) => {
-          const pr = payload.pull_request;
-          if (!pr) return;
+    // 2. Iniciar el Gateway Ingress Neutral respaldado por DcSuperAgentRegistry
+    this.receiver = new DcGitHubGateway({
+      port: 4545,
+      capability,
+      expectedRepoNwo: repo.fullNwo,
+      registry: dcSuperAgentRegistry,
+      onIssueOpened: (payload) => this.executeIssue(payload, repo, ctx),
+      onIssueCommentCreated: async (payload) => {
+        await dcIssueCommentRouter.handleComment(payload);
+      },
+      onPullRequest: async (payload) => {
+        const pr = payload.pull_request;
+        if (!pr) return;
+        if (ctx) {
+          dcNotifier.notify(
+            ctx,
+            "DC Super-Agente #99",
+            `🔍 Inspeccionando PR #${pr.number}: ${pr.title} (@${pr.user?.login || "anónimo"})`,
+            "info",
+          );
+        }
+        try {
+          await dcPrInspectorAgent.inspectPullRequest({
+            prNumber: pr.number,
+            repoNwo: repo.fullNwo,
+            headBranch: pr.head?.ref || "head",
+            baseBranch: pr.base?.ref || "master",
+            authorLogin: pr.user?.login || "anónimo",
+            title: pr.title || `PR #${pr.number}`,
+            worktreePath: cwd,
+          });
+        } catch (inspectErr: any) {
           if (ctx) {
-            dcNotifier.notify(
-              ctx,
-              "DC Super-Agente #99",
-              `🔍 Inspeccionando PR #${pr.number}: ${pr.title} (@${pr.user?.login || "anónimo"})`,
-              "info",
-            );
+            dcNotifier.notify(ctx, "DC Super-Agente #99", `Error inspeccionando PR #${pr.number}: ${inspectErr.message}`, "error");
           }
-          try {
-            await dcPrInspectorAgent.inspectPullRequest({
-              prNumber: pr.number,
-              repoNwo: repo.fullNwo,
-              headBranch: pr.head?.ref || "head",
-              baseBranch: pr.base?.ref || "master",
-              authorLogin: pr.user?.login || "anónimo",
-              title: pr.title || `PR #${pr.number}`,
-              worktreePath: cwd,
-            });
-          } catch (inspectErr: any) {
-            if (ctx) {
-              dcNotifier.notify(ctx, "DC Super-Agente #99", `Error inspeccionando PR #${pr.number}: ${inspectErr.message}`, "error");
-            }
-          }
-        },
-        onError: (err) => {
-          if (ctx) {
-            dcNotifier.notify(ctx, "DC Control Daemon", `Error receptor: ${err.message}`, "error");
-          }
-        },
-      });
+        }
+      },
+      onError: (err) => {
+        if (ctx) {
+          dcNotifier.notify(ctx, "DC GitHub Gateway", `Error gateway: ${err.message}`, "error");
+        }
+      },
+    });
 
     const activePort = await this.receiver.start();
-    this.startTunnel(repo.fullNwo, activePort, capability, ctx);
+    const subscribedEvents = this.receiver.getSubscribedGitHubEvents();
+    this.startTunnel(repo.fullNwo, activePort, capability, ctx, subscribedEvents);
     return this.getStatus();
+  }
+
+  public getGateway(): DcGitHubGateway | undefined {
+    return this.receiver;
   }
 
   /** Shared dispatch/Taxi/worker/delivery lifecycle; independent of listener state. */
@@ -387,13 +396,22 @@ export class DcControlDaemonManager {
     );
   }
 
-  private startTunnel(repoNwo: string, port: number, capability: string, ctx?: ExtensionContext): void {
+  private startTunnel(
+    repoNwo: string,
+    port: number,
+    capability: string,
+    ctx?: ExtensionContext,
+    subscribedEvents?: string[],
+  ): void {
     if (!VALID_REPO_NWO_RE.test(repoNwo)) {
       this.isTunnelRunning = false;
       return;
     }
     const url = `http://127.0.0.1:${port}/github-webhook?capability=${capability}`;
-    const args = ["webhook", "forward", `--repo=${repoNwo}`, "--events=issues,issue_comment", `--url=${url}`];
+    const eventsArg = subscribedEvents && subscribedEvents.length > 0
+      ? subscribedEvents.join(",")
+      : "issues,issue_comment,pull_request";
+    const args = ["webhook", "forward", `--repo=${repoNwo}`, `--events=${eventsArg}`, `--url=${url}`];
 
     try {
       const child = spawn("gh", args, {
@@ -554,12 +572,15 @@ export class DcControlDaemonManager {
       }
     }
 
+    const metadata = this.receiver?.getMetadata();
     return {
       running,
       port,
       repo,
       tunnelActive,
       activeDispatches: dcIssueDispatcher.getActiveDispatches(),
+      gatewayId: metadata?.id ?? "dc_github_gateway",
+      gatewayName: metadata?.name ?? "DC GitHub Ingress Gateway",
     };
   }
 }

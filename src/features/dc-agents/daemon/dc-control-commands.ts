@@ -8,13 +8,27 @@ import { dcRemoteQuestionManager } from "./dc-remote-question.ts";
 import { promptAgentQuestionModal } from "../views/dc-agent-question-modal.ts";
 import { openAgentChatMessengerModal } from "../views/dc-chat-messenger-modal.ts";
 import { checkPendingIssues } from "./dc-pending-issues.ts";
+import { createSuperAgent } from "../core/dc-super-agent-factory.ts";
+import { dcSuperAgentRegistry } from "../core/dc-super-agent-registry.ts";
+import type { DcSuperAgentEventTrigger } from "../core/dc-super-agent-definition.ts";
+
+function tokenizeCommandArgs(raw: string): string[] {
+  const tokens: string[] = [];
+  const regex = /"([^"]*)"|'([^']*)'|(\S+)/g;
+  let match: RegExpExecArray | null;
+  while ((match = regex.exec(raw)) !== null) {
+    tokens.push(match[1] ?? match[2] ?? match[3] ?? "");
+  }
+  return tokens;
+}
 
 export function registerControlDaemonCommands(pi: ExtensionAPI): void {
   // Comando canónico unificado /dc-control
   pi.registerCommand("dc-control", {
-    description: "Centro de Control de Super-Agentes: abre la oficina central o administra el daemon (start | stop | status | check)",
+    description: "Centro de Control de Super-Agentes: abre la oficina central o administra el Gateway y Super-Agentes (start | stop | status | check | agents | create-agent)",
     handler: async (args: string, ctx: ExtensionContext) => {
-      const sub = args.trim().toLowerCase();
+      const tokens = tokenizeCommandArgs(args.trim());
+      const sub = (tokens[0] ?? "").toLowerCase();
 
       if (sub === "" || sub === "open" || sub === "ui") {
         await openControlCenterModal(ctx);
@@ -31,6 +45,57 @@ export function registerControlDaemonCommands(pi: ExtensionAPI): void {
         return;
       }
 
+      if (sub === "agents" || sub === "list-agents") {
+        const agents = dcSuperAgentRegistry.listAgents();
+        const summary = agents
+          .map((a) => `#${a.agentNumber} ${a.name} (${a.role}) [${a.eventTriggers.join(",")}]`)
+          .join(" | ");
+        dcNotifier.notify(ctx, "DC Super-Agents", summary || "Sin Super-Agentes registrados", "info");
+        return;
+      }
+
+      if (sub === "create-agent") {
+        if (tokens.length < 4) {
+          dcNotifier.notify(
+            ctx,
+            "DC Control",
+            "Uso: /dc-control create-agent <num> <nombre> <rol> [triggers...]",
+            "warning",
+          );
+          return;
+        }
+
+        const rawNumber = tokens[1]!.replace(/^#/, "");
+        const agentNumber = Number(rawNumber);
+        const name = tokens[2]!;
+        const role = tokens[3]!;
+        const rawTriggers = tokens
+          .slice(4)
+          .flatMap((token) => token.split(","))
+          .map((t) => t.trim())
+          .filter(Boolean);
+        const eventTriggers = (rawTriggers.length > 0 ? rawTriggers : ["chat"]) as DcSuperAgentEventTrigger[];
+
+        try {
+          const created = createSuperAgent({
+            agentNumber,
+            name,
+            role,
+            description: `Super-Agente autónomo #${agentNumber} (${role})`,
+            eventTriggers,
+          });
+          dcNotifier.notify(
+            ctx,
+            "DC Control",
+            `✔ Super-Agente #${created.agentNumber} (${created.name}) registrado con rol "${created.role}" y triggers: ${created.eventTriggers.join(", ")}`,
+            "info",
+          );
+        } catch (err: any) {
+          dcNotifier.notify(ctx, "DC Control", `Error creando Super-Agente: ${err.message}`, "error");
+        }
+        return;
+      }
+
       if (sub === "start") {
         try {
           const status = await dcControlDaemonManager.start(ctx);
@@ -38,18 +103,18 @@ export function registerControlDaemonCommands(pi: ExtensionAPI): void {
           dcNotifier.notify(
             ctx,
             "DC Control",
-            `✔ Daemon activo para ${repoNwo} en puerto ${status.port} con túnel GitHub`,
+            `✔ Gateway Ingress activo para ${repoNwo} en puerto ${status.port} con túnel GitHub`,
             "info",
           );
         } catch (err: any) {
-          dcNotifier.notify(ctx, "DC Control", `Error iniciando daemon: ${err.message}`, "error");
+          dcNotifier.notify(ctx, "DC Control", `Error iniciando gateway: ${err.message}`, "error");
         }
         return;
       }
 
       if (sub === "stop") {
         await dcControlDaemonManager.stop();
-        dcNotifier.notify(ctx, "DC Control", "Daemon y túnel detenidos correctamente.", "info");
+        dcNotifier.notify(ctx, "DC Control", "Gateway Ingress y túnel detenidos correctamente.", "info");
         return;
       }
 
@@ -60,13 +125,19 @@ export function registerControlDaemonCommands(pi: ExtensionAPI): void {
         const tunnelText = st.tunnelActive ? "Conectado" : "Desconectado";
         const dispatches = st.activeDispatches.length;
         const conflicts = dcConflictGuard.listReservations().length;
+        const registeredCount = dcSuperAgentRegistry.listAgents().length;
 
-        const info = `Repositorio: ${repo} | Receptor: ${runningText} | Túnel GitHub: ${tunnelText} | Issues en proceso: ${dispatches} | Archivos reservados: ${conflicts}`;
+        const info = `Repositorio: ${repo} | Gateway Ingress: ${runningText} | Túnel GitHub: ${tunnelText} | Super-Agentes: ${registeredCount} | Issues en proceso: ${dispatches} | Archivos reservados: ${conflicts}`;
         dcNotifier.notify(ctx, "DC Control Status", info, "info");
         return;
       }
 
-      dcNotifier.notify(ctx, "DC Control", "Uso: /dc-control [open | chat | start | stop | status | check]", "warning");
+      dcNotifier.notify(
+        ctx,
+        "DC Control",
+        "Uso: /dc-control [open | chat | start | stop | status | check | agents | create-agent <num> <nombre> <rol> [triggers...]]",
+        "warning",
+      );
     },
   });
 

@@ -18,6 +18,8 @@ import { DcSupervisorLauncher } from "../../dc-control/core/dc-supervisor-launch
 import { getCanonicalDcSupervisorPaths } from "../../dc-control/core/dc-supervisor-paths.ts";
 import { scanRunningPiProcesses } from "../../dc-control/core/dc-process-scanner.ts";
 import { dcPrInspectorAgent } from "../../dc-agents/daemon/dc-pr-inspector-agent.ts";
+import { dcSuperAgentRegistry, type DcSuperAgentRegistry } from "../../dc-agents/core/dc-super-agent-registry.ts";
+import type { DcSuperAgentDefinition } from "../../dc-agents/core/dc-super-agent-definition.ts";
 
 const execFileAsync = promisify(execFile);
 
@@ -74,6 +76,14 @@ function parseOddTasksFromWorktree(worktreePath: string, taskSlug?: string): Arr
   }
 }
 
+function formatSuperAgentHeadline(agent: DcSuperAgentDefinition): string {
+  const stripped = agent.name
+    .replace(/^DC\s+Super-?Agent\s*#?\d*\s*/i, "")
+    .replace(/^\((.+)\)$/, "$1")
+    .trim();
+  return stripped ? `#${agent.agentNumber} ${stripped}` : `Agente #${agent.agentNumber}`;
+}
+
 /**
  * Tarjeta completa de la Torre de Control (dc-control):
  * Reúne la supervisión multisesión en vivo y la oficina completa de Super-Agentes
@@ -83,9 +93,11 @@ export class DcSuperAgentsSidebarCard implements Component {
   private requestRender?: () => void;
   private currentCard?: DcSidebarCard;
   private launcher = new DcSupervisorLauncher();
+  private readonly registry: DcSuperAgentRegistry;
 
-  constructor(requestRender?: () => void) {
+  constructor(requestRender?: () => void, registry: DcSuperAgentRegistry = dcSuperAgentRegistry) {
     this.requestRender = requestRender;
+    this.registry = registry;
     void checkGhBinary().then(() => this.requestRender?.());
 
     const onUpdate = () => {
@@ -95,6 +107,8 @@ export class DcSuperAgentsSidebarCard implements Component {
     dcSupervisorBus.on("session:state_changed", onUpdate);
     dcSupervisorBus.on("session:hung", onUpdate);
     dcSupervisorBus.on("session:terminated", onUpdate);
+    this.registry.on("agent_registered", onUpdate);
+    this.registry.on("agent_unregistered", onUpdate);
   }
 
   invalidate(): void {
@@ -213,23 +227,48 @@ export class DcSuperAgentsSidebarCard implements Component {
       )
     );
 
-    // Listar Super-Agentes federados
-    const agent86Status = dispatches.length > 0 ? yellowBright("[ocupado]") : dim("[idle]");
+    // Listar Super-Agentes federados dinámicamente desde dcSuperAgentRegistry
+    const registeredAgents = this.registry.listAgents();
     const inspections = dcPrInspectorAgent.getActiveInspections();
-    const agent99Status = inspections.length > 0 ? greenBright(`[${inspections.length} PRs]`) : dim("[idle]");
 
     rows.push(
       new DcJustifiedRow(
-        `    ${yellowBright("🤖")} ${bloodWhite("Agente #86 (Issues)")}`,
-        `${agent86Status} `
+        `  ${dim(`Super-Agentes (${registeredAgents.length}):`)}`,
+        `${dim(isDaemonRunning ? "federados" : "en espera")} `
       )
     );
-    rows.push(
-      new DcJustifiedRow(
-        `    ${yellowBright("🤖")} ${bloodWhite("Agente #99 (PRs)")}`,
-        `${agent99Status} `
-      )
-    );
+
+    for (const agent of registeredAgents) {
+      const icon = agent.icon || (agent.role === "pr_inspector" ? "🕵️‍♀️" : "🤖");
+      let liveStatus = dim("[idle]");
+      if (agent.agentNumber === 86 || agent.role === "issue_resolver") {
+        liveStatus = dispatches.length > 0 ? yellowBright(`[ocupado:${dispatches.length}]`) : dim("[idle]");
+      } else if (agent.agentNumber === 99 || agent.role === "pr_inspector") {
+        liveStatus = inspections.length > 0 ? greenBright(`[${inspections.length} PRs]`) : dim("[idle]");
+      } else {
+        liveStatus = isDaemonRunning ? greenBright("[activo]") : dim("[idle]");
+      }
+
+      const headline = formatSuperAgentHeadline(agent);
+      const displayHeadline = headline.length > 26 ? headline.slice(0, 25) + "…" : headline;
+
+      rows.push(
+        new DcJustifiedRow(
+          `    ${yellowBright(icon)} ${bloodWhite(displayHeadline)}`,
+          `${liveStatus} `
+        )
+      );
+
+      const triggersSummary = agent.eventTriggers.join(", ");
+      const metaLine = `${agent.role} · ${triggersSummary}`;
+      const displayMeta = metaLine.length > 34 ? metaLine.slice(0, 33) + "…" : metaLine;
+      rows.push(
+        new DcJustifiedRow(
+          `      ${dim(`↳ ${displayMeta}`)}`,
+          ""
+        )
+      );
+    }
 
     if (dispatches.length === 0) {
       rows.push(
@@ -383,7 +422,7 @@ export class DcSuperAgentsSidebarCard implements Component {
     if (isDaemonRunning) {
       rows.push(
         new DcJustifiedRow(
-          `  ${dim("↻ Reiniciar Daemon #86")}`,
+          `  ${dim("↻ Reiniciar Gateway Ingress")}`,
           `${bloodBright("[Reiniciar]")}  `,
           () => {
             const ctx = getSidebarContext();
@@ -399,7 +438,7 @@ export class DcSuperAgentsSidebarCard implements Component {
     } else {
       rows.push(
         new DcJustifiedRow(
-          `  ${greenBright("▶ Iniciar Daemon #86 & Túnel")}`,
+          `  ${greenBright("▶ Iniciar Gateway Ingress & Túnel")}`,
           `${greenBright("[Iniciar]")}  `,
           () => {
             const ctx = getSidebarContext();
@@ -439,6 +478,9 @@ export class DcSuperAgentsSidebarCard implements Component {
   }
 }
 
-export function createSuperAgentsSidebarCard(requestRender?: () => void): Component {
-  return new DcSuperAgentsSidebarCard(requestRender);
+export function createSuperAgentsSidebarCard(
+  requestRender?: () => void,
+  registry: DcSuperAgentRegistry = dcSuperAgentRegistry,
+): Component {
+  return new DcSuperAgentsSidebarCard(requestRender, registry);
 }
